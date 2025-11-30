@@ -135,6 +135,23 @@ Currently, the app uses mock data located in `lib/mock-automations.ts`. This wil
 - The UI components in `components/ui/` are based on shadcn/ui patterns
 - The design system uses consistent spacing, colors, and typography from the original Figma designs
 
+## Project Documentation
+
+Detailed project documentation is organized in the `project_details/` folder:
+
+- **[Backend Architecture](project_details/BACKEND_ARCHITECTURE.md)** - Backend architecture, database schema, API design, and implementation details
+- **[Frontend Architecture](project_details/FRONTEND_ARCHITECTURE.md)** - Frontend architecture, component structure, and UI patterns
+- **[User Flows](project_details/user_flows/)** - Comprehensive documentation of all user flows, organized by category:
+  - [Identity & Access Flows](project_details/user_flows/README.md#identity--access-flows)
+  - [Automation Lifecycle Flows](project_details/user_flows/README.md#automation-lifecycle-flows)
+  - [Pricing & Billing Flows](project_details/user_flows/README.md#pricing--billing-flows)
+  - [Build & Deployment Flows](project_details/user_flows/README.md#build--deployment-flows)
+  - [Execution & Monitoring Flows](project_details/user_flows/README.md#execution--monitoring-flows)
+  - [Collaboration Flows](project_details/user_flows/README.md#collaboration-flows)
+  - [Admin & Ops Flows](project_details/user_flows/README.md#admin--ops-flows)
+
+Each flow is documented in its own file for better readability. See the [User Flows README](project_details/user_flows/README.md) for a complete index.
+
 ### Next Steps
 
 - [ ] Integrate backend API
