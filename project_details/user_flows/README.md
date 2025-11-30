@@ -80,25 +80,25 @@ WRK Copilot supports **two authentication modes**:
 
 User authentication, workspace creation, invitations, and access management.
 
-- [Flow 1A: SSO Signup (New Workspace)](flow-1-a.md)
-- [Flow 1B: Local Email/Password Signup (New Workspace)](flow-1-b.md)
-- [Flow 2: User Invitation (Workspace-Scoped)](flow-2.md)
-- [Flow 3: User Login](flow-3.md)
-- [Flow 4: Password Reset](flow-4.md)
-- [Flow 5: API Key Creation](flow-5.md)
-- [Flow 6: Workspace Switching (Multi-Workspace User)](flow-6.md)
-- [Flow 7 (Optional / Future): Partner API Access (Public Endpoints)](flow-7.md)
+- [Flow 1A: SSO Signup (New Workspace)](flow-1-a-sso-signup-new-workspace.md)
+- [Flow 1B: Local Email/Password Signup (New Workspace)](flow-1-b-local-emailpassword-signup-new-workspace.md)
+- [Flow 2: User Invitation (Workspace-Scoped)](flow-2-user-invitation-workspace-scoped.md)
+- [Flow 3: User Login](flow-3-user-login.md)
+- [Flow 4: Password Reset](flow-4-password-reset.md)
+- [Flow 5: API Key Creation](flow-5-api-key-creation.md)
+- [Flow 6: Workspace Switching (Multi-Workspace User)](flow-6-workspace-switching-multi-workspace-user.md)
+- [Flow 7 (Optional / Future): Partner API Access (Public Endpoints)](flow-7-partner-api-access-public-endpoints.md)
 
 ### Automation Lifecycle Flows
 
 Creating automations, capturing requirements, updating blueprints, managing versions, and status transitions.
 
-- [Flow 8: Create New Automation](flow-8.md)
-- [Flow 9: Requirements Capture & AI Ingestion](flow-9.md)
-- [Flow 10: Update Blueprint](flow-10.md)
-- [Flow 11: Move Automation to "Needs Pricing" (+ Project Creation + Auto Quote)](flow-11.md)
-- [Flow 12: Create New Version](flow-12.md)
-- [Flow 13: Update Automation Status](flow-13.md)
+- [Flow 8: Create New Automation](flow-8-create-new-automation.md)
+- [Flow 9: Requirements Capture & AI Ingestion](flow-9-requirements-capture-ai-ingestion.md)
+- [Flow 10: Update Blueprint](flow-10-update-blueprint.md)
+- [Flow 11: Move Automation to "Needs Pricing" (+ Project Creation + Auto Quote)](flow-11-move-automation-to-needs-pricing-project-creation-auto-quote.md)
+- [Flow 12: Create New Version](flow-12-create-new-version.md)
+- [Flow 13: Update Automation Status](flow-13-update-automation-status.md)
 
 ### Pricing & Billing Flows
 
@@ -106,50 +106,50 @@ Quote generation, approval, payment, volume adjustments, and billing management.
 
 **Global Note**: The system only generates and sends quotes in response to a client-initiated automation (new automation or new version). Ops cannot send unsolicited quotes without a corresponding project / automation version. Quotes are created automatically when a new automation / new version becomes a project. Ops can tweak them, but they don't start by "sending" a quote out of nowhere.
 
-- [Flow 14: Ops Adjust Quote (Override Pricing)](flow-14.md)
-- [Flow 15: Client Views and Accepts Quote](flow-15.md)
-- [Flow 16: Client Signs Quote](flow-16.md)
-- [Flow 17: Adjust Committed Volume / Plan Upgrade](flow-17.md)
-- [Flow 18: Client Rejects Quote](flow-18.md)
-- [Flow 19: Pricing Override (Admin)](flow-19.md)
-- [Flow 20: Billing Period Finalization](flow-20.md)
+- [Flow 14: Ops Adjust Quote (Override Pricing)](flow-14-ops-adjust-quote-override-pricing.md)
+- [Flow 15: Client Views and Accepts Quote](flow-15-client-views-and-accepts-quote.md)
+- [Flow 16: Client Signs Quote](flow-16-client-signs-quote.md)
+- [Flow 17: Adjust Committed Volume / Plan Upgrade](flow-17-adjust-committed-volume-plan-upgrade.md)
+- [Flow 18: Client Rejects Quote](flow-18-client-rejects-quote.md)
+- [Flow 19: Pricing Override (Admin)](flow-19-pricing-override-admin.md)
+- [Flow 20: Billing Period Finalization](flow-20-billing-period-finalization.md)
 
 ### Build & Deployment Flows
 
 Building automations, QA testing, deployment, and workflow management.
 
-- [Flow 21: Request Build](flow-21.md)
-- [Flow 22: Build Orchestration (Worker)](flow-22.md) - *Note: Future capability, not in v1*
-- [Flow 23: QA Testing & Approval](flow-23.md)
-- [Flow 24: Deploy to Production](flow-24.md)
-- [Flow 24A: Pause Workflow](flow-24-a.md)
-- [Flow 24B: Resume Workflow](flow-24-b.md)
+- [Flow 21: Request Build](flow-21-request-build.md)
+- [Flow 22: Build Orchestration (Worker)](flow-22-build-orchestration-worker.md) - *Note: Future capability, not in v1*
+- [Flow 23: QA Testing & Approval](flow-23-qa-testing-approval.md)
+- [Flow 24: Deploy to Production](flow-24-deploy-to-production.md)
+- [Flow 24A: Pause Workflow](flow-24-a-pause-workflow.md)
+- [Flow 24B: Resume Workflow](flow-24-b-resume-workflow.md)
 
 ### Execution & Monitoring Flows
 
 Runtime execution, credential management, webhooks, usage tracking, and alerts.
 
-- [Flow 25: Provide / Update Integration Credentials](flow-25.md)
-- [Flow 26: Credential Failure → Blocked Automation](flow-26.md)
-- [Flow 27: Run Event Webhook (WRK Platform → WRK Copilot)](flow-27.md)
-- [Flow 28: Usage Aggregation](flow-28.md)
-- [Flow 29: Threshold Alert](flow-29.md)
+- [Flow 25: Provide / Update Integration Credentials](flow-25-provide-update-integration-credentials.md)
+- [Flow 26: Credential Failure → Blocked Automation](flow-26-credential-failure-blocked-automation.md)
+- [Flow 27: Run Event Webhook (WRK Platform → WRK Copilot)](flow-27-run-event-webhook-wrk-platform-wrk-copilot.md)
+- [Flow 28: Usage Aggregation](flow-28-usage-aggregation.md)
+- [Flow 29: Threshold Alert](flow-29-threshold-alert.md)
 
 ### Collaboration Flows
 
 Team messaging, task management, and collaboration features.
 
-- [Flow 30: Send Message](flow-30.md)
-- [Flow 31: Create Task (System Auto-Generated)](flow-31.md)
-- [Flow 32: Update Task Status](flow-32.md)
+- [Flow 30: Send Message](flow-30-send-message.md)
+- [Flow 31: Create Task (System Auto-Generated)](flow-31-create-task-system-auto-generated.md)
+- [Flow 32: Update Task Status](flow-32-update-task-status.md)
 
 ### Admin & Ops Flows
 
 Administrative and operational management flows.
 
-- [Flow 33: Create Client (Ops)](flow-33.md)
-- [Flow 34: Update Client Health Status](flow-34.md)
-- [Flow 35: Archive Automation](flow-35.md)
+- [Flow 33: Create Client (Ops)](flow-33-create-client-ops.md)
+- [Flow 34: Update Client Health Status](flow-34-update-client-health-status.md)
+- [Flow 35: Archive Automation](flow-35-archive-automation.md)
 
 ---
 
