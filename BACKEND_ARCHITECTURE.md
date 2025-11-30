@@ -34,6 +34,13 @@ The backend is structured in three main layers:
 
 **Architecture**: Modular monolith (TypeScript/Node.js) with clear domain boundaries. Each domain module is self-contained but shares the same process and database connection pool.
 
+**Modular Monolith Commitment**: The backend will remain a **modular monolith** (multiple domain modules in a single service) until:
+- The team is large enough (>20 engineers) to justify service boundaries, and/or
+- There is a clear scale bottleneck that justifies splitting into microservices, and/or
+- Regulatory requirements demand service isolation
+
+The microservices discussion in "Extensibility & Future Work" is a **future option**, not a current plan. All development should assume a single service with clear module boundaries.
+
 **Framework Options**:
 - **Fastify**: Lightweight, high-performance, plugin-based
 - **NestJS**: Enterprise-grade, dependency injection, decorator-based
@@ -46,10 +53,11 @@ The backend is structured in three main layers:
 - Admin & Ops
 - Collaboration & Observability
 
-**Database**: PostgreSQL (Neon in dev/staging, RDS/Aurora in prod)
+**Database**: PostgreSQL (Neon for all environments: dev, staging, and prod)
 - Connection pooling (PgBouncer or similar)
-- Read replicas for reporting queries
-- Migrations via Drizzle ORM or Prisma
+- Read replicas for reporting queries (future: when scale requires)
+- Migrations via Drizzle ORM
+- **Note**: Future migration to RDS/Aurora is possible if/when scale or compliance requirements demand it, but Neon is the standard for v1
 
 **Caching**: Redis for:
 - Session storage
@@ -136,9 +144,9 @@ The backend is structured in three main layers:
 - `automations`: Logical automation (e.g., "Invoice Processing")
   - `id`, `tenant_id`, `name`, `description`, `department`, `owner_id`, `created_at`, `updated_at`
 - `automation_versions`: Specific version of an automation
-  - `id`, `automation_id`, `version` (semver: v1.0, v1.1, v2.0), `status`, `blueprint_json`, `intake_progress`, `created_at`, `updated_at`
-- `blueprint_nodes`: Extracted nodes from blueprint JSON (for querying)
-- `blueprint_edges`: Extracted edges from blueprint JSON (for querying)
+  - `id`, `tenant_id`, `automation_id`, `version` (semver: v1.0, v1.1, v2.0), `status`, `blueprint_json`, `intake_progress`, `created_at`, `updated_at`
+
+**Blueprint Storage**: Blueprint structure (nodes and edges) is stored as JSONB in the `blueprint_json` column of `automation_versions`. This JSONB approach provides flexibility and performance for the current scale. Future optimization: If querying patterns require it, we may extract nodes/edges into separate tables (`blueprint_nodes`, `blueprint_edges`) for more efficient querying, but this is not part of the v1 schema.
 
 **Status Lifecycle**:
 ```
@@ -181,11 +189,12 @@ Build in Progress → QA & Testing → Ready to Launch → Live → Archived
 
 **Entities**:
 - `workflow_bindings`: Links automation_version to Wrk workflow
-  - `id`, `automation_version_id`, `wrk_workflow_id`, `wrk_workflow_url`, `status`, `created_at`
+  - `id`, `tenant_id`, `automation_version_id`, `wrk_workflow_id`, `wrk_workflow_url`, `status`, `created_at`, `updated_at`
 - `run_events`: Execution events from Wrk platform webhooks
-  - `id`, `workflow_binding_id`, `run_id`, `status` (success/failure), `started_at`, `completed_at`, `error_message`, `metadata_json`
+  - `id`, `tenant_id`, `workflow_binding_id`, `run_id`, `status` (success/failure), `started_at`, `completed_at`, `error_message`, `metadata_json`, `created_at`
+  - **Idempotency**: Unique constraint on `(workflow_binding_id, run_id)` ensures the same run event is never processed twice
 - `usage_aggregates`: Pre-aggregated usage metrics (hourly/daily)
-  - `id`, `automation_version_id`, `tenant_id`, `period_start`, `period_end`, `run_count`, `success_count`, `failure_count`, `total_cost`
+  - `id`, `tenant_id`, `automation_version_id`, `period_start`, `period_end`, `run_count`, `success_count`, `failure_count`, `total_cost`, `created_at`, `updated_at`
 
 **Integration Flow**:
 1. Automation version reaches "Build in Progress"
@@ -193,7 +202,25 @@ Build in Progress → QA & Testing → Ready to Launch → Live → Archived
 3. Wrk returns `workflow_id` and `workflow_url`
 4. Worker creates `workflow_binding` record
 5. Wrk platform sends webhooks on run events
-6. Webhook handler creates `run_events` and updates aggregates
+6. Webhook handler validates HMAC signature and processes event idempotently
+7. Handler creates `run_events` (with idempotency check) and updates aggregates
+
+**Webhook Security**:
+- All webhooks from the Wrk platform **MUST** be authenticated via HMAC signature verification or signed secret header
+- Webhook endpoint validates signature before processing any events
+- Invalid signatures result in 401 Unauthorized response
+
+**Webhook Idempotency**:
+- Webhook handlers **MUST** be idempotent to handle duplicate deliveries
+- Unique constraint on `run_events(workflow_binding_id, run_id)` prevents double-counting
+- Handler logic checks for existing `run_event` before inserting:
+  ```typescript
+  const existing = await db.getRunEvent(workflowBindingId, runId);
+  if (existing) {
+    return; // Already processed, skip
+  }
+  await db.createRunEvent(...);
+  ```
 
 **Key Operations**:
 - Create workflow binding
@@ -206,6 +233,8 @@ Build in Progress → QA & Testing → Ready to Launch → Live → Archived
 - `GET /v1/automation-versions/{id}/runs` (paginated)
 - `GET /v1/automation-versions/{id}/usage` (aggregated metrics)
 - `POST /v1/webhooks/wrk-run-event` (internal, webhook receiver)
+  - **Security**: Validates HMAC signature from Wrk platform
+  - **Idempotency**: Checks for existing run_event before processing
 
 ### Pricing & Billing
 
@@ -216,7 +245,9 @@ Build in Progress → QA & Testing → Ready to Launch → Live → Archived
   - `id`, `automation_version_id`, `tenant_id`, `status` (draft/sent/signed/rejected), `setup_fee`, `unit_price`, `estimated_volume`, `effective_unit_price`, `created_at`, `signed_at`
 - `pricing_overrides`: Admin overrides for pricing (for ops console)
   - `id`, `automation_version_id`, `setup_fee_override`, `unit_price_override`, `reason`, `created_by`, `created_at`
-- `usage_aggregates`: (shared with Execution module) tracks actual usage and costs
+- `usage_aggregates`: Pre-aggregated usage metrics (shared with Execution & Integrations module)
+  - `id`, `tenant_id`, `automation_version_id`, `period_start`, `period_end`, `run_count`, `success_count`, `failure_count`, `total_cost`, `created_at`, `updated_at`
+  - Used for billing calculations and usage reporting
 - `billing_periods`: Monthly billing summaries
   - `id`, `tenant_id`, `period_start`, `period_end`, `total_spend`, `setup_fees_collected`, `unit_costs`, `status` (draft/finalized)
 
@@ -244,23 +275,27 @@ Build in Progress → QA & Testing → Ready to Launch → Live → Archived
 
 **Purpose**: Internal operations console for managing clients, projects, and build pipeline.
 
+**Clients vs Tenants Model**:
+- **Each customer = one tenant**: The `tenants` table represents the actual customer organization/workspace
+- **`clients` is an ops-facing view**: The `clients` table is a denormalized view with ops-specific metadata (health status, ops owner, committed spend) that references `tenants`
+- **Relationship**: `clients.tenant_id` → `tenants.id` (1:1 relationship)
+- **Rationale**: This allows ops team to track commercial relationships and health metrics separately from the core tenant identity, while maintaining a single source of truth for authentication and authorization
+
 **Entities**:
-- `clients`: External client organizations (maps to `tenants` but with ops-specific metadata)
-  - `id`, `tenant_id` (FK to tenants), `name`, `industry`, `health_status`, `owner_id` (ops team member), `committed_monthly_spend`, `created_at`
+- `clients`: Ops-facing view of customer organizations (1:1 with `tenants`)
+  - `id`, `tenant_id` (FK to tenants, UNIQUE), `name`, `industry`, `health_status`, `owner_id` (ops team member), `committed_monthly_spend`, `created_at`, `updated_at`
 - `projects`: Ops view of automation work (often 1:1 with automation_versions, but can span multiple)
-  - `id`, `client_id`, `automation_id` (nullable), `automation_version_id` (nullable), `name`, `type` (new_automation/revision), `status`, `pricing_status`, `owner_id`, `eta`, `checklist_progress`, `created_at`, `updated_at`
-- `build_tasks`: Granular build checklist items
-  - `id`, `project_id`, `task_name`, `status` (pending/in_progress/complete), `assignee_id`, `due_date`
+  - `id`, `tenant_id`, `client_id`, `automation_id` (nullable), `automation_version_id` (nullable), `name`, `type` (new_automation/revision), `status`, `pricing_status`, `owner_id`, `eta`, `checklist_progress`, `created_at`, `updated_at`
 
 **Status Mapping**:
 - Project status aligns with `automation_version.status` but includes ops-specific states
-- `checklist_progress` = percentage of `build_tasks` completed
+- `checklist_progress` = percentage of tasks with `context_type='project'` and `kind='build_checklist'` that are complete
 
 **Key Operations**:
 - List clients with filters (health, owner, spend)
 - View client detail with projects and spend summary
 - Update project status and ETA
-- Manage build tasks
+- Manage tasks (build checklist items and general TODOs)
 - Override pricing (via Pricing module)
 
 **API Endpoints**:
@@ -269,8 +304,8 @@ Build in Progress → QA & Testing → Ready to Launch → Live → Archived
 - `GET /v1/admin/projects` (admin only, with filters)
 - `GET /v1/admin/projects/{id}`
 - `PATCH /v1/admin/projects/{id}/status`
-- `GET /v1/admin/projects/{id}/build-tasks`
-- `POST /v1/admin/projects/{id}/build-tasks`
+- `GET /v1/admin/projects/{id}/tasks` (filtered by `context_type='project'` and optionally `kind='build_checklist'`)
+- `POST /v1/admin/projects/{id}/tasks`
 
 ### Collaboration & Observability
 
@@ -278,9 +313,9 @@ Build in Progress → QA & Testing → Ready to Launch → Live → Archived
 
 **Entities**:
 - `messages`: Threaded messages (client ↔ ops, internal notes)
-  - `id`, `project_id` (nullable), `automation_version_id` (nullable), `type` (client/ops/internal_note), `sender_id`, `text`, `attachments_json`, `tags`, `created_at`
-- `tasks`: General TODOs and workflow items
-  - `id`, `tenant_id`, `automation_id` (nullable), `title`, `description`, `status` (pending/in_progress/complete), `assignee_id`, `due_date`, `priority`, `created_at`
+  - `id`, `tenant_id`, `project_id` (nullable), `automation_version_id` (nullable), `type` (client/ops/internal_note), `sender_id`, `text`, `attachments_json`, `tags`, `created_at`
+- `tasks`: Unified task management (build checklist items, general TODOs, workflow items)
+  - `id`, `tenant_id`, `context_type` (project/automation_version/internal), `context_id` (FK to project/automation_version, nullable), `kind` (build_checklist/general_todo/workflow_item), `title`, `description`, `status` (pending/in_progress/complete), `assignee_id`, `due_date`, `priority`, `created_at`, `updated_at`
 - `audit_logs`: Immutable log of sensitive actions
   - `id`, `tenant_id`, `user_id`, `action_type`, `resource_type`, `resource_id`, `changes_json`, `ip_address`, `user_agent`, `created_at`
 
@@ -292,7 +327,8 @@ Build in Progress → QA & Testing → Ready to Launch → Live → Archived
 **Key Operations**:
 - Create message in project thread
 - List messages for project/automation
-- Create and assign tasks
+- Create and assign tasks (build checklist items or general TODOs)
+- Query tasks by context (project, automation, or internal)
 - Query audit logs (admin only, with filters)
 
 **API Endpoints**:
@@ -310,7 +346,20 @@ Build in Progress → QA & Testing → Ready to Launch → Live → Archived
 
 ### Tenant-Scoped Tables
 
-All multi-tenant tables include `tenant_id` as the first foreign key and are indexed for efficient tenant isolation.
+**Critical Rule**: All multi-tenant tables include `tenant_id` as a column (typically the first foreign key after `id`). This includes:
+- `users`
+- `automations`
+- `automation_versions`
+- `workflow_bindings`
+- `run_events`
+- `usage_aggregates`
+- `quotes`
+- `projects`
+- `messages`
+- `tasks`
+- `audit_logs`
+
+All queries must filter by `tenant_id` from the authenticated session (never from request parameters). Indexes on `(tenant_id, ...)` are created for efficient tenant isolation.
 
 **Core Tables**:
 
@@ -348,10 +397,11 @@ automations (
 
 automation_versions (
   id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
   automation_id UUID REFERENCES automations(id),
   version TEXT NOT NULL, -- semver: v1.0, v1.1
   status TEXT NOT NULL, -- enum: Intake in Progress, Needs Pricing, etc.
-  blueprint_json JSONB NOT NULL,
+  blueprint_json JSONB NOT NULL, -- stores nodes and edges as JSON
   intake_progress INTEGER DEFAULT 0, -- 0-100
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
@@ -360,6 +410,7 @@ automation_versions (
 
 workflow_bindings (
   id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
   automation_version_id UUID REFERENCES automation_versions(id),
   wrk_workflow_id TEXT NOT NULL,
   wrk_workflow_url TEXT,
@@ -370,6 +421,7 @@ workflow_bindings (
 
 run_events (
   id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
   workflow_binding_id UUID REFERENCES workflow_bindings(id),
   run_id TEXT NOT NULL, -- from Wrk platform
   status TEXT NOT NULL, -- success/failure
@@ -377,13 +429,14 @@ run_events (
   completed_at TIMESTAMPTZ,
   error_message TEXT,
   metadata_json JSONB,
-  created_at TIMESTAMPTZ NOT NULL
+  created_at TIMESTAMPTZ NOT NULL,
+  UNIQUE(workflow_binding_id, run_id) -- idempotency: prevent duplicate processing
 )
 
 quotes (
   id UUID PRIMARY KEY,
   automation_version_id UUID REFERENCES automation_versions(id),
-  tenant_id UUID REFERENCES tenants(id),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
   status TEXT NOT NULL, -- draft/sent/signed/rejected
   setup_fee DECIMAL(10,2) NOT NULL,
   unit_price DECIMAL(10,4) NOT NULL,
@@ -393,9 +446,24 @@ quotes (
   signed_at TIMESTAMPTZ
 )
 
+usage_aggregates (
+  id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  automation_version_id UUID REFERENCES automation_versions(id),
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+  run_count INTEGER NOT NULL DEFAULT 0,
+  success_count INTEGER NOT NULL DEFAULT 0,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  total_cost DECIMAL(12,4) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  UNIQUE(automation_version_id, period_start, period_end)
+)
+
 clients (
   id UUID PRIMARY KEY,
-  tenant_id UUID REFERENCES tenants(id), -- FK to tenants table
+  tenant_id UUID UNIQUE REFERENCES tenants(id), -- 1:1 with tenants
   name TEXT NOT NULL,
   industry TEXT,
   health_status TEXT, -- Good/At Risk/Churn Risk
@@ -407,6 +475,7 @@ clients (
 
 projects (
   id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
   client_id UUID REFERENCES clients(id),
   automation_id UUID REFERENCES automations(id), -- nullable
   automation_version_id UUID REFERENCES automation_versions(id), -- nullable
@@ -416,13 +485,14 @@ projects (
   pricing_status TEXT, -- Not Generated/Draft/Sent/Signed
   owner_id UUID REFERENCES users(id),
   eta DATE,
-  checklist_progress INTEGER DEFAULT 0,
+  checklist_progress INTEGER DEFAULT 0, -- calculated from tasks with context_type='project' and kind='build_checklist'
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 )
 
 messages (
   id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
   project_id UUID REFERENCES projects(id), -- nullable
   automation_version_id UUID REFERENCES automation_versions(id), -- nullable
   type TEXT NOT NULL, -- client/ops/internal_note
@@ -435,8 +505,10 @@ messages (
 
 tasks (
   id UUID PRIMARY KEY,
-  tenant_id UUID REFERENCES tenants(id),
-  automation_id UUID REFERENCES automations(id), -- nullable
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  context_type TEXT NOT NULL, -- project/automation_version/internal
+  context_id UUID, -- FK to project/automation_version, nullable for internal tasks
+  kind TEXT NOT NULL, -- build_checklist/general_todo/workflow_item
   title TEXT NOT NULL,
   description TEXT,
   status TEXT NOT NULL, -- pending/in_progress/complete
@@ -468,24 +540,48 @@ Critical indexes for performance:
 ```sql
 -- Tenant isolation (on every tenant-scoped table)
 CREATE INDEX idx_automations_tenant_id ON automations(tenant_id);
+CREATE INDEX idx_automation_versions_tenant_id ON automation_versions(tenant_id);
 CREATE INDEX idx_automation_versions_automation_id ON automation_versions(automation_id);
 CREATE INDEX idx_automation_versions_status ON automation_versions(status);
+CREATE INDEX idx_workflow_bindings_tenant_id ON workflow_bindings(tenant_id);
+CREATE INDEX idx_workflow_bindings_automation_version_id ON workflow_bindings(automation_version_id);
+CREATE INDEX idx_run_events_tenant_id ON run_events(tenant_id);
 CREATE INDEX idx_run_events_workflow_binding_id ON run_events(workflow_binding_id);
 CREATE INDEX idx_run_events_started_at ON run_events(started_at);
+CREATE INDEX idx_usage_aggregates_tenant_id ON usage_aggregates(tenant_id);
+CREATE INDEX idx_usage_aggregates_automation_version_id ON usage_aggregates(automation_version_id);
+CREATE INDEX idx_usage_aggregates_period ON usage_aggregates(period_start, period_end);
+CREATE INDEX idx_quotes_tenant_id ON quotes(tenant_id);
 CREATE INDEX idx_quotes_automation_version_id ON quotes(automation_version_id);
+CREATE INDEX idx_projects_tenant_id ON projects(tenant_id);
 CREATE INDEX idx_projects_client_id ON projects(client_id);
 CREATE INDEX idx_projects_status ON projects(status);
+CREATE INDEX idx_messages_tenant_id ON messages(tenant_id);
 CREATE INDEX idx_messages_project_id ON messages(project_id);
+CREATE INDEX idx_tasks_tenant_id ON tasks(tenant_id);
+CREATE INDEX idx_tasks_context ON tasks(context_type, context_id);
 CREATE INDEX idx_audit_logs_tenant_id_created_at ON audit_logs(tenant_id, created_at DESC);
 ```
 
 ### Relationship Patterns
 
-- **Tenant Scoping**: Every multi-tenant table has `tenant_id` as the first FK. All queries filter by `tenant_id` from the authenticated session.
-- **Automation → Versions**: One automation has many versions. The "active" version is determined by status = "Live" and latest version number.
-- **Projects ↔ Automations**: Projects often map 1:1 to automation_versions, but can exist independently during intake. `automation_id` and `automation_version_id` are nullable.
-- **Quotes → Versions**: Each quote is tied to a specific automation_version. Multiple quotes can exist (draft, sent, signed) but only one "signed" quote per version.
-- **Workflow Bindings**: One automation_version has one active workflow_binding (1:1 relationship).
+- **Tenant Scoping**: Every multi-tenant table has `tenant_id` as a column. All queries filter by `tenant_id` from the authenticated session (never from request parameters). This ensures complete data isolation between tenants.
+
+- **Tenants ↔ Clients**: One tenant = one client (1:1 relationship). `clients` is an ops-facing view with commercial metadata (health status, committed spend, ops owner) that references `tenants`. The `tenants` table is the source of truth for authentication and authorization.
+
+- **Automation → Versions**: One automation has many versions. Both `automations` and `automation_versions` have `tenant_id` for direct tenant scoping. The "active" version is determined by status = "Live" and latest version number.
+
+- **Projects ↔ Automations**: Projects often map 1:1 to automation_versions, but can exist independently during intake. `automation_id` and `automation_version_id` are nullable. Projects have `tenant_id` for direct tenant scoping and `client_id` for ops organization.
+
+- **Quotes → Versions**: Each quote is tied to a specific automation_version. Multiple quotes can exist (draft, sent, signed) but only one "signed" quote per version. Quotes have `tenant_id` for direct tenant scoping.
+
+- **Workflow Bindings**: One automation_version has one active workflow_binding (1:1 relationship). Workflow bindings have `tenant_id` for direct tenant scoping.
+
+- **Run Events**: Many run_events belong to one workflow_binding. Run events have `tenant_id` for direct tenant scoping and a unique constraint on `(workflow_binding_id, run_id)` for idempotency.
+
+- **Usage Aggregates**: Pre-aggregated metrics per automation_version per time period. Have `tenant_id` for direct tenant scoping.
+
+- **Tasks**: Unified task table supporting multiple contexts (projects, automation_versions, or internal). Tasks have `tenant_id` for direct tenant scoping and `context_type` + `context_id` for flexible relationships.
 
 ---
 
@@ -566,14 +662,17 @@ const validated = CreateAutomationSchema.parse(req.body);
 ### Secrets & Configuration
 
 **Secrets Management**:
-- All secrets stored in AWS Secrets Manager, HashiCorp Vault, or similar
-- No secrets in code or environment variables
+- All secrets stored in AWS Secrets Manager, HashiCorp Vault, or similar secrets manager
+- **No secrets in git**: Secrets are never committed to version control
+- **Runtime injection**: Secrets are injected as environment variables at runtime (by the deployment platform or secrets manager integration)
+- **Local development**: `.env` file is used for local development only and is gitignored
 - Secrets rotated regularly
-- Database credentials, API keys, JWT signing keys all in secrets manager
+- Database credentials, API keys, JWT signing keys, webhook secrets all in secrets manager
 
 **Configuration**:
 - Environment-specific config (dev/staging/prod) in separate config files
 - Feature flags for gradual rollouts
+- Non-sensitive configuration (feature flags, API endpoints) can be in environment variables or config files
 
 ### Audit & Logging
 
@@ -634,7 +733,8 @@ Authorization: Bearer <api_key>
 - `/v1/admin/automation-versions/{id}/pricing-overrides` - Override pricing
 - `/v1/admin/audit-logs` - Query audit logs
 
-**Public/Partner Endpoints** (API key auth):
+**Public/Partner Endpoints** (API key authentication required):
+- **Note**: "Public" means "for programmatic/partner use", not anonymous access. All `/v1/public/*` endpoints require valid API key authentication.
 - `/v1/public/automations` - List automations (read-only, filtered by API key's tenant)
 - `/v1/public/automation-versions/{id}/runs` - Get run history
 - Future: Webhook registration endpoints
@@ -853,20 +953,21 @@ async function aggregateUsage(message: RunEventMessage) {
 - Database: Neon PostgreSQL (serverless, easy setup)
 - API: `https://api.dev.wrkcopilot.com`
 - Workers: Single worker process (all queue types)
-- Secrets: Local `.env` file (for dev only)
+- Secrets: Local `.env` file (gitignored, for dev only)
 
 **Staging**:
 - Database: Neon PostgreSQL (separate instance)
 - API: `https://api.staging.wrkcopilot.com`
 - Workers: Separate worker processes per type
-- Secrets: AWS Secrets Manager (staging namespace)
+- Secrets: AWS Secrets Manager (staging namespace, injected as env vars)
 
 **Production**:
-- Database: AWS RDS PostgreSQL (Aurora Serverless v2) with read replicas
+- Database: Neon PostgreSQL (separate instance, with connection pooling)
 - API: `https://api.wrkcopilot.com` (or custom domain)
 - Workers: Auto-scaling worker fleet (ECS/EKS or Cloud Run)
-- Secrets: AWS Secrets Manager (prod namespace)
+- Secrets: AWS Secrets Manager (prod namespace, injected as env vars)
 - CDN: CloudFront for static assets
+- **Future**: Migration to RDS/Aurora is possible if/when scale, compliance, or feature requirements demand it, but Neon is the standard for v1
 
 ### CI/CD Pipeline
 
