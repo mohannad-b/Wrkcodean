@@ -18,6 +18,8 @@ Create initial automation_version:
     ↓
 Assign default owner (current user)
     ↓
+Create audit log entry
+    ↓
 Send notifications
     ↓
 Redirect to automation detail page
@@ -30,6 +32,8 @@ Redirect to automation detail page
 **Database Changes**:
 - Insert into `automations` (tenant_id, name, description, department, owner_id)
 - Insert into `automation_versions` (automation_id, version='v1.0', status='Intake in Progress', blueprint_json={}, intake_progress=0)
+- Insert into `audit_logs` (action_type='create_automation', resource_type='automation', resource_id=automation_id, user_id, tenant_id, created_at=now())
+- Insert into `audit_logs` (action_type='create_automation_version', resource_type='automation_version', resource_id=automation_version_id, user_id, tenant_id, created_at=now())
 
 **Note**: The ops-facing `projects` record will be created later when moving from "Intake in Progress" to "Needs Pricing" (see Flow 10). Build checklist tasks are also created at that time, not during automation creation.
 

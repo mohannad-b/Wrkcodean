@@ -22,6 +22,8 @@ Increment counters:
     ↓
 Update usage_aggregate record
     ↓
+Create audit log entry (for significant usage milestones)
+    ↓
 Check usage thresholds:
     - If run_count > volume_threshold: Alert ops
     - If failure_rate > threshold: Alert ops
@@ -35,6 +37,7 @@ If monthly period complete:
 **Database Changes**:
 - Upsert `usage_aggregates` (automation_version_id, period_start, period_end, run_count, success_count, failure_count, total_cost)
 - Unique constraint on (automation_version_id, period_start, period_end) ensures one aggregate per period
+- Insert into `audit_logs` (action_type='usage_aggregated', resource_type='automation_version', resource_id=automation_version_id, user_id=null, tenant_id, created_at=now(), metadata_json={'period_start': period_start, 'period_end': period_end, 'run_count': run_count}) - system-initiated by worker (optional, for significant milestones only)
 
 **Notifications** (conditional):
 - **Email**: Usage threshold exceeded (template: `usage_threshold_exceeded`)

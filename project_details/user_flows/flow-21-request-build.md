@@ -19,6 +19,8 @@ Update project.checklist_progress = 0%
     ↓
 Create initial build tasks (if not exists)
     ↓
+Create audit log entry
+    ↓
 Send notifications
     ↓
 [Build Orchestrator Worker picks up job]
@@ -33,6 +35,7 @@ Send notifications
 - Update `projects` (status='Build in Progress', checklist_progress=0)
 - Insert into `workflow_bindings` (automation_version_id, status='pending')
 - Insert into `tasks` (context_type='project', context_id=project.id, kind='build_checklist', status='pending') - multiple build checklist tasks
+- Insert into `audit_logs` (action_type='request_build', resource_type='automation_version', resource_id=automation_version_id, user_id, tenant_id, created_at=now())
 
 **Note**: Build checklist tasks are created here (when build starts), not during automation creation. The `checklist_progress` on projects is calculated as: percentage of tasks with `context_type='project'` and `kind='build_checklist'` that have `status='complete'`.
 

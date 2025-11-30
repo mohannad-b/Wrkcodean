@@ -24,6 +24,8 @@ Backend receives request:
     ↓
 Execute operation (read-only for public endpoints)
     ↓
+Create audit log entry (for access tracking)
+    ↓
 Return response (tenant-scoped data only)
 ```
 
@@ -32,7 +34,8 @@ Return response (tenant-scoped data only)
 - `GET /v1/public/automation-versions/{id}/runs` - Get run history
 - All `/v1/public/*` endpoints require API key authentication
 
-**Database Changes**: None (read-only operations)
+**Database Changes**: 
+- Insert into `audit_logs` (action_type='api_access', resource_type='api_key', resource_id=api_key_id, user_id=null, tenant_id, created_at=now(), metadata_json={'endpoint': endpoint_path, 'method': http_method}) - log API access for security/audit purposes
 
 **Notifications**: None
 

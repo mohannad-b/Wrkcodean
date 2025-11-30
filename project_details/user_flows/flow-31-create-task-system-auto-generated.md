@@ -22,6 +22,8 @@ Validate context exists (project/automation_version)
     ↓
 Create task record
     ↓
+Create audit log entry
+    ↓
 If kind = 'build_checklist' and context_type = 'project':
     Recalculate project.checklist_progress
     ↓
@@ -42,6 +44,7 @@ Return task
 **Database Changes**:
 - Insert into `tasks` (tenant_id, context_type, context_id, kind, title, description, status='pending', assignee_id, due_date, priority)
 - Update `projects` (checklist_progress) if build_checklist task
+- Insert into `audit_logs` (action_type='create_task', resource_type='task', resource_id=task_id, user_id=null, tenant_id, created_at=now(), metadata_json={'context_type': context_type, 'context_id': context_id, 'kind': kind, 'title': title}) - system-initiated auto-generation
 
 **Note**: `checklist_progress` on projects is calculated as: percentage of tasks with `context_type='project'` and `kind='build_checklist'` that have `status='complete'`.
 

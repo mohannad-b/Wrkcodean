@@ -14,6 +14,8 @@ Hash key (store hash, not plaintext)
     ↓
 Insert into api_keys table
     ↓
+Create audit log entry
+    ↓
 Return plaintext key ONCE (show in UI, never again)
     ↓
 User copies key
@@ -36,6 +38,8 @@ Update last_used_at
 
 **Database Changes**:
 - Insert into `api_keys` (tenant_id, key_hash, name, permissions, expires_at)
+- Insert into `audit_logs` (action_type='create_api_key', resource_type='api_key', resource_id=api_key_id, user_id, tenant_id, created_at=now()) - when API key created
+- Insert into `audit_logs` (action_type='revoke_api_key', resource_type='api_key', resource_id=api_key_id, user_id, tenant_id, created_at=now()) - when API key revoked (DELETE endpoint)
 
 **Notifications**:
 - **Email**: API key created notification (template: `api_key_created`) - security alert

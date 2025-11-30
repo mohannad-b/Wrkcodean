@@ -25,6 +25,7 @@ If exists: Return 200 (already processed, idempotent)
     ↓
 If not exists:
     Create run_event record
+    Create audit log entry
     Enqueue usage aggregation job
     ↓
 If status = 'failure' and error is critical:
@@ -39,6 +40,7 @@ Return 200 OK
 
 **Database Changes**:
 - Insert into `run_events` (workflow_binding_id, run_id, status, started_at, completed_at, error_message, metadata_json)
+- Insert into `audit_logs` (action_type='workflow_run', resource_type='automation_version', resource_id=automation_version_id, user_id=null, tenant_id, created_at=now(), metadata_json={'run_id': run_id, 'status': status, 'workflow_binding_id': workflow_binding_id}) - system-initiated by webhook
 - Idempotency: Unique constraint prevents duplicates
 
 **Notifications** (conditional):

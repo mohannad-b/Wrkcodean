@@ -29,6 +29,7 @@ If user found and active:
         Generate JWT access token (15 min expiry, includes tenant_id of last active workspace)
         Generate refresh token (7 day expiry)
         Create/update session record
+        Create audit log entry
         If only one workspace:
             Redirect to: https://{subdomain}.wrk.com/app
         If multiple workspaces:
@@ -40,7 +41,8 @@ If user found and active:
     ↓
 If user not found but allowed (e.g., invited user):
     Auto-provision according to Flow 2 (SSO Invitation branch)
-    Create session
+        Create session
+        Create audit log entry
     Return tokens + user info + workspace context
     ↓
 [Front-end stores tokens]
@@ -68,6 +70,8 @@ Generate refresh token (7 day expiry)
     ↓
 Create/update session record
     ↓
+Create audit log entry
+    ↓
 Return tokens + user info
     ↓
 [Front-end stores tokens]
@@ -77,6 +81,7 @@ Return tokens + user info
 
 **API Endpoints**:
 - `GET /v1/auth/sso/:provider/login` - Initiate SSO login (redirects to IdP)
+  - **Note**: This same endpoint is used for both login (Flow 3) and signup (Flow 1A). The UX context differs (login page vs signup page), but the endpoint and OAuth flow are identical.
 - `GET /v1/auth/sso/:provider/callback` - Handle IdP callback, validate token, create session
 - `POST /v1/auth/login` - Authenticate with email/password (local auth only)
 - `POST /v1/auth/refresh` - Refresh access token using refresh token
@@ -84,6 +89,7 @@ Return tokens + user info
 **Database Changes**:
 - Upsert `sessions` (user_id, tenant_id, refresh_token, expires_at, last_used_at)
 - Update `users` (idp_sub, email_verified=true) - if SSO login and user was invited/not yet fully provisioned
+- Insert into `audit_logs` (action_type='user_login', resource_type='user', resource_id=user_id, user_id, tenant_id, created_at=now()) - on successful login
 
 **Notifications**:
 - **Email**: Login from new device/IP (template: `login_new_device`) - optional security feature

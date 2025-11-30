@@ -31,6 +31,8 @@ Update project.status = 'QA & Testing'
     ↓
 Update build tasks (mark integration tasks as complete)
     ↓
+Create audit log entry
+    ↓
 Send notifications
     ↓
 Enqueue notification job
@@ -44,6 +46,7 @@ Enqueue notification job
 - Update `automation_versions` (status='QA & Testing')
 - Update `projects` (status='QA & Testing')
 - Update `tasks` (status='complete' for integration tasks)
+- Insert into `audit_logs` (action_type='build_complete', resource_type='automation_version', resource_id=automation_version_id, user_id=null, tenant_id, created_at=now(), metadata_json={'workflow_id': wrk_workflow_id}) - system-initiated by worker
 
 **Notifications** (via Notification Worker):
 - **Email**: Build complete notification to client (template: `build_complete`)

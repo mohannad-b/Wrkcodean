@@ -38,6 +38,8 @@ Update automation_version:
     - intake_progress = updated percentage
     - status remains 'Intake in Progress' (no auto-status change)
     ↓
+Create audit log entry
+    ↓
 Send notifications
     ↓
 Return success
@@ -51,6 +53,8 @@ Return success
 - Insert into `uploaded_assets` (automation_version_id, file_url, file_type, uploaded_at) - if assets table exists
 - Update `automation_versions` (blueprint_json, intake_progress)
 - Status remains 'Intake in Progress' (not changed automatically)
+- Insert into `audit_logs` (action_type='upload_intake_assets', resource_type='automation_version', resource_id=automation_version_id, user_id, tenant_id, created_at=now()) - when user uploads assets
+- Insert into `audit_logs` (action_type='ai_ingestion_complete', resource_type='automation_version', resource_id=automation_version_id, user_id=null, tenant_id, created_at=now(), metadata_json={'intake_progress': intake_progress}) - when AI ingestion worker completes
 
 **Notifications**:
 - **Email**: AI-generated draft blueprint ready (template: `draft_blueprint_ready`, to owner)

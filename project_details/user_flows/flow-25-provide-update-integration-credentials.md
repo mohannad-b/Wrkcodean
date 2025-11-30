@@ -35,6 +35,8 @@ If automation was previously Blocked due to credential issues:
         Option A: Automatically move status back to previous healthy state
         Option B: Require ops approval to unblock
     ↓
+Create audit log entry
+    ↓
 Send notifications
     ↓
 Return success
@@ -52,6 +54,7 @@ Return success
 - Update `tasks` (status='complete' for related credential tasks)
 - Update `projects` (checklist_progress recalculated)
 - Update `automation_versions` (status, if unblocking from Blocked)
+- Insert into `audit_logs` (action_type='add_credentials', resource_type='automation_version', resource_id=automation_version_id, user_id, tenant_id, created_at=now(), metadata_json={'system_name': system_name, 'credential_type': credential_type}) - when credentials added/updated
 
 **Notifications**:
 - **Email**: Credentials added notification (template: `credentials_added`, to ops when all required credentials provided)

@@ -27,6 +27,8 @@ Backend validates user is member of selected workspace
     ↓
 Set active_tenant_id in session/JWT (update JWT claims)
     ↓
+Create audit log entry
+    ↓
 All subsequent API calls:
     - Extract tenant_id from JWT (never from request body/query)
     - Filter all queries by tenant_id from session
@@ -45,7 +47,8 @@ Redirect to selected workspace: https://{workspace_slug}.wrk.com/app
 
 **Database Changes**:
 - Update `sessions` (active_tenant_id) - or store in JWT claims (stateless)
-- No database changes if using JWT claims (stateless)
+- Insert into `audit_logs` (action_type='switch_workspace', resource_type='tenant', resource_id=tenant_id, user_id, tenant_id=previous_tenant_id, created_at=now()) - when user switches workspace
+- No database changes if using JWT claims (stateless) - but audit log still created
 
 **Tenant Isolation**: `tenant_id` always from authenticated session (JWT), never from request body/query.
 

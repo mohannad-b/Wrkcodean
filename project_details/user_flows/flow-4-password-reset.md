@@ -34,6 +34,8 @@ If auth_provider='local':
         ↓
         Invalidate all existing sessions (security)
         ↓
+        Create audit log entry
+        ↓
         Send confirmation email
         ↓
         Redirect to login
@@ -48,6 +50,8 @@ If auth_provider='local':
 - Update `users` (password_reset_token_hash, password_reset_expires_at) - only for auth_provider='local'
 - Update `users` (password_hash, password_reset_token_hash=null) on reset
 - Delete all `sessions` for user (force re-login)
+- Insert into `audit_logs` (action_type='request_password_reset', resource_type='user', resource_id=user_id, user_id, tenant_id, created_at=now()) - when reset requested
+- Insert into `audit_logs` (action_type='reset_password', resource_type='user', resource_id=user_id, user_id, tenant_id, created_at=now()) - when password reset completed
 
 **Notifications**:
 - **Email**: Password reset link (template: `password_reset`) - only for local auth users

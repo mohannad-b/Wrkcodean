@@ -21,6 +21,8 @@ Create new automation_version:
     ↓
 Link to same automation_id
     ↓
+Create audit log entry
+    ↓
 Send notifications
     ↓
 Redirect to new version detail page
@@ -32,6 +34,7 @@ Redirect to new version detail page
 
 **Database Changes**:
 - Insert into `automation_versions` (automation_id, version, blueprint_json copied, status='Intake in Progress', intake_progress=0)
+- Insert into `audit_logs` (action_type='create_version', resource_type='automation_version', resource_id=automation_version_id, user_id, tenant_id, created_at=now(), metadata_json={'base_version_id': base_version_id, 'new_version': version})
 
 **Note**: The `projects` record for this revision will be created later when moving from "Intake in Progress" to "Needs Pricing" (via Flow 11). Build checklist tasks are also created at that time, not during version creation.
 
