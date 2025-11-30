@@ -16,77 +16,167 @@
 
 ### Auth Assumptions
 
-**V1 Implementation**: Flows 1-5 are described assuming first-party email/password authentication implemented in our backend. This includes:
-- User signup with email verification
-- Password-based login
-- Password reset flows
-- Session management with JWT tokens
+WRK Copilot supports **two authentication modes**:
 
-**Future IdP Integration**: We plan to support a managed IdP (Auth0, Clerk, etc.) where:
-- Signup/login/password reset would primarily happen at the IdP
-- Our backend would handle:
-  - Mapping IdP `sub` → `users` table
-  - Creating tenants for first user
-  - Managing tenant membership & roles
-  - Session management (JWT tokens with tenant_id, user_id, roles)
+**Mode A: SSO / IdP (Preferred Default)**
+- Authentication is handled by an external Identity Provider (IdP): Auth0, Okta, Google Workspace, Microsoft Azure AD, etc.
+- Signup, login, and password reset occur entirely at the IdP
+- WRK Copilot trusts email and email verification from the IdP
+- Backend auto-provisions `tenants` and `users` on first successful SSO login
+- **No WRK-side email verification flow** for SSO users
+- **No WRK-side password reset** for SSO users
+- Users are immediately active after first SSO login
+- Session management uses JWT tokens with `tenant_id`, `user_id`, and `roles`
 
-**Note**: The flows stay structurally the same from our backend's perspective (user + tenant creation, sessions, roles), but implementation details can later be delegated to an IdP. The backend architecture's security contract remains: `tenant_id` and `user_id` always come from the authenticated session, never from request bodies or query parameters.
+**Mode B: Local Email/Password (Fallback)**
+- Used when SSO is not configured or when explicitly selected
+- Email/password authentication implemented in WRK backend
+- Email verification is **configurable** (ON by default, but can be disabled per environment/tenant)
+- Password reset flows handled by WRK backend
+- Session management uses JWT tokens with `tenant_id`, `user_id`, and `roles`
+
+**Database Schema Support**:
+The `users` table includes:
+- `auth_provider` enum: `'idp' | 'local'` (indicates authentication mode)
+- `idp_sub` (nullable, IdP subject identifier for SSO users)
+- `email_verified` boolean (for local auth; SSO users always have `email_verified=true`)
+- `password_hash` (nullable, only for `auth_provider='local'`)
+
+**Important**: SSO/IdP is the **primary/expected mode** for production deployments. Local email/password authentication is a fallback path, clearly separated from SSO flows. The backend architecture's security contract remains: `tenant_id` and `user_id` always come from the authenticated session, never from request bodies or query parameters.
 
 ---
 
-### Flow 1: User Signup (New Tenant)
+### Flow 1A: SSO Signup (New Tenant)
 
-**Trigger**: User visits signup page and submits registration form
+**Trigger**: User clicks "Continue with SSO" button on signup page
 
 **Flow Diagram**:
 ```
-User submits signup form
+User clicks "Continue with SSO"
+    ↓
+Redirect to IdP (Auth0/Okta/Google/Microsoft/etc.)
+    ↓
+User authenticates at IdP
+    ↓
+IdP redirects to callback URL with authorization code/token
+    ↓
+Backend validates token and extracts claims:
+    - email (from IdP claims)
+    - idp_sub (IdP subject identifier)
+    - email_verified (from IdP claims)
+    ↓
+Check if user exists:
+    - Lookup by idp_sub OR (email + tenant_id if tenant context exists)
+    ↓
+If user exists and is active:
+    Create session (JWT access + refresh tokens)
+    Redirect to dashboard
+    ↓
+If first user for this org (no tenant exists):
+    Create tenant record
+    Create user record:
+        - tenant_id (new tenant)
+        - email (from IdP)
+        - auth_provider='idp'
+        - idp_sub (from IdP)
+        - email_verified=true (trusted from IdP)
+        - password_hash=null
+    Assign default role: "admin" (first user is admin)
+    Create session (JWT access + refresh tokens)
+    Redirect to onboarding/dashboard
+```
+
+**API Endpoints**:
+- `GET /v1/auth/sso/:provider/login` - Initiate SSO login (redirects to IdP)
+- `GET /v1/auth/sso/:provider/callback` - Handle IdP callback, validate token, create session
+
+**Database Changes**:
+- Insert into `tenants` (id, name, subdomain, created_at) - if first user
+- Insert into `users` (id, tenant_id, email, auth_provider='idp', idp_sub, email_verified=true, password_hash=null)
+- Insert into `user_roles` (user_id, role='admin') - if first user
+- Insert into `sessions` (user_id, tenant_id, refresh_token, expires_at)
+
+**Notifications**:
+- **Email**: Welcome email (SendGrid template: `welcome_sso`) - no verification link needed
+
+**Exceptions**:
+- **Invalid IdP token**: Return 401 Unauthorized
+- **IdP token expired**: Return 401, redirect to IdP login
+- **Email already exists with different auth_provider**: Return 409 Conflict, suggest using existing auth method
+- **IdP callback error**: Return 400, log error, redirect to signup with error message
+
+**Manual Intervention**: None (fully automated)
+
+**Note**: No email verification step, no local password. User is immediately active after first successful SSO login.
+
+---
+
+### Flow 1B: Local Email/Password Signup (New Tenant)
+
+**Trigger**: User visits signup page and submits local email/password registration form (used only when SSO is not configured or explicitly selected)
+
+**Flow Diagram**:
+```
+User submits signup form (email, password)
     ↓
 Validate email format & uniqueness
     ↓
 Create tenant record
     ↓
-Create user record (tenant_id, email, hashed password)
+Create user record:
+    - tenant_id (new tenant)
+    - email
+    - auth_provider='local'
+    - password_hash (bcrypt hash)
+    - email_verified=false (if verification enabled)
+    - email_verified=true (if verification disabled)
     ↓
 Assign default role: "admin" (first user is admin)
     ↓
-Generate email verification token
+If email verification is enabled:
+    Generate email verification token
+    Send verification email
+    Return success (user not yet active)
     ↓
-Send verification email
+    [User clicks email link]
     ↓
-Return success (user not yet active)
+    Verify token & activate user (email_verified=true, status='active')
+    Create session (JWT access + refresh tokens)
+    Redirect to onboarding/dashboard
     ↓
-[User clicks email link]
-    ↓
-Verify token & activate user
-    ↓
-Create session (JWT access + refresh tokens)
-    ↓
-Redirect to onboarding/dashboard
+If email verification is disabled:
+    Mark user as active immediately
+    Create session (JWT access + refresh tokens)
+    Send welcome email (no verification link)
+    Redirect to onboarding/dashboard
 ```
 
 **API Endpoints**:
-- `POST /v1/auth/signup` - Create tenant + user
-- `GET /v1/auth/verify-email?token={token}` - Verify email
-- `POST /v1/auth/login` - Login after verification
+- `POST /v1/auth/signup` - Create tenant + user (local auth only)
+- `GET /v1/auth/verify-email?token={token}` - Verify email (only if verification enabled)
+- `POST /v1/auth/login` - Login after verification (if verification was required)
 
 **Database Changes**:
 - Insert into `tenants` (id, name, subdomain, created_at)
-- Insert into `users` (id, tenant_id, email, password_hash, email_verified=false)
+- Insert into `users` (id, tenant_id, email, auth_provider='local', password_hash, email_verified, idp_sub=null)
 - Insert into `user_roles` (user_id, role='admin')
 - Insert into `sessions` (user_id, tenant_id, refresh_token, expires_at)
 
 **Notifications**:
-- **Email**: Welcome email with verification link (SendGrid template: `welcome_verify`)
-- **Email**: Verification success email
+- **Email**: Welcome email with verification link (SendGrid template: `welcome_verify`) - only if verification enabled
+- **Email**: Welcome email without verification (SendGrid template: `welcome`) - if verification disabled
+- **Email**: Verification success email - only if verification was required
 
 **Exceptions**:
-- **Email already exists**: Return 409 Conflict, suggest password reset
+- **Email already exists**: Return 409 Conflict, suggest password reset (if local) or SSO login (if SSO user exists)
 - **Invalid email format**: Return 400 Bad Request
-- **Verification token expired**: Return 401, allow resend verification email
+- **Verification token expired**: Return 401, allow resend verification email (only if verification enabled)
 - **Token already used**: Return 400, user already verified
+- **Weak password**: Return 400, enforce password policy
 
 **Manual Intervention**: None (fully automated)
+
+**Note**: This flow is explicitly marked as a fallback path. Email verification is configurable per environment/tenant (ON by default, but can be disabled).
 
 ---
 
@@ -100,67 +190,147 @@ Admin submits invitation form (email, role)
     ↓
 Validate email (not already in tenant)
     ↓
-Generate invitation token (expires in 7 days)
+Determine tenant auth mode:
+    - Check if tenant is SSO-based (all users have auth_provider='idp' OR tenant config says "SSO only")
+    - OR tenant is local-only (all users have auth_provider='local')
     ↓
-Create user record (email_verified=false, status='invited')
+If tenant is SSO-based:
+    Generate invitation token (expires in 7 days)
+    Create user record:
+        - tenant_id
+        - email
+        - auth_provider='idp'
+        - status='invited'
+        - email_verified=false (initially)
+        - password_hash=null
+        - idp_sub=null (will be set on first SSO login)
+    Assign role to user
+    Send invitation email with "Continue with SSO to join WRK" link
+    Return success to admin
     ↓
-Assign role to user
+    [Invited user clicks link]
     ↓
-Send invitation email with signup link
+    Redirect to IdP login
     ↓
-Return success to admin
+    On first successful SSO login:
+        Match user by email (and/or IdP sub if available)
+        Mark status='active', email_verified=true
+        Set idp_sub from IdP claims
+        Create session
+        Redirect to tenant workspace
     ↓
-[Invited user clicks link]
+If tenant is local-only:
+    Generate invitation token (expires in 7 days)
+    Create user record:
+        - tenant_id
+        - email
+        - auth_provider='local'
+        - status='invited'
+        - email_verified=false (if verification enabled)
+        - password_hash=null (will be set on acceptance)
+    Assign role to user
+    Send invitation email with signup link
+    Return success to admin
     ↓
-Validate token & show signup form (pre-filled email)
+    [Invited user clicks link]
     ↓
-User sets password
+    Validate token & show signup form (pre-filled email)
     ↓
-Activate user (email_verified=true, status='active')
+    User sets password
     ↓
-Create session
+    Activate user:
+        - password_hash (bcrypt hash)
+        - email_verified=true (if verification disabled) OR email_verified=false (if verification enabled, requires email verification step)
+        - status='active' (or 'invited' if verification required)
     ↓
-Redirect to dashboard
+    If email verification required:
+        Send verification email
+        User must verify before full access
+    ↓
+    Create session
+    Redirect to dashboard
 ```
 
 **API Endpoints**:
 - `POST /v1/tenants/{tenantId}/users/invite` (admin only)
-- `GET /v1/auth/accept-invitation?token={token}` - Show signup form
-- `POST /v1/auth/accept-invitation` - Complete signup with password
+- `GET /v1/auth/accept-invitation?token={token}` - Show signup form (local) OR redirect to SSO (SSO)
+- `POST /v1/auth/accept-invitation` - Complete signup with password (local only)
+- `GET /v1/auth/sso/:provider/callback` - Handle SSO callback for invited users
 
 **Database Changes**:
-- Insert into `users` (tenant_id, email, status='invited', invitation_token, invitation_expires_at)
+- Insert into `users` (tenant_id, email, auth_provider, status='invited', invitation_token, invitation_expires_at, password_hash=null for SSO, idp_sub=null initially)
 - Insert into `user_roles` (user_id, role)
-- Update `users` (password_hash, email_verified=true, status='active') on acceptance
+- Update `users` (password_hash, email_verified=true, status='active') on acceptance - local only
+- Update `users` (idp_sub, email_verified=true, status='active') on first SSO login - SSO only
 
 **Notifications**:
-- **Email**: Invitation email to new user (template: `team_invitation`)
+- **Email**: Invitation email to new user (template: `team_invitation_sso` for SSO, `team_invitation` for local)
 - **Email**: Admin notification when invitation accepted (template: `invitation_accepted`)
 
 **Exceptions**:
 - **Email already in tenant**: Return 409, suggest different email
 - **Invitation token expired**: Return 401, admin must resend invitation
 - **Invalid role**: Return 400, role must be valid (admin/member/viewer)
+- **SSO user trying to set password**: Return 400, redirect to SSO login
+- **Local user trying to use SSO**: Return 400, use local signup flow
 
 **Manual Intervention**: None (admin-initiated, automated)
+
+**Note**: For SSO-based tenants, invited users do NOT set a local password. They authenticate via SSO on first login, and the system matches them by email (and/or IdP `sub`) to activate their account. No "set your password" or "verify your email" steps for SSO users beyond the IdP login.
 
 ---
 
 ### Flow 3: User Login
 
-**Trigger**: User submits login form
+**Trigger**: User initiates login (either via SSO or local email/password)
 
-**Flow Diagram**:
+**Flow Diagram - SSO Login**:
+```
+User clicks "Continue with SSO"
+    ↓
+Redirect to IdP (Auth0/Okta/Google/Microsoft/etc.)
+    ↓
+User authenticates at IdP
+    ↓
+IdP redirects to callback URL with authorization code/token
+    ↓
+Backend validates token and extracts claims:
+    - email (from IdP claims)
+    - idp_sub (IdP subject identifier)
+    - email_verified (from IdP claims)
+    ↓
+Lookup user by idp_sub OR (email + tenant context)
+    ↓
+If user found and active:
+    Check user status (active, not suspended)
+    Generate JWT access token (15 min expiry)
+    Generate refresh token (7 day expiry)
+    Create/update session record
+    Return tokens + user info
+    ↓
+If user not found but allowed (e.g., first user or invited user):
+    Auto-provision according to Flow 1A (SSO Signup) or Flow 2 (SSO Invitation branch)
+    Create session
+    Return tokens + user info
+    ↓
+[Front-end stores tokens]
+    ↓
+[Subsequent requests include Bearer token]
+```
+
+**Flow Diagram - Local Login**:
 ```
 User submits email + password
     ↓
 Validate email exists in tenant
     ↓
-Verify password hash
+Check user.auth_provider = 'local' (reject if 'idp')
+    ↓
+Verify password hash (bcrypt)
     ↓
 Check user status (active, not suspended)
     ↓
-Check email_verified = true
+Check email_verified = true (only if email verification is enabled for tenant/environment)
     ↓
 Generate JWT access token (15 min expiry)
     ↓
@@ -176,28 +346,37 @@ Return tokens + user info
 ```
 
 **API Endpoints**:
-- `POST /v1/auth/login` - Authenticate and get tokens
+- `GET /v1/auth/sso/:provider/login` - Initiate SSO login (redirects to IdP)
+- `GET /v1/auth/sso/:provider/callback` - Handle IdP callback, validate token, create session
+- `POST /v1/auth/login` - Authenticate with email/password (local auth only)
 - `POST /v1/auth/refresh` - Refresh access token using refresh token
 
 **Database Changes**:
 - Upsert `sessions` (user_id, tenant_id, refresh_token, expires_at, last_used_at)
+- Update `users` (idp_sub, email_verified=true) - if SSO login and user was invited/not yet fully provisioned
 
 **Notifications**:
 - **Email**: Login from new device/IP (template: `login_new_device`) - optional security feature
 
 **Exceptions**:
-- **Invalid email/password**: Return 401 Unauthorized
-- **User not verified**: Return 403, resend verification email
+- **Invalid email/password** (local): Return 401 Unauthorized
+- **User not verified** (local, if verification enabled): Return 403, resend verification email
 - **User suspended**: Return 403, contact admin
-- **Too many failed attempts**: Rate limit, temporary lockout (15 min)
+- **Too many failed attempts** (local): Rate limit, temporary lockout (15 min)
+- **Invalid IdP token** (SSO): Return 401, redirect to IdP login
+- **User has auth_provider='idp' but trying local login**: Return 400, redirect to SSO login with message "Please use SSO to sign in"
+- **User has auth_provider='local' but trying SSO**: Return 400, use local login (or allow SSO and update auth_provider if business rules allow)
+- **Email verification errors for SSO users**: Must NOT appear - SSO users are always told to use their IdP for any account issues
 
 **Manual Intervention**: None
+
+**Note**: In SSO mode, password reset and email verification errors must **not** appear. Users are always told to use their IdP for account management. Email verification check only applies for `auth_provider='local'` and only if verification is enabled for that environment/tenant.
 
 ---
 
 ### Flow 4: Password Reset
 
-**Trigger**: User clicks "Forgot Password"
+**Trigger**: User clicks "Forgot Password" (local auth users only)
 
 **Flow Diagram**:
 ```
@@ -205,53 +384,60 @@ User submits email
     ↓
 Validate email exists
     ↓
-Generate reset token (expires in 1 hour)
+Check user.auth_provider:
+    If auth_provider='idp':
+        Return 400 Bad Request with error message:
+        "Password reset is not available for SSO users. Please reset your password through your identity provider (IdP)."
+        Do NOT proceed with reset flow
     ↓
-Store token hash in user record
-    ↓
-Send password reset email
-    ↓
-Return success (don't reveal if email exists)
-    ↓
-[User clicks reset link]
-    ↓
-Validate token & show reset form
-    ↓
-User submits new password
-    ↓
-Validate password strength
-    ↓
-Hash new password
-    ↓
-Update user.password_hash
-    ↓
-Invalidate all existing sessions (security)
-    ↓
-Send confirmation email
-    ↓
-Redirect to login
+If auth_provider='local':
+        Generate reset token (expires in 1 hour)
+        Store token hash in user record
+        Send password reset email
+        Return success (don't reveal if email exists)
+        ↓
+        [User clicks reset link]
+        ↓
+        Validate token & show reset form
+        ↓
+        User submits new password
+        ↓
+        Validate password strength
+        ↓
+        Hash new password
+        ↓
+        Update user.password_hash
+        ↓
+        Invalidate all existing sessions (security)
+        ↓
+        Send confirmation email
+        ↓
+        Redirect to login
 ```
 
 **API Endpoints**:
-- `POST /v1/auth/forgot-password` - Request reset
+- `POST /v1/auth/forgot-password` - Request reset (local auth only)
 - `GET /v1/auth/reset-password?token={token}` - Validate token
 - `POST /v1/auth/reset-password` - Set new password
 
 **Database Changes**:
-- Update `users` (password_reset_token_hash, password_reset_expires_at)
+- Update `users` (password_reset_token_hash, password_reset_expires_at) - only for auth_provider='local'
 - Update `users` (password_hash, password_reset_token_hash=null) on reset
 - Delete all `sessions` for user (force re-login)
 
 **Notifications**:
-- **Email**: Password reset link (template: `password_reset`)
+- **Email**: Password reset link (template: `password_reset`) - only for local auth users
 - **Email**: Password reset confirmation (template: `password_reset_success`)
 
 **Exceptions**:
+- **User has auth_provider='idp'**: Return 400, error message directing user to reset via their IdP
 - **Token expired**: Return 401, request new reset
 - **Token already used**: Return 400
 - **Weak password**: Return 400, enforce password policy
 
 **Manual Intervention**: None
+
+**Note**: This flow is explicitly restricted to local auth users (`auth_provider='local'`). SSO users must reset passwords through their IdP. Any messaging in this section must not imply that SSO users can reset passwords via WRK.
 
 ---
 
@@ -2084,13 +2270,13 @@ This document covers all major user flows in WRK Copilot, including:
 - **Admin & Ops**: Create client, update health status, archive automation
 
 **Key Architectural Alignments**:
+- **Authentication Modes**: SSO/IdP is the preferred default mode with minimal friction (auto-provisioning, no email verification, no password reset). Local email/password is a fallback path with configurable email verification.
 - **State Machine**: Automation status transitions follow strict state machine rules (see Automation Status State Machine section)
 - **Project Creation Timing**: Projects are created when moving from "Intake in Progress" to "Needs Pricing", not during automation creation
 - **Task Creation Timing**: Build checklist tasks are created when build starts or when project is created for pricing, not during automation creation
 - **Tenant Isolation**: All flows enforce tenant_id from authenticated session, never from request parameters
 - **Payment Integration**: Quote signing includes payment method collection and setup fee charging
 - **Credentials Security**: Credentials stored in secrets manager, only references in database
-- **IdP Ready**: Auth flows structured to support future IdP integration
 
 Each flow includes:
 - Clear text-based diagram
