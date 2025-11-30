@@ -28,7 +28,7 @@ If user exists:
         If user has workspace membership:
             Return 409 Conflict with error:
             "Account already exists. Please use the login page to sign in."
-            Redirect to login page (Flow 3)
+            Note: Wrk will standardize on: backend returns 409 JSON and frontend redirects to /login (Flow 3)
         ↓
         If user has NO workspace membership:
             Verify password hash (bcrypt)
@@ -44,6 +44,8 @@ If user does not exist (new user):
         - password_hash (bcrypt hash)
         - email_verified=false (if verification enabled)
         - email_verified=true (if verification disabled)
+        - status='pending_verification' (if verification enabled)
+        - status='active' (if verification disabled)
         - idp_sub=null
     ↓
     Create audit log entry (tenant_id=null, pre-workspace)
@@ -100,15 +102,18 @@ Redirect to workspace: https://{workspace_slug}.wrk.com/app
   - If user exists with workspace: Returns 409, redirect to login
   - If user exists with auth_provider='idp': Returns 409, error message to use SSO
 - `GET /v1/auth/verify-email?token={token}` - Verify email (only if verification enabled)
+  - Handles both new users and existing users with no workspace
+  - If a verified local user has no workspace membership after email verification, redirect them to the workspace creation step
 - `POST /v1/auth/create-workspace` - Create workspace (name, subdomain) after authentication
   - Body: `{ workspace_name, workspace_slug }`
   - Requires: authenticated user (no workspace membership)
+  - **Note**: "Authenticated" here means a pre-tenant user context (user_id in a temporary session/cookie after signup/verification), not a tenant-scoped session. Full tenant-scoped sessions are only created after workspace creation.
 - `GET /v1/auth/check-subdomain?slug={slug}` - Check subdomain availability
 
 **Note**: Login functionality is handled by Flow 3. This endpoint (`POST /v1/auth/login`) is not part of Flow 1B.
 
 **Database Changes**:
-- Insert into `users` (id, email, auth_provider='local', password_hash, email_verified, idp_sub=null) - if new user
+- Insert into `users` (id, email, auth_provider='local', password_hash, email_verified, status='pending_verification' or 'active', idp_sub=null) - if new user
 - Insert into `tenants` (id, name, subdomain, created_at) - when workspace created
 - Insert into `user_tenants` or `memberships` (user_id, tenant_id, role='admin' or 'workspace_owner') - create membership
 - Insert into `sessions` (user_id, tenant_id, refresh_token, expires_at) - only after workspace created
@@ -116,7 +121,9 @@ Redirect to workspace: https://{workspace_slug}.wrk.com/app
 - Insert into `audit_logs` (action_type='verify_email', resource_type='user', resource_id=user_id, user_id, tenant_id=null, created_at=now()) - when email verified (if verification enabled, tenant_id=null, pre-workspace)
 - Insert into `audit_logs` (action_type='create_workspace', resource_type='tenant', resource_id=tenant_id, user_id, tenant_id, created_at=now()) - when workspace created (now tenant_id is available)
 
-**Tenant Isolation**: `tenant_id` extracted from JWT session, never from request body.
+**Tenant Isolation**: 
+- Before workspace creation: No `tenant_id` exists yet. The user only has a pre-tenant user context (temporary session/cookie after signup/verification), not a tenant-scoped session. See the note under `POST /v1/auth/create-workspace` for details.
+- After workspace creation: `tenant_id` extracted from JWT session, never from request body.
 
 **Notifications**:
 - **Email**: Verification email (template: `verify_email`) - only if verification enabled
@@ -124,8 +131,8 @@ Redirect to workspace: https://{workspace_slug}.wrk.com/app
 
 **Exceptions**:
 - **Email already exists with auth_provider='idp'**: Return 409, error message: "This email is registered with SSO. Please use SSO to sign in."
-- **Email already exists with auth_provider='local' AND has workspace membership**: Return 409, error message: "Account already exists. Please use the login page to sign in." (redirect to Flow 3)
-- **Email already exists with auth_provider='local' AND NO workspace membership**: Allow signup, proceed to workspace creation (verify password first)
+- **Email already exists with auth_provider='local' AND has workspace membership**: Return 409 JSON with error message: "Account already exists. Please use the login page to sign in." Wrk will standardize on: backend returns 409 JSON and frontend redirects to /login (Flow 3)
+- **Email already exists with auth_provider='local' AND NO workspace membership**: If password is valid, proceed to workspace creation; if invalid, return 401 and suggest login or password reset
 - **Invalid email format**: Return 400
 - **Subdomain taken**: Return 409, suggest alternatives
 - **Invalid subdomain format**: Return 400, show format requirements
