@@ -2,7 +2,7 @@
 
 **Trigger**: A client approves a quote from the workspace UI or via a dedicated signing link delivered by email.
 
-> **Scope**: Flow 16 owns the signing step, setup-fee charging, and the downstream status transitions that move the quote/project/automation into post-signing states. It MUST enforce the applicable triad (AAA or BAT based on `quote_type`) before any write and MUST leave pricing edits (Flows 11/14) and rejections (Flow 15) untouched. Flow 16 introduces its own signing tokens; Flow 15 view/reject tokens are never valid for signing.
+> **Scope**: Flow 16 owns the signing step, setup-fee charging, and the downstream status transitions that move the quote/project/automation into post-signing states. It MUST enforce the applicable triad (AAA or BAT based on `quote_type`) before any write and MUST leave pricing edits (Flows 11/14) and rejections (Flow 18) untouched. Flow 16 introduces its own signing tokens; Flow 15 view tokens and Flow 18 reject tokens are never valid for signing.
 
 ---
 
@@ -38,7 +38,7 @@ Before any payment-method lookup, billing call, or state mutation, the implement
 | Path | Auth Mode | Requirements | Notes |
 | --- | --- | --- | --- |
 | In-app signing | Client JWT | Tenant membership, quote recipient access, optional billing-standing check | CTA appears in workspace UI. |
-| Email signing link | Dedicated signing token (HMAC) | Token embeds `quote_id`, `tenant_id`, expiry, environment, optional passcode | Token scope = view + sign; MUST be revocable when quote is replaced/voided/signed; MUST NOT reuse Flow 15 token format. |
+| Email signing link | Dedicated signing token (HMAC) | Token embeds `quote_id`, `tenant_id`, expiry, environment, optional passcode | Token scope = view + sign; MUST be revocable when quote is replaced/voided/signed; MUST NOT reuse Flow 15/18 token format. |
 | Ops preview | JWT (`ops_pricing`/`admin`) | Feature-flagged “sign on behalf” support; otherwise read-only mirroring | Any on-behalf signing MUST be explicitly audited. |
 
 - `tenant_id` is always derived from auth context; requests MUST ignore tenant_id in payloads.  
@@ -47,7 +47,7 @@ Before any payment-method lookup, billing call, or state mutation, the implement
 - Signing tokens MUST be environment-scoped, revocable, and short-lived. Flow 16 logs IP/user-agent/channel for compliance.  
 - **Post-sign revocation rules**:
   - All Flow 16 signing tokens for a `(tenant_id, quote_id)` MUST be revoked after a successful sign (they become invalid for both GET and PATCH). These tokens MUST fail at the auth layer (401/403) and MUST NOT reach the shared `/status` router after revocation; issue read-only tokens or require workspace auth for post-sign views.  
-  - Flow 15 view/reject tokens MUST degrade to read-only after signing: they may still `GET /v1/quotes/{id}` but any PATCH (reject/sign) MUST route to Flow 15 and return 409 `invalid_quote_status` because the quote is no longer `sent`.
+  - Flow 15 view tokens and Flow 18 reject tokens MUST degrade to read-only after signing: they may still `GET /v1/quotes/{id}` but any PATCH (reject/sign) MUST route to Flow 18/Flow 16 and return 409 `invalid_quote_status` because the quote is no longer `sent`.
 
 ---
 
@@ -131,7 +131,7 @@ Return updated quote (status='signed') or billing error
 After a successful (or zero-amount) charge, run a DB transaction:
 1. Re-select `quotes`, `projects`, and `automation_versions` **FOR UPDATE**.  
 2. **Transactional idempotent shortcut**: If the reloaded quote already has `status='signed'` and the successful setup-fee charge/invoice recorded in step 7 is linked to it, treat the request as applied—return `200 already_applied=true` (no additional writes). This covers concurrent signers where one transaction won the race and is the only post-charge scenario where a non-`sent` quote can yield 200 instead of 409.  
-3. Revalidate the applicable triad (AAA for `initial_commitment`, BAT for `change_order`) plus concurrency (guard against races with Flow 15 / other ops). Any mismatch MUST roll back and return the appropriate 409; captured payments are handled via ops follow-up.  
+3. Revalidate the applicable triad (AAA for `initial_commitment`, BAT for `change_order`) plus concurrency (guard against races with Flow 18 or other ops helpers). Any mismatch MUST roll back and return the appropriate 409; captured payments are handled via ops follow-up.  
 4. `quotes`: set `status='signed'`, `signed_at=now()`, `updated_at=now()`, persist billing metadata (provider/customer IDs, channel).  
 5. `projects`:  
    - Always ensure `pricing_status='Signed'`.  
@@ -171,7 +171,7 @@ The shared quote-status endpoint MUST dispatch purely by the requested status:
 
 | `body.status` | Owning flow | Behavior |
 | --- | --- | --- |
-| `"rejected"` | Flow 15 | Client rejection (view/reject tokens only). |
+| `"rejected"` | Flow 18 | Client rejection (view/reject tokens only). |
 | `"signed"` | Flow 16 | Client signing + setup-fee charge. |
 | anything else | — | Return `409 invalid_quote_status`. |
 
@@ -195,7 +195,7 @@ Router rules:
 #### PATCH `/v1/quotes/{id}/status` (status='signed')
 - **Auth**: Client JWT or dedicated signing token; API keys rejected.  
 - **Authorization**: Client must be a recognized quote recipient/workspace member. Ops “sign on behalf” requires explicit feature flag + audit logging.  
-- **Routing contract**: Flow 15 is the sole owner of `{"status":"rejected"}`; Flow 16 is the sole owner of `{"status":"signed"}`. Any other status value MUST return 409 `invalid_quote_status`. Routing MUST key off the requested status and MUST NOT attempt to execute both flows in one request.  
+- **Routing contract**: Flow 18 is the sole owner of `{"status":"rejected"}`; Flow 16 is the sole owner of `{"status":"signed"}`. Any other status value MUST return 409 `invalid_quote_status`. Routing MUST key off the requested status and MUST NOT attempt to execute both flows in one request.  
 - **Body** (example):
   ```json
   {

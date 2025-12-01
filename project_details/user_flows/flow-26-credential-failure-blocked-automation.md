@@ -28,7 +28,7 @@ If threshold exceeded and current_status in allowed set (e.g., {'Live','Ready to
     ↓
 Create high-priority task (one per failed system) with structured fields:
     - context_type/context_id include tenant_id/project_id/automation_version_id
-    - kind='build_checklist' or 'credentials_issue'
+    - kind='credentials_issue'
     - system_key/provider stored explicitly; titles never include secrets
     ↓
 Notify client + ops (masked reason, remediation steps)
@@ -70,6 +70,6 @@ Clear blocked_reason via lifecycle helper response, send unblocked notifications
 - Ops team verifies credential fixes before unblocking
 - Ops team may adjust failure thresholds if needed
 
-**Note**: Once credentials are fixed (Flow 24), the automation can be unblocked via Flow 13 (Update Automation Status), respecting allowed transitions from the state machine.
+**Note**: Once credentials are fixed via Flow 25 (Provide/Update Integration Credentials) and the lifecycle helper verifies all required credentials are active, the automation can be unblocked via Flow 13 (Update Automation Status), respecting allowed transitions from the state machine.
 
 ---

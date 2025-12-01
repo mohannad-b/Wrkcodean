@@ -2,7 +2,7 @@
 
 **Trigger**: An ops/pricing/admin user opens an existing project (created via Flow 11), reviews the auto-generated quote, and overrides pricing fields (setup fee, unit price, discounts, volume assumptions) before the client signs (Flows 15–16).
 
-> **Scope**: Flow 14 covers updates to an **existing** quote that Flow 11 already created. It MUST NOT create a new quote, delete a quote, change automation/project associations, or alter automation_version status. Flow 14 also MUST NOT re-send emails directly; client-facing updates are handled by Flow 11 and Flow 15.
+> **Scope**: Flow 14 covers updates to an **existing** quote that Flow 11 already created. It MUST NOT create a new quote, delete a quote, change automation/project associations, or alter automation_version status. Flow 14 also MUST NOT re-send emails directly; client-facing status updates continue to be handled by Flow 11 (initial send), Flow 18 (rejection), and Flow 16 (signing).
 >
 > Flow 14 MUST NOT change `projects.status`; it MAY only adjust `projects.pricing_status` as described below.
 

@@ -1,4 +1,4 @@
-# WRK Copilot Project Overview
+# WRK Copilot – Project Overview
 
 ## Table of Contents
 
@@ -20,55 +20,72 @@
 
 ### The Problem
 
-Businesses need automation but face three barriers:
+Businesses want automation but run into three consistent walls:
 
-1. **Technical Complexity**: Building automations requires coding, API knowledge, and integration expertise that operations teams lack.
-2. **Requirements Misalignment**: Document/email-based requirement gathering leads to miscommunication and mismatched expectations.
-3. **Opaque Process**: Pricing, build status, and metrics scattered across spreadsheets and tools—no single source of truth.
+1. **Technical Complexity** – Real automations need APIs, integration glue, error handling, observability. Ops teams generally don’t have that skillset or bandwidth.
+2. **Requirements Misalignment** – Requirements live in docs, emails, and calls. Builders interpret; clients feel misunderstood. Scope creep and mismatched expectations are the default.
+3. **Opaque Process** – Pricing, build status, and run metrics sit in spreadsheets, tickets, and ad-hoc dashboards. There’s no single place to see “what’s live, what it costs, and what’s next”.
 
 ### The Solution
 
-WRK Copilot is a collaborative automation design and orchestration platform that bridges the gap between business requirements and technical execution. It provides:
+WRK Copilot is a collaborative automation design and orchestration layer that sits on top of the WRK Platform. It:
 
-- **Collaborative Design**: Visual blueprint editor where clients and builders align on workflow design before implementation.
-- **Transparent Pricing**: Integrated quotes with setup fees, per-unit costs, and volume estimates visible throughout the lifecycle.
-- **Full Visibility**: Real-time build progress, execution metrics, and ROI tracking in one platform.
-- **Managed Execution**: WRK team handles technical implementation; clients focus on describing processes and reviewing results.
+- **Captures Requirements Collaboratively** – Chat + structured intake + blueprint canvas instead of Word docs and screenshots.
+- **Surfaces Transparent Pricing** – Setup fees, per-unit costs, and volume assumptions are part of the lifecycle, not a separate spreadsheet.
+- **Gives Full Visibility** – Build status, checklists, run metrics, and ROI live in one place.
+- **Keeps Execution Managed** – WRK’s team builds and runs the automation; the client describes, reviews, and approves.
 
-**Value Proposition**: "Describe your process, we build and run it for you."
+Short version: “Describe your process, we build and run it for you.”
 
-**Architecture**: Multi-tenant, API-first backend with two interfaces:
-- **Studio**: Client-facing automation management
-- **Admin Console**: Internal ops pipeline management
+Architecturally:
+
+- WRK Copilot = multi-tenant orchestration + UX layer.
+- WRK Platform = workflow runtime and integration engine.
 
 ---
 
 ## What is WRK Copilot?
 
-WRK Copilot is a multi-tenant SaaS platform that manages the complete lifecycle of business process automations—from requirements capture through blueprint design, pricing, build orchestration, and execution monitoring.
+WRK Copilot is a multi-tenant SaaS app that manages the full lifecycle of business process automations:
 
-**Analogy**: Think "Figma for workflows" combined with the build pipeline visibility of GitHub and Vercel, but specifically designed for business process automation.
+`Requirements → Blueprint → Pricing → Build → Deploy → Monitor → Iterate`
 
-**Core Workflow**: Requirements → Blueprint → Pricing → Build → Deploy → Monitor → Iterate
+Think of it as:
+
+- Figma for workflows (visual, collaborative design),
+- crossed with GitHub/Vercel for automations (clear pipeline, deploys, and observability),
+- tuned specifically for business processes rather than raw dev workflows.
+
+It’s built around a strict backend state machine and a set of 35 documented flows that cover identity, lifecycle, pricing, build, execution, collaboration, and ops.
 
 ---
 
 ## WRK Platform vs WRK Copilot
 
-**WRK Platform** (Wrk.com): The execution engine that runs workflows. It provides:
-- Workflow runtime and execution infrastructure
-- System integrations (CRM, email, databases, APIs)
-- Execution monitoring and error handling
-- Webhook APIs for triggering workflows and receiving run events
+### WRK Platform (wrk.com)
 
-**WRK Copilot**: The design, orchestration, and management layer built on top of WRK Platform. It provides:
-- Requirements capture and blueprint design
-- Pricing and quote management
-- Build orchestration (creates workflows in WRK Platform)
-- Client-facing dashboards and metrics
-- Ops pipeline management
+The execution engine:
 
-**Relationship**: WRK Copilot designs and orchestrates; WRK Platform executes. Execution events flow back to WRK Copilot for monitoring and billing.
+- Runs workflows (orchestration, retries, error handling).
+- Connects to systems (CRMs, ERPs, email, storage, APIs, RPA, etc.).
+- Exposes webhooks and APIs for triggers and result callbacks.
+- Emits run events and usage metrics.
+
+### WRK Copilot
+
+The design + orchestration + management layer:
+
+- Captures requirements and turns them into blueprints.
+- Manages pricing, quotes, signatures, and billing readiness.
+- Orchestrates the build pipeline and creates workflows in WRK Platform.
+- Surfaces dashboards, usage, and ROI to clients.
+- Gives ops a single pane of glass for all client projects.
+
+### Relationship
+
+- Copilot designs and orchestrates.
+- Platform executes.
+- Platform usage and events flow back into Copilot for monitoring, billing, and next-steps.
 
 ---
 
@@ -76,33 +93,44 @@ WRK Copilot is a multi-tenant SaaS platform that manages the complete lifecycle 
 
 ### Automations & Versions
 
-- **Automation**: Logical workflow (e.g., "Invoice Processing"). One automation has many versions.
-- **Automation Version**: Specific version (v1.0, v1.1, v2.0) with status, blueprint JSON (nodes/edges), and intake progress (0-100%).
+- **Automation** – A logical workflow, e.g. “Invoice Processing”, “Lead Routing”.
+- **Automation Version** – A concrete version (v1.0, v1.1, v2.0) with:
+  - Status (Intake → Needs Pricing → Build → QA → Ready to Launch → Live → Blocked/Archived)
+  - Blueprint JSON (nodes/edges)
+  - Intake progress (% completeness)
 
 ### Projects (Ops View)
 
-- **Project**: Ops-facing automation work (often 1:1 with automation versions). Type: `new_automation` or `revision`. Pricing status: `Not Generated` → `Draft` → `Sent` → `Signed`. Checklist progress tracks build task completion.
+- **Project** – Ops-facing wrapper around automation work, usually 1:1 with an automation version.
+  - Type: `new_automation` or `revision`
+  - Pricing status: `Not Generated → Draft → Sent → Signed`
+  - Checklist progress: build/QA tasks completion
 
 ### Clients & Tenants
 
-- **Tenant**: Organization/workspace (auth source of truth)
-- **Client**: Ops-facing tenant view with commercial metadata (health, spend, ops owner). 1:1 with tenant.
+- **Tenant** – The actual workspace (auth + multi-tenant boundary).
+- **Client** – Ops/commercial lens on a tenant with:
+  - Health status (Good / At Risk / Churn Risk)
+  - Spend + utilization
+  - Account/ops owner
+
+_1:1: each client maps to exactly one tenant._
 
 ### Quotes & Pricing
 
-- **Quote**: Pricing proposal (status: `draft` → `sent` → `signed` → `rejected`). Components: setup fee, per-unit price, estimated volume, effective unit price.
-- **Pricing Override**: Admin override for special cases.
+- **Quote** – Pricing artifact with setup fee, per-unit price, volume assumptions, tiers; status `draft → sent → signed → rejected`.
+- **Pricing Override** – Admin-only mechanism to override pricing rules for special cases (discounts, promos, bespoke deals).
 
 ### Execution & Usage
 
-- **Workflow Binding**: Links automation version to WRK Platform workflow
-- **Run Event**: Individual execution (success/failure, timing, errors)
-- **Usage Aggregate**: Pre-aggregated metrics (hourly/daily) for billing
+- **Workflow Binding** – Maps an automation version to a specific WRK Platform workflow (by `workflow_id`).
+- **Run Event** – A single execution (success/failure, error, timings).
+- **Usage Aggregate** – Hourly/daily summary metrics used for billing, alerts, and reporting.
 
 ### Collaboration
 
-- **Messages**: Threaded communication. Type: `client` (visible to client), `ops` (ops only), `internal_note` (ops-only).
-- **Tasks**: Unified tasks (build checklist, TODOs, workflow items). Context: `project`, `automation_version`, or `internal`. Kind: `build_checklist`, `general_todo`, `workflow_item`.
+- **Messages** – Threaded conversation scoped to a project or automation with types `client`, `ops`, `internal_note`, `system`.
+- **Tasks** – Structured work items (context: project, automation_version, client, or internal; kind: `build_checklist`, `credentials_issue`, `general_todo`, etc.) used for build checklists, credential fixes, retention follow-up, etc.
 
 ---
 
@@ -110,15 +138,19 @@ WRK Copilot is a multi-tenant SaaS platform that manages the complete lifecycle 
 
 ### Studio Users (Client-Facing)
 
-**Personas**: Operations leaders (SMBs/mid-market), RevOps/Sales Ops, Finance/Accounting, HR/People Ops, Customer Success.
-
-**Characteristics**: Deep process knowledge, limited technical skills, value collaboration/transparency, need ROI visibility.
+- **Who**: Ops leaders, RevOps, Sales Ops, Finance/Accounting, HR/People Ops, CS/Ops.
+- **Patterns**:
+  - Know their processes deeply.
+  - Don’t want to become Zapier/Workato engineers.
+  - Care about time-to-value, visibility, and ROI—not which API is being called.
 
 ### Admin/Ops Users (Internal)
 
-**Personas**: Solutions engineers, operations managers, account managers, internal operations.
-
-**Characteristics**: Technical expertise, manage multiple clients/projects, require efficiency tools.
+- **Who**: Solutions engineers, automation builders, ops managers, account managers, internal operations.
+- **Patterns**:
+  - Manage multiple clients and a pipeline of automations.
+  - Need structure: status, tasks, checklists, SLAs.
+  - Need control: pricing overrides, client health, archiving, risk flags.
 
 ---
 
@@ -126,28 +158,24 @@ WRK Copilot is a multi-tenant SaaS platform that manages the complete lifecycle 
 
 ### Studio Interface (Client-Facing)
 
-| Feature | Description | Route |
-|---------|-------------|-------|
-| **Automations Dashboard** | Grid/list view, filters by status, search, quick stats | `/automations` |
-| **Automation Detail** | Overview, build status, blueprint canvas, test, activity, settings | `/automations/[id]` |
-| **Blueprint Canvas** | Interactive visual workflow editor (nodes/edges), AI chat | Tab within detail |
-| **Usage Metrics** | Execution counts, success rates, ROI, cost per execution | Tab within detail |
-| **Version History** | View and rollback to previous versions | Tab within detail |
-
-**Capabilities**: Real-time status, collaborative blueprint editing, AI suggestions (V1: basic), usage/ROI metrics, version management.
+| Surface | Description | Route |
+| --- | --- | --- |
+| Automations Dashboard | Grid/list view of automations with status, key stats, search & filters | `/automations` |
+| Automation Detail | Overview, build status, blueprint canvas, test tools, activity stream, settings | `/automations/[id]` |
+| Blueprint Canvas | Interactive visual workflow editor (nodes/edges) + AI-assisted intake | Tab within detail |
+| Usage Metrics | Execution counts, success rate, cost, ROI | Tab within detail |
+| Version History | Compare and roll back versions | Tab within detail |
 
 ### Admin Console (Ops-Facing)
 
-| Feature | Description | Route |
-|---------|-------------|-------|
-| **Clients List** | Table view: spend, utilization, health, projects, owner | `/admin/clients` |
-| **Client Detail** | Overview, projects, quotes, activity, spend summary | `/admin/clients/[id]` |
-| **Projects List** | Kanban/table view, filter by client/status/type/owner | `/admin/projects` |
-| **Project Detail** | Overview, blueprint, pricing/quote, build tasks, activity, chat | `/admin/projects/[id]` |
-| **Pricing Overrides** | Admin override panel for setup fee and unit price | Tab within project detail |
-| **Build Pipeline** | Kanban view with drag-and-drop status updates | `/admin/projects` (Kanban) |
-
-**Capabilities**: Pipeline management (Kanban), pricing overrides, build tracking, client communication, spend/utilization monitoring.
+| Surface | Description | Route |
+| --- | --- | --- |
+| Clients List | Table of clients with spend, utilization, health, projects, owner | `/admin/clients` |
+| Client Detail | Overview, projects, quotes, spend summary, activity | `/admin/clients/[id]` |
+| Projects List | Table/Kanban of projects by status/type/owner | `/admin/projects` |
+| Project Detail | Blueprint, pricing, quote, build tasks, messages, activity | `/admin/projects/[id]` |
+| Build Pipeline | Kanban board (Build in Progress, QA, Ready to Launch, etc.) | `/admin/projects` (Kanban view) |
+| Pricing Overrides | Admin controls for override scenarios | Project detail tab |
 
 ---
 
@@ -155,194 +183,171 @@ WRK Copilot is a multi-tenant SaaS platform that manages the complete lifecycle 
 
 ### End-to-End Flow
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. REQUIREMENTS CAPTURE                                          │
-│    • Client describes process (natural language)                  │
-│    • Optional: Upload docs, screenshots, recordings            │
-│    • AI extracts workflow elements (V1: basic, Future: advanced)│
-│    • Interactive UI guides clarifying questions                  │
-│    Status: "Intake in Progress"                                  │
-└─────────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. BLUEPRINT DESIGN                                              │
-│    • Platform generates visual workflow blueprint                │
-│    • Client and WRK team collaborate in real-time               │
-│    • Iterate until blueprint approved                           │
-│    • Blueprint: nodes (steps) + edges (connections)             │
-│    Status: "Intake in Progress" → "Needs Pricing"               │
-└─────────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. PRICING & QUOTE                                               │
-│    • System calculates: setup fee + per-unit price              │
-│    • WRK team generates quote (with optional overrides)         │
-│    • Client reviews and signs quote                             │
-│    Quote Status: "Draft" → "Sent" → "Signed"                    │
-│    Version Status: "Needs Pricing" → "Awaiting Client Approval" │
-└─────────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 4. BUILD & DEPLOY                                               │
-│    • WRK team builds automation (V1: manual, Future: AI agents)│
-│    • Creates workflow in WRK Platform                           │
-│    • Configures integrations, error handling, monitoring        │
-│    • Client sees real-time build progress (checklist, ETA)      │
-│    Status: "Awaiting Client Approval" → "Build in Progress"    │
-│    → "QA & Testing" → "Ready to Launch"                         │
-└─────────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 5. LIVE EXECUTION                                                │
-│    • Automation deployed to production                          │
-│    • WRK Platform executes workflows based on triggers         │
-│    • Run events sent to WRK Copilot via webhooks                │
-│    • Client monitors: usage, success rate, ROI, costs          │
-│    Status: "Ready to Launch" → "Live"                           │
-└─────────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 6. ITERATE & IMPROVE                                             │
-│    • Client requests changes → new version (v1.0 → v1.1)        │
-│    • New version goes through same lifecycle                    │
-│    • Old version remains live until new version deployed       │
-│    • Platform suggests optimizations (Future: AI-powered)       │
-│    Status: "Live" → (new version) → "Archived" (old version)    │
-└─────────────────────────────────────────────────────────────────┘
-```
+1. **Requirements Capture**
+   - Client describes process in natural language.
+   - Optional: upload docs, screenshots, recordings.
+   - AI extracts early sketch of systems, triggers, and actions (V1: basic).
+   - Interactive intake drives clarifying questions.
+   - Status: `Intake in Progress`.
 
-### Status Transitions
+2. **Blueprint Design**
+   - System generates a draft visual blueprint.
+   - Client + WRK collaborate to refine nodes/edges, branches, error paths.
+   - Once agreed, version moves to pricing.
+   - Status: `Intake in Progress → Needs Pricing`.
 
-**Automation Version Statuses** (in order):
-1. `Intake in Progress` - Requirements being captured
-2. `Needs Pricing` - Blueprint complete, pricing needed
-3. `Awaiting Client Approval` - Quote sent, waiting for client sign-off
-4. `Build in Progress` - WRK team building automation
-5. `QA & Testing` - Automation tested in staging
-6. `Ready to Launch` - Approved for production deployment
-7. `Live` - Running in production
-8. `Blocked` - Paused due to issues (can occur at any stage)
-9. `Archived` - Superseded by newer version or cancelled
+3. **Pricing & Quote**
+   - System calculates setup + unit price + expected volume.
+   - Ops can adjust via controlled overrides.
+   - Quote is sent; client views, comments, and signs.
+   - Quote: `draft → sent → signed/rejected`.
+   - Version: `Needs Pricing → Awaiting Client Approval`.
 
-**Quote Statuses**:
-- `draft` - Initial quote created
-- `sent` - Quote sent to client
-- `signed` - Client approved quote
-- `rejected` - Client rejected quote
+4. **Build & Deploy**
+   - WRK team builds the automation in WRK Platform (v1: manual; future: assisted by agents).
+   - Integrations, error handling, monitoring configured.
+   - Client sees build checklist and progress in Copilot.
+   - Status: `Awaiting Client Approval → Build in Progress → QA & Testing → Ready to Launch`.
 
-**Pricing Status** (Project-level):
-- `Not Generated` - No quote yet
-- `Draft` - Quote in draft
-- `Sent` - Quote sent to client
-- `Signed` - Quote signed by client
+5. **Live Execution**
+   - Ops deploys to production (manual in v1 via Flow 24).
+   - WRK Platform runs workflows based on triggers (webhooks, schedules, events).
+   - Usage data flows back into Copilot.
+   - Status: `Ready to Launch → Live`. Separately, `Paused` (client-driven) and `Blocked` (system/ops-driven) can apply.
+
+6. **Iterate & Improve**
+   - Client requests changes → new version (v1.0 → v1.1).
+   - New version runs through the same lifecycle.
+   - Old version is archived when the new one is live.
+   - Status transitions: `Live (old) → Archived`.
+
+### Core Statuses (Automation Version)
+
+`Intake in Progress • Needs Pricing • Awaiting Client Approval • Build in Progress • QA & Testing • Ready to Launch • Live • Paused • Blocked • Archived`
+
+Quote and pricing statuses live at project/quote level and are covered by the Pricing & Billing flows.
 
 ---
 
 ## AI Capabilities
 
-### V1 (Foundational)
+### V1 (Already in Scope)
 
-- **Basic Requirements Extraction**: Extract workflow elements (systems, triggers, actions) from documents and descriptions
-- **Draft Blueprint Generation**: Generate initial blueprint JSON (nodes/edges) from requirements
-- **Intake Progress Tracking**: Update progress percentage as requirements are captured
+- **Requirements Extraction** – Pull out systems, triggers, actions, and data from freeform descriptions + docs.
+- **Draft Blueprint Generation** – Generate a first-pass blueprint JSON (nodes, edges) from requirements.
+- **Intake Progress Tracking** – Update completion % as required fields and clarifications are collected.
 
-**Limitation**: V1 AI assists but requires human review. Blueprints not production-ready without WRK team validation.
+_Human review is required; AI is assistive, not fully autonomous._
 
-### Future Enhancements
+### Future (Planned)
 
-- **Advanced Blueprint Generation**: Turn recordings (screen/video) into draft blueprints automatically
-- **Optimization Suggestions**: Analyze usage patterns, suggest cost/performance optimizations
-- **Self-Healing**: Detect failures and automatically propose/apply fixes
-- **Intelligent Routing**: Suggest workflow improvements from execution patterns
-- **Natural Language Queries**: "Show automations processing >1000 items/month"
+- **From Recording to Blueprint** – Take screen/video sessions and generate a structured workflow.
+- **Optimization Suggestions** – Use run data to propose cost savings and performance tweaks.
+- **Self-Healing** – Detect recurring failures and propose remediation steps (or auto-rollout gated fixes).
+- **Natural Language Analytics** – “Which automations saved us the most this quarter?” / “Which workflows are error-prone?”
 
 ---
 
 ## Key Use Cases
 
+Concrete automations where Copilot + Platform shine:
+
 ### Lead Routing & Enrichment
 
-**Scenario**: Sales team receives leads from multiple sources, needs automatic enrichment and territory-based assignment.
-
-**Flow**: Requirements → Blueprint (lead sources → enrichment → routing → notifications) → Pricing → Build → Monitor (leads processed, assignments, response times)
+- Multi-source lead ingestion (forms, ads, events).
+- Enrichment (Clearbit, ZoomInfo, internal data).
+- Territory/owner assignment and notifications.
+- Metrics: time-to-first-touch, lead SLA, conversion rates.
 
 ### Customer Onboarding
 
-**Scenario**: SaaS company needs automatic account provisioning across CRM, billing, support, email marketing for different subscription tiers.
-
-**Flow**: Upload docs → AI extraction (V1: basic) → Blueprint refinement → Build (multi-system, tier-based) → Monitor (completion rates, bottlenecks)
+- Account provisioning across CRM, billing, support, email, product.
+- Tier-based workflows (Standard, Pro, Enterprise).
+- Tasking and notifications for manual steps.
+- Metrics: time-to-activation, onboarding drop-offs.
 
 ### Invoice Processing
 
-**Scenario**: Finance team processes hundreds of PDF invoices daily: extract data, validate against POs, sync to accounting software, flag exceptions.
-
-**Flow**: Requirements → Blueprint (email → OCR → validation → sync → exceptions) → Pricing (volume-based) → Build (OCR, validation) → Monitor (volume, accuracy, cost)
+- Ingest invoices from email/storage.
+- OCR + data extraction.
+- Match against POs; flag exceptions.
+- Post to accounting systems; notify finance.
+- Metrics: processing time, exception rate, cost per invoice.
 
 ### Property Management Automation
 
-**Scenario**: Property management company automates maintenance requests: intake → vendor matching → scheduling → status updates.
-
-**Flow**: Requirements → Blueprint (intake → vendor matching → scheduling → updates) → Pricing → Build (vendor DB, scheduling) → Monitor (resolution time, vendor performance)
+- Maintenance request intake (portal, email, SMS).
+- Vendor matching and dispatch.
+- Scheduling, follow-ups, status updates.
+- Metrics: time-to-response, time-to-resolution, vendor performance.
 
 ---
 
 ## Competitive Differentiation
 
-### "We Do It For You" vs Pure Self-Serve
+### “Done-For-You”, Not “Learn-a-Tool”
 
-**Traditional No-Code**: Users become tool experts, configure workflows, debug errors, maintain automations.
+- No-code platforms expect users to become builders.
+- WRK Copilot expects users to describe processes and review outcomes.
+- Implementation handled by WRK (plus future AI agents), not the end user.
 
-**WRK Copilot**: WRK team handles implementation. Clients describe and review. No need to become automation engineers.
+### Collaborative Design vs Document Dumps
 
-### Collaborative Design vs Document-Based Requirements
+- Typical: requirements in docs + email → misalignment.
+- Copilot: in-app intake, chat, and blueprint canvas, so both sides see the same workflow.
 
-**Traditional**: Requirements in documents/emails/meetings → miscommunication → mismatched expectations.
+### Pricing + Build + Monitoring in One Place
 
-**WRK Copilot**: Collaborative in-platform capture. Visual blueprint = shared understanding. Clients see exactly what will be built.
+- Typical: quotes in spreadsheets, builds in Jira, metrics scattered.
+- Copilot: all tied to the same automation versions and projects, with proper state machine and audit logs.
 
-### Integrated Pricing & Build Tracking vs Scattered Tools
+### Enterprise-Grade Under the Hood
 
-**Traditional**: Pricing in spreadsheets, build status in PM tools → no single source of truth.
-
-**WRK Copilot**: Integrated transparent pricing and real-time build progress. Like GitHub + Vercel for business processes.
-
-### Enterprise-Grade Architecture
-
-**Multi-Tenant Security**: Complete data isolation, tenant-scoped queries, audit logging. **API-First**: REST APIs for partners and custom dashboards. **Scalable**: Queue-based async processing, connection pooling, high concurrency. **Reliable**: Workers with retries and error handling.
+- Strict tenant isolation and audit logging for every meaningful change.
+- API-first backend; multi-tenant Neon + modular monolith + workers.
+- Workers, webhooks, and idempotency built into the design.
 
 ---
 
 ## Future Capabilities
 
-### AI Agents for Automation
+### Automation AI Agents
 
-- **Draft Blueprint from Recordings**: Turn recordings/video into draft blueprints automatically
-- **Optimization Suggestions**: "10,000 invoices/month → batching reduces costs 30%"
-- **Self-Healing**: Detect failures and automatically propose/apply fixes
+- Help transform raw inputs (recordings, logs) into structured workflows.
+- Proactively tune automations based on observed patterns.
+- Suggest replacements/upgrades when upstream systems change.
 
 ### Deeper WRK Platform Integration
 
-- **Real-Time Monitoring**: Advanced error handling and performance optimization
-- **Workflow Marketplace**: Pre-built customizable templates
-- **Cost Optimization**: Dynamic pricing from WRK Platform usage patterns
+- More granular real-time monitoring and circuit breakers.
+- Stronger cost optimization recommendations based on usage patterns.
+- Marketplace of pre-built automations with customization via Copilot.
 
 ### Partner & API Ecosystem
 
-- **Embedded Workflows**: Partners embed design/management via APIs
-- **Webhook Integrations**: External systems trigger automations, receive completion webhooks
-- **Public API**: Full REST API for programmatic access, custom dashboards, white-label
+- Embeddable surfaces for partners to expose automation design and tracking.
+- Public APIs for building custom dashboards and controls.
+- White-label options for partners/resellers.
 
 ### Advanced Collaboration
 
-- **Real-Time Co-Editing**: Multiple users edit blueprints simultaneously (Google Docs-style)
-- **Approval Workflows**: Built-in flows for blueprint changes, pricing, deployments
-- **Team Workspaces**: Role-based permissions, team-specific views
+- Real-time co-editing of blueprints.
+- Multi-step approval workflows for pricing, deployments, major changes.
+- Team-focused lenses (per-region, per-BU, per-owner).
 
 ---
 
-## Conclusion
+## How This Ties to the Detailed Flows
 
-WRK Copilot makes automation accessible to non-technical teams while providing the power, transparency, and control technical teams expect. Collaborative design, transparent pricing, build visibility, and enterprise-grade architecture bridge the gap between "I need automation" and "I have automation running."
+This overview defines what WRK Copilot is trying to do and for whom.
 
-Scales from a client's first automation to hundreds across their organization, with full visibility into usage, ROI, and performance at every stage.
+The 35 flows in `project_details/user_flows/` define exactly how the backend behaves:
+
+- Identity & access, tenants/workspaces, API keys.
+- Automation and project lifecycle (status state machine).
+- Pricing, quotes, billing, and overrides.
+- Build, deploy, pause/resume, credential failures, and blocking.
+- Messaging, tasks, and client health.
+- Archiving and admin/ops workflows.
+
+Backend and frontend work should always be anchored to those flows. If a behavior isn’t expressed there, it’s either out of scope or needs a flow update.

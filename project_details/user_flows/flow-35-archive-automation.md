@@ -1,50 +1,131 @@
 ### Flow 35: Archive Automation
 
-**Trigger**: User or ops admin archives automation version
+**Trigger**: Ops/admin archives an automation version (via status router) or deletes an automation (which archives all versions).
 
-**Flow Diagram**:
+---
+
+## Access & Auth
+
+- **Auth**:
+  - `PATCH /v1/automation-versions/{id}/status` (with `status='Archived'`) and `DELETE /v1/automations/{id}` require a JWT session.
+  - Customer API keys (wrk_api_…) are read-only at most; they MUST NOT archive or delete automations.
+- **Authorization**:
+  - Single-version archive via PATCH: roles `{project_owner, project_admin, ops_build, ops_qa, ops_billing, ops_admin, admin}`.
+  - DELETE (archive all versions of an automation): restricted to `{ops_admin, admin}` (see RBAC policy).
+- **Tenant isolation**:
+  - `tenant_id` is derived from auth context or from the owning project/tenant—never from request payload.
+  - All reads/writes MUST be scoped by `(tenant_id, automation_version_id)` and `(tenant_id, project_id)`.
+  - AuthN/AuthZ MUST succeed before disclosing automation existence or status.
+- **Router behavior (shared status endpoint)**:
+  - When `requested_status='Archived'`, the router loads the automation_version row scoped by `(tenant_id, id)`, validates caller permissions, and:
+    - If current_status is in the allowed set for archiving (e.g., Draft, Build in Progress, QA & Testing, Ready to Launch, Paused, Blocked, Live per policy), dispatches to the Flow 35 helper.
+    - Otherwise returns 409 `invalid_status_transition` (Flow 13/24/24A/24B are not invoked for Archived target state).
+
+---
+
+## Flow Diagram
 ```
-User/admin requests archive
+User/admin requests archive (status='Archived' via PATCH or DELETE)
     ↓
-Validate automation_version exists
+Router loads automation_version by (tenant_id, id), validates caller + current_status in allowed set
     ↓
-If status = 'Live':
-    Deactivate workflow in WRK Platform
-    Update workflow_binding.status = 'inactive'
+If current_status='Live' and policy expects replacement:
+    - Check for valid replacement Live version per product policy
+    - If not satisfied → 409 (policy documented, no archive)
     ↓
-Update automation_version.status = 'Archived'
+If workflow_binding exists:
+    - Lookup binding by (tenant_id, automation_version_id)
+    - If binding.status='active', call WRK Platform PATCH /wrk-api/workflows/{workflow_id}/deactivate using workflow_id from binding (never from client payload)
+    - If deactivation fails → do NOT archive; return domain error archive_remote_deactivation_failed
     ↓
-Update project.status = 'Archived' (if linked)
+Begin DB transaction (only after remote deactivation succeeds or no active binding exists):
+    - Re-select automation_version FOR UPDATE scoped by (tenant_id, id)
+    - Re-validate current_status is still in the allowed set; if not, abort with 409 (invalid_status_transition or concurrency_conflict if hints used)
+    - Update automation_version.status='Archived', set archived_at=now(), archived_by_user_id=actor_user_id, updated_at=now()
+    - If a workflow_binding exists, set workflow_bindings.status='inactive' for that version
+    - (Optional, future policy) If no other non-archived versions remain for (tenant_id, project_id), update projects.status='Archived' inside the same transaction
+    - Insert audit log entry for this archive operation
     ↓
-Create audit log entry
+Commit transaction
     ↓
-Send notifications
+Send notifications scoped to the automation’s tenant/project (email + in-app)
     ↓
-Return success
+Return success (200) with idempotent behavior if the version was already archived and nothing else changed
 ```
 
-**API Endpoints**:
-- `PATCH /v1/automation-versions/{id}/status` (status='Archived')
-- `DELETE /v1/automations/{id}` (soft delete, sets all versions to Archived)
+---
 
-**Database Changes**:
-- Update `automation_versions` (status='Archived')
-- Update `projects` (status='Archived')
-- Update `workflow_bindings` (status='inactive' if was active)
-- Insert into `audit_logs` (action_type='archive_automation')
+## API Endpoints
 
-**Notifications**:
-- **Email**: Automation archived notification (template: `automation_archived`, to owner and collaborators)
-- **In-app**: Notification to team
+- **PATCH `/v1/automation-versions/{id}/status`**
+  - Body:
+    - `status="Archived"` (required for Flow 35).
+    - Optional optimistic concurrency hints: `last_known_status`, `last_known_updated_at` (409 on stale hints when a mutation would occur).
+    - Optional `archive_reason` notes recorded in audit metadata.
+  - Behavior:
+    - Shared router dispatches to Flow 35 helper when `status='Archived'`.
+    - Flow 35 helper owns WRK Platform deactivation + DB updates.
+    - Idempotency: if already archived and no new side effects, return `200 { already_applied: true, automation_version: … }` even if hints are stale.
 
-**Exceptions**:
-- **Automation not found**: Return 404
-- **Cannot archive Live version without replacement**: Return 400 (must have new Live version first)
-- **No permission**: Return 403
+- **DELETE `/v1/automations/{id}`**
+  - Admin-only orchestrator:
+    - Loads the automation (tenant-scoped) plus all automation_versions.
+    - For each version, calls the same status router with `status='Archived'` (invoking Flow 35 helper); honors the same deactivation + validation rules.
+    - SHOULD be implemented as all-or-nothing: either every version archives successfully or none do (single transaction or saga rollback).
+    - DELETE MUST NOT bypass Flow 35 or skip WRK Platform deactivation.
 
-**Manual Intervention**: 
-- Ops admin may archive automations manually
-- Client can request archive (requires approval)
+---
+
+## Database Changes
+
+- **automation_versions**:
+  - `status='Archived'`
+  - `archived_at=now()`
+  - `archived_by_user_id=actor_user_id`
+  - `updated_at=now()`
+  - Flow 35 MUST NOT mutate pricing/billing/commitment fields.
+
+- **workflow_bindings**:
+  - For the archived version: `status='inactive'` if binding existed/was active.
+  - No new bindings are created.
+
+- **projects**:
+  - v1 default: no change to `projects.status`.
+  - Future project-archive policy must run “no other non-Archived versions remain” check inside the same transaction before updating `projects.status='Archived'`.
+
+- **audit_logs**:
+  - Insert `{ action_type='archive_automation', resource_type='automation_version', resource_id=automation_version_id, tenant_id, actor_user_id, metadata_json={ previous_status, new_status:'Archived', had_active_binding, workflow_binding_id, invoked_via, archive_reason? } }`.
+  - Metadata MUST NOT contain secrets, workflow tokens, or credentials.
+
+---
+
+## Notifications
+
+- **Email**: template `automation_archived` to the automation/project owner + collaborators within the same tenant.
+- **In-app**: notifications to users with access to the project/automation (same tenant scope).
+
+All notifications should fire after the DB transaction commits and be idempotent (e.g., de-dup by `(automation_version_id, 'automation_archived')`).
+
+---
+
+## Exceptions
+
+- **404 automation_not_found**: no `(tenant_id, automation_version_id)` row visible to caller.
+- **403 forbidden**: caller lacks required role for this project/automation or outside admin scope for DELETE.
+- **409 invalid_status_transition**:
+  - current_status not in allowed set for archiving; or
+  - policy prohibits `Live → Archived` without replacement.
+- **409 concurrency_conflict** (optional): when `last_known_*` hints are provided and stale while a mutation would occur.
+- **archive_remote_deactivation_failed**: WRK Platform deactivate call failed; automation stays unarchived. Server should log + alert ops.
+- Any unexpected DB failure MUST roll back, leaving the automation_version non-archived.
+
+---
+
+## Manual Intervention
+
+- Ops/admin may archive automations manually via admin tools (subject to policy).
+- Clients may request archive; product policy may require ops/admin approval.
+- If WRK Platform deactivation repeatedly fails, ops may need to reconcile manually in WRK Platform before retrying Flow 35.
 
 ---
 
