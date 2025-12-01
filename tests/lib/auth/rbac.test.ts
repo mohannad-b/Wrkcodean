@@ -21,13 +21,14 @@ describe("can()", () => {
 
     expect(can(member, "automation:read", { type: "automation", tenantId: "tenant-1" })).toBe(true);
     expect(can(member, "automation:update", { type: "automation", tenantId: "tenant-1" })).toBe(false);
+    expect(can(member, "automation:metadata:update", { type: "automation_version", tenantId: "tenant-1" })).toBe(true);
   });
 
-  it("grants ops_admins access to admin projects and clients", () => {
+  it("grants ops_admins access to admin projects and quotes", () => {
     const opsAdmin = baseUser({ roles: ["ops_admin"] });
 
-    expect(can(opsAdmin, "admin:projects:access", { type: "admin:projects" })).toBe(true);
-    expect(can(opsAdmin, "admin:clients:access", { type: "admin:clients" })).toBe(true);
+    expect(can(opsAdmin, "admin:project:read")).toBe(true);
+    expect(can(opsAdmin, "admin:quote:update")).toBe(true);
   });
 
   it("blocks cross-tenant automation access regardless of role", () => {

@@ -1,42 +1,46 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import "reactflow/dist/style.css";
+import { useCallback, useEffect, useMemo, useState, FormEvent } from "react";
 import Link from "next/link";
-import { mockAutomations } from "@/lib/mock-automations";
-import { notFound, useRouter } from "next/navigation";
-import { VersionSelector } from "@/components/ui/VersionSelector";
-import { OverviewTab } from "@/components/automations/OverviewTab";
-import { BuildStatusTab } from "@/components/automations/BuildStatusTab";
-import { TestTab } from "@/components/automations/TestTab";
-import { ActivityTab } from "@/components/automations/ActivityTab";
-import { ContributorsTab } from "@/components/automations/ContributorsTab";
-import { SettingsTab } from "@/components/automations/SettingsTab";
-import { StudioChat } from "@/components/automations/StudioChat";
-import dynamic from "next/dynamic";
-import { StudioInspector } from "@/components/automations/StudioInspector";
+import { useRouter } from "next/navigation";
+import ReactFlow, { Background, BackgroundVariant, Node, Edge } from "reactflow";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { Loader2, RefreshCw, Send, StickyNote, Plus, FileText, Activity } from "lucide-react";
 
-// Dynamically import StudioCanvas to reduce initial bundle size
-// ReactFlow is heavy (~200KB), so we only load it when the Blueprint tab is active
-const StudioCanvas = dynamic(
-  () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
-  {
-    loading: () => (
-      <div className="w-full h-full flex items-center justify-center bg-[#F9FAFB]">
-        <div className="text-sm text-gray-500">Loading canvas...</div>
-      </div>
-    ),
-    ssr: false, // ReactFlow requires client-side only
-  }
-);
-import { SystemPickerModal } from "@/components/modals/SystemPickerModal";
-import { ExceptionModal } from "@/components/modals/ExceptionModal";
-import { InviteTeamModal } from "@/components/modals/InviteTeamModal";
-import { CreateVersionModal } from "@/components/modals/CreateVersionModal";
-import { CredentialsModal } from "@/components/modals/CredentialsModal";
-import { nodesV1_1, edgesV1_1 } from "@/lib/mock-blueprint";
-import { useNodesState, useEdgesState, addEdge, Connection, Node } from "reactflow";
-import { cn } from "@/lib/utils";
-import { CheckCircle2 } from "lucide-react";
+type QuoteSummary = {
+  id: string;
+  status: string;
+  setupFee: string | null;
+  unitPrice: string | null;
+  estimatedVolume: number | null;
+};
+
+type BlueprintJson = {
+  nodes: Array<Record<string, unknown>>;
+  edges: Array<Record<string, unknown>>;
+};
+
+type AutomationVersion = {
+  id: string;
+  versionLabel: string;
+  status: string;
+  intakeNotes: string | null;
+  blueprintJson: BlueprintJson | null;
+  summary: string | null;
+  latestQuote: QuoteSummary | null;
+};
+
+type AutomationDetail = {
+  id: string;
+  name: string;
+  description: string | null;
+  versions: AutomationVersion[];
+};
 
 interface AutomationDetailPageProps {
   params: {
@@ -44,377 +48,437 @@ interface AutomationDetailPageProps {
   };
 }
 
-const automationTabs = [
-  "Overview",
-  "Build Status",
-  "Blueprint",
-  "Test",
-  "Activity",
-  "Contributors",
-  "Settings",
-];
+const currency = (value?: string | null) => {
+  if (!value) return "—";
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? value : `$${parsed.toLocaleString()}`;
+};
 
-const BLUEPRINT_CHECKLIST = [
-  { id: "overview", label: "Overview", completed: true },
-  { id: "reqs", label: "Business Requirements", completed: true },
-  { id: "objs", label: "Business Objectives", completed: true },
-  { id: "criteria", label: "Success Criteria", completed: true },
-  { id: "systems", label: "Systems", completed: true },
-  { id: "data", label: "Data Needs", completed: true },
-  { id: "exceptions", label: "Exceptions", completed: true },
-  { id: "human", label: "Human Touchpoints", completed: true },
-  { id: "flow", label: "Flow Complete", completed: true },
-];
+const perUnit = (value?: string | null) => {
+  if (!value) return "—";
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? value : `$${parsed.toFixed(4)}`;
+};
+
+function BlueprintViewer({ blueprint }: { blueprint: BlueprintJson }) {
+  const nodes = useMemo(() => blueprint.nodes as Node[], [blueprint]);
+  const edges = useMemo(() => blueprint.edges as Edge[], [blueprint]);
+
+  if (nodes.length === 0) {
+    return <p className="text-sm text-gray-500">No blueprint defined yet.</p>;
+  }
+
+  return (
+    <div className="h-64 w-full rounded-lg border border-gray-200 bg-white overflow-hidden">
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        fitView
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={false}
+        panOnScroll={false}
+        zoomOnScroll={false}
+        zoomOnPinch={false}
+        zoomOnDoubleClick={false}
+        className="bg-gray-50"
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#E5E7EB" />
+      </ReactFlow>
+    </div>
+  );
+}
 
 export default function AutomationDetailPage({ params }: AutomationDetailPageProps) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState("Overview");
-  const [currentVersion, setCurrentVersion] = useState("v1.1");
-  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  const [isSynthesizing] = useState(false);
-  const [isContributorMode, setIsContributorMode] = useState(false);
-  const [showSystemPicker, setShowSystemPicker] = useState(false);
-  const [showExceptionModal, setShowExceptionModal] = useState(false);
-  const [showInviteModal, setShowInviteModal] = useState(false);
-  const [showVersionModal, setShowVersionModal] = useState(false);
-  const [showCredentialsModal, setShowCredentialsModal] = useState(false);
-  const [activeSystem, setActiveSystem] = useState<string>("");
+  const [automation, setAutomation] = useState<AutomationDetail | null>(null);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const [notes, setNotes] = useState("");
+  const [blueprintDraft, setBlueprintDraft] = useState("");
+  const [blueprintError, setBlueprintError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [savingNotes, setSavingNotes] = useState(false);
+  const [savingBlueprint, setSavingBlueprint] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
+  const [creatingVersion, setCreatingVersion] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // ReactFlow state
-  const [nodes, setNodes, onNodesChange] = useNodesState(nodesV1_1);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(edgesV1_1);
+  const fetchAutomation = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/automations/${params.automationId}`, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("Unable to load automation");
+      }
 
-  const automation = mockAutomations.find((a) => a.id === params.automationId);
+      const data = (await response.json()) as { automation: AutomationDetail };
+      setAutomation(data.automation);
 
-  if (!automation) {
-    notFound();
+      const nextSelected = selectedVersionId ?? data.automation.versions[0]?.id ?? null;
+      setSelectedVersionId(nextSelected);
+      const version = data.automation.versions.find((v) => v.id === nextSelected);
+      setNotes(version?.intakeNotes ?? "");
+      setBlueprintDraft(version?.blueprintJson ? JSON.stringify(version.blueprintJson, null, 2) : "");
+      setBlueprintError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unexpected error");
+    } finally {
+      setLoading(false);
+    }
+  }, [params.automationId, selectedVersionId]);
+
+  useEffect(() => {
+    fetchAutomation();
+  }, [fetchAutomation]);
+
+  const selectedVersion = useMemo(() => {
+    if (!automation || !selectedVersionId) {
+      return automation?.versions[0] ?? null;
+    }
+    return automation.versions.find((version) => version.id === selectedVersionId) ?? automation.versions[0] ?? null;
+  }, [automation, selectedVersionId]);
+
+  useEffect(() => {
+    if (selectedVersion) {
+      setNotes(selectedVersion.intakeNotes ?? "");
+      setBlueprintDraft(selectedVersion.blueprintJson ? JSON.stringify(selectedVersion.blueprintJson, null, 2) : "");
+      setBlueprintError(null);
+    }
+  }, [selectedVersion?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleVersionChange = (versionId: string) => {
+    setSelectedVersionId(versionId);
+    const version = automation?.versions.find((v) => v.id === versionId);
+    setNotes(version?.intakeNotes ?? "");
+    setBlueprintDraft(version?.blueprintJson ? JSON.stringify(version.blueprintJson, null, 2) : "");
+    setBlueprintError(null);
+  };
+
+  const handleSaveNotes = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selectedVersion) return;
+    setSavingNotes(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/automation-versions/${selectedVersion.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intakeNotes: notes }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to save notes");
+      }
+      await fetchAutomation();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to save notes");
+    } finally {
+      setSavingNotes(false);
+    }
+  };
+
+  const handleSaveBlueprint = async () => {
+    if (!selectedVersion) return;
+    setSavingBlueprint(true);
+    setBlueprintError(null);
+    try {
+      const trimmed = blueprintDraft.trim();
+      const blueprintPayload = trimmed.length === 0 ? null : JSON.parse(trimmed);
+      const response = await fetch(`/api/automation-versions/${selectedVersion.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ blueprintJson: blueprintPayload }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to save blueprint");
+      }
+      await fetchAutomation();
+    } catch (err) {
+      setBlueprintError(err instanceof Error ? err.message : "Unable to save blueprint");
+    } finally {
+      setSavingBlueprint(false);
+    }
+  };
+
+  const handleSendForPricing = async () => {
+    if (!selectedVersion) return;
+    setTransitioning(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/automation-versions/${selectedVersion.id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "NEEDS_PRICING" }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to update status");
+      }
+      await fetchAutomation();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to send for pricing");
+    } finally {
+      setTransitioning(false);
+    }
+  };
+
+  const handleCreateVersion = async () => {
+    setCreatingVersion(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/automations/${params.automationId}/versions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          summary: selectedVersion?.summary ?? "",
+          intakeNotes: notes,
+        }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? "Unable to create version");
+      }
+      await fetchAutomation();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create version");
+    } finally {
+      setCreatingVersion(false);
+    }
+  };
+
+  if (loading && !automation) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+      </div>
+    );
   }
 
-  // Edge label change handler
-  const handleEdgeLabelChange = useCallback(
-    (
-      id: string,
-      newLabel: string,
-      newData: { operator: string; value: string | number; unit: string }
-    ) => {
-      setEdges((eds) =>
-        eds.map((edge) => {
-          if (edge.id === id) {
-            return {
-              ...edge,
-              data: {
-                ...edge.data,
-                ...newData,
-                label: newLabel,
-                onLabelChange: handleEdgeLabelChange,
-              },
-            };
-          }
-          return edge;
-        })
-      );
-    },
-    [setEdges]
-  );
-
-  // Inject handlers into edges
-  useEffect(() => {
-    setEdges((eds) =>
-      eds.map((e) => ({
-        ...e,
-        data: {
-          ...e.data,
-          onLabelChange: handleEdgeLabelChange,
-        },
-      }))
+  if (!automation) {
+    return (
+      <div className="p-10">
+        <p className="text-sm text-gray-600">Automation not found.</p>
+        <Button variant="link" className="px-0" onClick={() => router.push("/automations")}>
+          Back to automations
+        </Button>
+      </div>
     );
-  }, [handleEdgeLabelChange, setEdges]);
+  }
 
-  const onConnect = useCallback(
-    (params: Connection) => {
-      setEdges((eds) => addEdge({ ...params, type: "default" }, eds));
-    },
-    [setEdges]
-  );
-
-  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
-    setSelectedStepId(node.id);
-  }, []);
-
-  // Track exceptions per step
-  const [stepExceptions, setStepExceptions] = useState<
-    Record<string, { condition: string; outcome: string }[]>
-  >({});
-
-  const handleAddException = (rule: { condition: string; outcome: string }) => {
-    if (selectedStepId) {
-      setStepExceptions((prev) => ({
-        ...prev,
-        [selectedStepId]: [...(prev[selectedStepId] || []), rule],
-      }));
-      // Update node data with exceptions
-      setNodes((nds) =>
-        nds.map((node) => {
-          if (node.id === selectedStepId) {
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                exceptions: [...(stepExceptions[selectedStepId] || []), rule],
-              },
-            };
-          }
-          return node;
-        })
-      );
-    }
-  };
-
-  // Derived selected step data for inspector
-  const selectedNode = nodes.find((n) => n.id === selectedStepId);
-  const selectedStepData = selectedNode
-    ? {
-        id: selectedNode.id,
-        title: selectedNode.data.title || "",
-        description: selectedNode.data.description || "",
-        type: selectedNode.data.type || "action",
-        status: selectedNode.data.status || "complete",
-        inputs: [],
-        outputs: [],
-        exceptions:
-          selectedStepId && stepExceptions[selectedStepId]
-            ? stepExceptions[selectedStepId]
-            : selectedNode.data.exceptions || [],
-      }
-    : null;
-
-  const handleAiCommand = (command: string) => {
-    // Mock AI Logic for Condition Update
-    if (command.toLowerCase().includes("10,000") || command.toLowerCase().includes("10k")) {
-      setEdges((eds) =>
-        eds.map((e) => {
-          if (e.id === "e3-4") {
-            return {
-              ...e,
-              selected: true,
-              data: {
-                ...e.data,
-                value: 10000,
-                label: "> $10k",
-                onLabelChange: handleEdgeLabelChange,
-              },
-            };
-          }
-          if (e.id === "e3-5") {
-            return {
-              ...e,
-              data: {
-                ...e.data,
-                value: 10000,
-                label: "< $10k",
-                onLabelChange: handleEdgeLabelChange,
-              },
-            };
-          }
-          return e;
-        })
-      );
-
-      setTimeout(() => {
-        setEdges((eds) => eds.map((e) => ({ ...e, selected: false })));
-      }, 2000);
-    }
-  };
+  const latestQuote = selectedVersion?.latestQuote ?? null;
+  const showSendForPricing =
+    selectedVersion &&
+    (selectedVersion.status === "DRAFT" || selectedVersion.status === "NEEDS_PRICING") &&
+    !latestQuote;
+  const awaitingApproval = latestQuote?.status === "SENT";
+  const signedReady =
+    latestQuote?.status === "SIGNED" && selectedVersion?.status === "READY_TO_BUILD";
 
   return (
-    <div className="flex-1 h-full flex flex-col overflow-hidden bg-gray-50">
-      {/* AUTOMATION HEADER (Breadcrumbs + Version) */}
-      <div className="bg-white border-b border-gray-200 shrink-0 z-20 shadow-sm">
-        {/* Line 1: Breadcrumbs */}
-        <div className="h-10 flex items-center px-6 border-b border-gray-100">
-          <div className="text-xs font-medium text-gray-500 flex items-center gap-1">
-            <Link href="/automations" className="hover:text-[#0A0A0A] transition-colors">
-              Automations
-            </Link>
-            <span className="text-gray-300">/</span>
-            <span className="text-[#0A0A0A] font-bold">{automation.name}</span>
-          </div>
-        </div>
-
-        {/* Line 2: Version & Tabs */}
-        <div className="h-12 flex items-center px-6 justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-bold text-gray-500">Version:</span>
-            <VersionSelector
-              currentVersion={currentVersion}
-              onChange={setCurrentVersion}
-              onNewVersion={() => setShowVersionModal(true)}
-            />
-          </div>
-
-          <div className="flex h-full gap-1">
-            {automationTabs.map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={cn(
-                  "relative h-full px-3 text-xs font-medium transition-colors flex items-center",
-                  activeTab === tab
-                    ? "text-[#E43632] bg-red-50/50 border-b-[2px] border-[#E43632]"
-                    : "text-gray-500 hover:text-gray-900 hover:bg-gray-50 border-b-[2px] border-transparent"
-                )}
-              >
-                {tab}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* TAB CONTENT */}
-      <div className="flex-1 relative overflow-hidden">
-        {activeTab === "Overview" ? (
-          <OverviewTab
-            onEditBlueprint={() => setActiveTab("Blueprint")}
-            onInvite={() => setShowInviteModal(true)}
-            onRunTest={() => setActiveTab("Test")}
-            automationName={automation.name}
-            automationDescription={automation.description}
-            status={automation.status}
-            version={automation.version}
-          />
-        ) : activeTab === "Build Status" ? (
-          <BuildStatusTab version={currentVersion} />
-        ) : activeTab === "Blueprint" ? (
-          <div className="flex flex-col h-full w-full relative">
-            {/* PROGRESS BAR */}
-            <div className="h-14 border-b border-gray-100 bg-white flex items-center px-6 overflow-x-auto no-scrollbar shrink-0 z-20 relative">
-              <div className="flex items-center gap-6 min-w-max">
-                {BLUEPRINT_CHECKLIST.map((item) => (
-                  <div key={item.id} className="flex items-center gap-2">
-                    <div
-                      className={cn(
-                        "w-4 h-4 rounded-full border flex items-center justify-center transition-colors duration-500",
-                        item.completed
-                          ? "bg-[#E43632] border-[#E43632] text-white"
-                          : "border-gray-300 bg-white"
-                      )}
-                    >
-                      {item.completed && <CheckCircle2 size={10} />}
-                    </div>
-                    <span
-                      className={cn(
-                        "text-xs font-medium transition-colors duration-500",
-                        item.completed ? "text-[#0A0A0A]" : "text-gray-400"
-                      )}
-                    >
-                      {item.label}
-                    </span>
-                  </div>
-                ))}
-              </div>
+    <div className="flex-1 bg-gray-50">
+      <div className="mx-auto max-w-4xl px-6 py-10 space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-xs text-gray-500">
+              <Link href="/automations" className="text-gray-500 hover:text-gray-900">
+                Automations
+              </Link>{" "}
+              / <span className="text-gray-900">{automation.name}</span>
             </div>
+            <h1 className="mt-1 text-3xl font-semibold text-gray-900">{automation.name}</h1>
+            {automation.description ? (
+              <p className="text-sm text-gray-600">{automation.description}</p>
+            ) : null}
+          </div>
+          <Button variant="outline" onClick={fetchAutomation}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
 
-            <div className="flex-1 flex relative overflow-hidden">
-              {/* LEFT PANEL: AI Chat */}
-              <div className="w-[360px] shrink-0 z-20 h-full bg-[#F9FAFB] border-r border-gray-200 shadow-[4px_0_24px_rgba(0,0,0,0.02)]">
-                <StudioChat isContributorMode={isContributorMode} onAiCommand={handleAiCommand} />
-              </div>
+        {error ? (
+          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>
+        ) : null}
 
-              {/* CENTER: Process Map Canvas */}
-              <div className="flex-1 relative h-full z-10 bg-gray-50">
-                <StudioCanvas
-                  nodes={nodes}
-                  edges={edges}
-                  onNodesChange={onNodesChange}
-                  onEdgesChange={onEdgesChange}
-                  onConnect={onConnect}
-                  onNodeClick={onNodeClick}
-                  isSynthesizing={isSynthesizing}
-                />
-
-                {/* Debug Toggle for Contributor Mode (Bottom Left) */}
-                <div className="absolute bottom-4 left-4 z-50">
-                  <button
-                    onClick={() => setIsContributorMode(!isContributorMode)}
-                    className="text-[10px] text-gray-400 hover:text-[#E43632] bg-white/50 px-2 py-1 rounded border border-gray-200"
-                  >
-                    Toggle Contributor View
-                  </button>
+        <Card>
+          <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <CardTitle>Commercial status</CardTitle>
+              <CardDescription>Track pricing progress and quote state.</CardDescription>
+            </div>
+            {selectedVersion ? <StatusBadge status={selectedVersion.status} /> : null}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {latestQuote ? (
+              <div className="rounded-lg border border-gray-100 bg-white p-4">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Quote</p>
+                    <p className="text-xs text-gray-500">Status: {latestQuote.status}</p>
+                  </div>
+                  <StatusBadge status={latestQuote.status} />
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-3 text-sm text-gray-600">
+                  <div>
+                    <p className="text-xs uppercase text-gray-400 mb-1">Setup fee</p>
+                    <p className="font-medium text-gray-900">{currency(latestQuote.setupFee)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase text-gray-400 mb-1">Unit price</p>
+                    <p className="font-medium text-gray-900">{perUnit(latestQuote.unitPrice)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase text-gray-400 mb-1">Estimated volume</p>
+                    <p className="font-medium text-gray-900">
+                      {latestQuote.estimatedVolume ?? "—"}
+                    </p>
+                  </div>
                 </div>
               </div>
+            ) : (
+              <p className="text-sm text-gray-500">No quote generated yet.</p>
+            )}
 
-              {/* RIGHT PANEL: Inspector */}
-              <div
-                className={cn(
-                  "shrink-0 h-full z-20 bg-white transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)] border-l border-gray-200 shadow-xl",
-                  selectedStepId ? "w-[420px] translate-x-0" : "w-0 translate-x-full opacity-0"
-                )}
-              >
-                <StudioInspector
-                  selectedStep={selectedStepData}
-                  onClose={() => setSelectedStepId(null)}
-                  onConnect={() => setShowSystemPicker(true)}
-                  onAddException={() => setShowExceptionModal(true)}
+            {showSendForPricing ? (
+              <Button type="button" onClick={handleSendForPricing} disabled={transitioning}>
+                {transitioning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                Request pricing
+              </Button>
+            ) : awaitingApproval ? (
+              <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                Quote sent—awaiting approval.
+              </div>
+            ) : signedReady ? (
+              <div className="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                Signed – Ready to Build.
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <CardTitle>Requirements / Intake</CardTitle>
+              <CardDescription>Capture notes for this version.</CardDescription>
+            </div>
+            <div className="flex items-center gap-3">
+              <Select value={selectedVersion?.id} onValueChange={handleVersionChange}>
+                <SelectTrigger className="w-48">
+                  <SelectValue placeholder="Select version" />
+                </SelectTrigger>
+                <SelectContent>
+                  {automation.versions.map((version) => (
+                    <SelectItem key={version.id} value={version.id}>
+                      {version.versionLabel}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedVersion ? <StatusBadge status={selectedVersion.status} /> : null}
+            </div>
+          </CardHeader>
+          <CardContent>
+            <form className="space-y-4" onSubmit={handleSaveNotes}>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                  <StickyNote className="h-4 w-4" />
+                  Intake notes
+                </label>
+                <Textarea
+                  value={notes}
+                  onChange={(event) => setNotes(event.target.value)}
+                  rows={6}
+                  placeholder="Document intake notes, requirements, and linked resources."
                 />
               </div>
+              <div className="flex flex-wrap gap-3">
+                <Button type="submit" disabled={savingNotes || !selectedVersion}>
+                  {savingNotes ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Save notes
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleCreateVersion}
+                  disabled={creatingVersion || !selectedVersion}
+                >
+                  {creatingVersion ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+                  New version
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="h-4 w-4" />
+              Blueprint
+            </CardTitle>
+            <CardDescription>Basic process map (read-only for now).</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {selectedVersion?.blueprintJson ? (
+              <BlueprintViewer blueprint={selectedVersion.blueprintJson} />
+            ) : (
+              <p className="text-sm text-gray-500">No blueprint defined yet.</p>
+            )}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                <FileText className="h-4 w-4" />
+                Blueprint JSON
+              </label>
+              <Textarea
+                value={blueprintDraft}
+                onChange={(event) => setBlueprintDraft(event.target.value)}
+                rows={8}
+                placeholder='{"nodes":[...],"edges":[...]}'
+              />
+              {blueprintError ? (
+                <p className="text-sm text-red-600">{blueprintError}</p>
+              ) : (
+                <p className="text-xs text-gray-500">
+                  Provide React Flow–compatible nodes and edges. Leave empty to clear.
+                </p>
+              )}
             </div>
-          </div>
-        ) : activeTab === "Test" ? (
-          <TestTab />
-        ) : activeTab === "Activity" ? (
-          <ActivityTab onNavigateToBlueprint={() => setActiveTab("Blueprint")} />
-        ) : activeTab === "Contributors" ? (
-          <ContributorsTab onInvite={() => setShowInviteModal(true)} />
-        ) : activeTab === "Settings" ? (
-          <SettingsTab
-            onInviteUser={() => setShowInviteModal(true)}
-            onAddSystem={() => setShowSystemPicker(true)}
-            onNewVersion={() => setShowVersionModal(true)}
-            onManageCredentials={(systemName) => {
-              setActiveSystem(systemName);
-              setShowCredentialsModal(true);
-            }}
-            onNavigateToTab={(tab) => setActiveTab(tab)}
-            onNavigateToSettings={() => router.push("/workspace-settings")}
-          />
-        ) : null}
+            <Button type="button" onClick={handleSaveBlueprint} disabled={savingBlueprint || !selectedVersion}>
+              {savingBlueprint ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save blueprint
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Version history</CardTitle>
+            <CardDescription>Track the lifecycle of this automation.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {automation.versions.map((version) => (
+                <div
+                  key={version.id}
+                  className="flex flex-col gap-2 rounded-md border border-gray-100 bg-white p-4 md:flex-row md:items-center md:justify-between"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{version.versionLabel}</p>
+                    <p className="text-xs text-gray-500">
+                      {version.intakeNotes ? version.intakeNotes.slice(0, 160) : "No notes yet."}
+                    </p>
+                  </div>
+                  <StatusBadge status={version.status} />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       </div>
-
-      {/* MODALS */}
-      <SystemPickerModal
-        isOpen={showSystemPicker}
-        onClose={() => setShowSystemPicker(false)}
-        onSelect={(system) => {
-          setActiveSystem(system);
-          setShowSystemPicker(false);
-          setShowCredentialsModal(true);
-        }}
-      />
-
-      <ExceptionModal
-        isOpen={showExceptionModal}
-        onClose={() => setShowExceptionModal(false)}
-        onAdd={handleAddException}
-      />
-
-      <InviteTeamModal isOpen={showInviteModal} onClose={() => setShowInviteModal(false)} />
-
-      <CreateVersionModal
-        isOpen={showVersionModal}
-        onClose={() => setShowVersionModal(false)}
-        onCreate={(version) => {
-          setCurrentVersion(version);
-          setShowVersionModal(false);
-        }}
-        currentVersion={currentVersion}
-      />
-
-      <CredentialsModal
-        isOpen={showCredentialsModal}
-        onClose={() => setShowCredentialsModal(false)}
-        systemName={activeSystem}
-      />
     </div>
   );
 }

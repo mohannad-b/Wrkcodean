@@ -4,6 +4,30 @@ Newest updates appear first. Each entry includes the timestamp (Pacific Time) wh
 
 ---
 
+## 2025-12-01 · 18:10 PT
+
+### Phase 1 – Vertical Slice Ready
+- ✅ Stood up end-to-end Automations + Admin APIs (CRUD, status transitions, projects, quotes) with Auth0 sessions, RBAC, tenant scoping, and audit logging.
+- ✅ Replaced mock-heavy Studio/Admin UIs with real data flows: create automation, edit intake notes, send for pricing, see project in Admin, draft/send/sign quotes.
+- ✅ Added guardrails + tests (tenant isolation, status transition rejection, quote signing cascades) and wired state machine to READY_TO_BUILD / LIVE transitions.
+
+### Next Steps
+- [ ] Expand UI polish (grid/list filters, kanban) once remaining endpoints stabilize.
+- [ ] Add optimistic updates + toast feedback now that minimal flows are live.
+
+## 2025-12-01 · 20:05 PT
+
+### Phase 1.5 – Deal Flow & Blueprint Basics
+- ✅ Quote “SIGNED” now runs a transactional cascade (quote → automation_version → project) plus structured audit logging.
+- ✅ Admin project detail exposes SENT-only “Mark Signed” and READY_TO_BUILD-only “Mark Live” controls backed by a dedicated admin status route.
+- ✅ Studio automation detail shows commercial status, quote summary, intake editor, and a lightweight blueprint viewer/editor tied to `blueprint_json`.
+- ✅ Added metadata endpoints (GET/PATCH automation_version) with blueprint validation and richer automation detail payloads.
+- ✅ Extended Vitest coverage for signed cascades, LIVE transitions, and tenant isolation guards.
+
+### Next Steps
+- [ ] Layer in optimistic UI feedback and toast notifications for Studio/Admin workflows.
+- [ ] Flesh out richer blueprint editing once AI/planning work is in scope.
+
 ## 2025-12-01 · 16:30 PT
 
 ### Phase 0 – Database Bootstrap & Testing Prep

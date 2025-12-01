@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
-import {
-  canTransition,
-  AUTOMATION_STATUSES,
-  AUTOMATION_STATUS_TRANSITIONS,
-  isAutomationStatus,
-} from "@/lib/automations/status";
+import { canTransition, API_AUTOMATION_STATUSES, parseAutomationStatus } from "@/lib/automations/status";
+
+const AUTOMATION_STATUS_TRANSITIONS: Record<string, string[]> = {
+  DRAFT: ["NEEDS_PRICING"],
+  NEEDS_PRICING: ["READY_TO_BUILD"],
+  READY_TO_BUILD: ["LIVE"],
+  LIVE: ["ARCHIVED"],
+  ARCHIVED: [],
+};
 
 describe("canTransition", () => {
   it("allows every defined valid transition", () => {
@@ -16,25 +19,25 @@ describe("canTransition", () => {
   });
 
   it("blocks transitions that skip required states", () => {
-    expect(canTransition("Intake", "Live")).toBe(false);
-    expect(canTransition("Needs Pricing", "Live")).toBe(false);
-    expect(canTransition("Live", "Needs Pricing")).toBe(false);
-    expect(canTransition("Archived", "Needs Pricing")).toBe(false);
+    expect(canTransition("DRAFT", "LIVE")).toBe(false);
+    expect(canTransition("NEEDS_PRICING", "LIVE")).toBe(false);
+    expect(canTransition("LIVE", "NEEDS_PRICING")).toBe(false);
+    expect(canTransition("ARCHIVED", "NEEDS_PRICING")).toBe(false);
   });
 
   it("treats unchanged status as a no-op", () => {
-    for (const status of AUTOMATION_STATUSES) {
+    for (const status of API_AUTOMATION_STATUSES) {
       expect(canTransition(status, status)).toBe(true);
     }
   });
 });
 
-describe("isAutomationStatus", () => {
+describe("parseAutomationStatus", () => {
   it("validates status strings", () => {
-    for (const status of AUTOMATION_STATUSES) {
-      expect(isAutomationStatus(status)).toBe(true);
+    for (const status of API_AUTOMATION_STATUSES) {
+      expect(parseAutomationStatus(status)).toBe(status);
     }
-    expect(isAutomationStatus("Unknown")).toBe(false);
+    expect(parseAutomationStatus("Unknown")).toBeNull();
   });
 });
 

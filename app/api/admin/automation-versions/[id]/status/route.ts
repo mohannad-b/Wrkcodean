@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { parseAutomationStatus, fromDbAutomationStatus } from "@/lib/automations/status";
-import { updateAutomationVersionStatus } from "@/lib/services/automations";
+import { getAutomationVersionDetail, updateAutomationVersionStatus } from "@/lib/services/automations";
 import { logAudit } from "@/lib/audit/log";
 
 type Params = {
@@ -25,16 +25,24 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
   try {
     const session = await requireTenantSession();
 
-    if (!can(session, "automation:version:transition", { type: "automation_version", tenantId: session.tenantId })) {
+    if (!can(session, "admin:project:write")) {
       throw new ApiError(403, "Forbidden");
     }
 
     const payload = await parsePayload(request);
     const nextStatus = parseAutomationStatus(payload.status);
 
-    if (!nextStatus) {
-      throw new ApiError(400, "Invalid status");
+    if (nextStatus !== "LIVE") {
+      throw new ApiError(400, "Only LIVE transitions are supported via this endpoint.");
     }
+
+    const detail = await getAutomationVersionDetail(session.tenantId, params.id);
+
+    if (!detail) {
+      throw new ApiError(404, "Automation version not found");
+    }
+
+    const previousStatus = fromDbAutomationStatus(detail.version.status);
 
     const updated = await updateAutomationVersionStatus({
       tenantId: session.tenantId,
@@ -45,7 +53,7 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
         if (error.message.includes("not found")) {
           throw new ApiError(404, error.message);
         }
-        if (error.message.includes("Invalid status transition") || error.message.includes("Invalid status")) {
+        if (error.message.includes("Invalid status transition")) {
           throw new ApiError(400, error.message);
         }
       }
@@ -55,16 +63,18 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
     await logAudit({
       tenantId: session.tenantId,
       userId: session.userId,
-      action: "automation.version.transition",
+      action: "automation_mark_live",
       resourceType: "automation_version",
       resourceId: params.id,
-      metadata: { status: nextStatus },
+      metadata: {
+        status: { from: previousStatus, to: "LIVE" },
+        projectId: detail.project?.id ?? null,
+      },
     });
 
     return NextResponse.json({
       automationVersion: {
         id: updated.id,
-        automationId: updated.automationId,
         status: fromDbAutomationStatus(updated.status),
         updatedAt: updated.updatedAt,
       },

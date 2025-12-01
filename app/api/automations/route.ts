@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
-import { db } from "@/db";
-import { automations } from "@/db/schema";
-import { getSession } from "@/lib/auth/session";
 import { can } from "@/lib/auth/rbac";
+import { handleApiError, requireTenantSession, ApiError } from "@/lib/api/context";
+import { listAutomationsForTenant, createAutomationWithInitialVersion } from "@/lib/services/automations";
+import { fromDbAutomationStatus } from "@/lib/automations/status";
+import { logAudit } from "@/lib/audit/log";
 
 type CreateAutomationPayload = {
   name?: unknown;
   description?: unknown;
+  intakeNotes?: unknown;
 };
 
 async function parsePayload(request: Request): Promise<CreateAutomationPayload> {
@@ -17,46 +19,100 @@ async function parsePayload(request: Request): Promise<CreateAutomationPayload> 
   }
 }
 
+export async function GET() {
+  try {
+    const session = await requireTenantSession();
+
+    if (!can(session, "automation:read", { type: "automation", tenantId: session.tenantId })) {
+      throw new ApiError(403, "Forbidden");
+    }
+
+    const rows = await listAutomationsForTenant(session.tenantId);
+
+    return NextResponse.json({
+      automations: rows.map((automation) => ({
+        id: automation.id,
+        name: automation.name,
+        description: automation.description,
+        createdAt: automation.createdAt,
+        updatedAt: automation.updatedAt,
+        latestVersion: automation.latestVersion
+          ? {
+              id: automation.latestVersion.id,
+              versionLabel: automation.latestVersion.versionLabel,
+              status: fromDbAutomationStatus(automation.latestVersion.status),
+              intakeNotes: automation.latestVersion.intakeNotes,
+              summary: automation.latestVersion.summary,
+              updatedAt: automation.latestVersion.updatedAt,
+            }
+          : null,
+      })),
+    });
+  } catch (error) {
+    return handleApiError(error);
+  }
+}
+
 export async function POST(request: Request) {
-  const session = await getSession().catch(() => null);
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  try {
+    const session = await requireTenantSession();
 
-  if (!session.tenantId) {
-    return NextResponse.json({ error: "Tenant context is missing." }, { status: 400 });
-  }
+    if (!can(session, "automation:create", { type: "automation", tenantId: session.tenantId })) {
+      throw new ApiError(403, "Forbidden");
+    }
 
-  if (!can(session, "automation:create", { type: "automation", tenantId: session.tenantId })) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+    const payload = await parsePayload(request);
+    const name = typeof payload.name === "string" ? payload.name.trim() : "";
+    const description =
+      typeof payload.description === "string" && payload.description.trim().length > 0
+        ? payload.description.trim()
+        : null;
+    const intakeNotes =
+      typeof payload.intakeNotes === "string" && payload.intakeNotes.trim().length > 0
+        ? payload.intakeNotes.trim()
+        : null;
 
-  const payload = await parsePayload(request);
-  const name = typeof payload.name === "string" ? payload.name.trim() : "";
-  const description =
-    typeof payload.description === "string" && payload.description.trim().length > 0
-      ? payload.description.trim()
-      : null;
+    if (!name) {
+      throw new ApiError(400, "name is required");
+    }
 
-  if (!name) {
-    return NextResponse.json({ error: "name is required" }, { status: 400 });
-  }
-
-  const [automation] = await db
-    .insert(automations)
-    .values({
+    const { automation, version } = await createAutomationWithInitialVersion({
       tenantId: session.tenantId,
+      userId: session.userId,
       name,
       description,
-      createdBy: session.userId,
-    })
-    .returning();
+      intakeNotes,
+    });
 
-  if (!automation) {
-    return NextResponse.json({ error: "Unable to create automation" }, { status: 500 });
+    await logAudit({
+      tenantId: session.tenantId,
+      userId: session.userId,
+      action: "automation.create",
+      resourceType: "automation",
+      resourceId: automation.id,
+      metadata: { versionId: version.id },
+    });
+
+    return NextResponse.json(
+      {
+        automation: {
+          id: automation.id,
+          name: automation.name,
+          description: automation.description,
+          createdAt: automation.createdAt,
+          version: {
+            id: version.id,
+            versionLabel: version.versionLabel,
+            status: fromDbAutomationStatus(version.status),
+            intakeNotes: version.intakeNotes,
+          },
+        },
+      },
+      { status: 201 }
+    );
+  } catch (error) {
+    return handleApiError(error);
   }
-
-  return NextResponse.json({ automation }, { status: 201 });
 }
 
 

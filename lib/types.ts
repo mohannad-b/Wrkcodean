@@ -29,7 +29,12 @@ export type AutomationStatus =
   | "Needs Pricing"
   | "Intake in Progress"
   | "Blocked"
-  | "Archived";
+  | "Archived"
+  | "DRAFT"
+  | "NEEDS_PRICING"
+  | "READY_TO_BUILD"
+  | "READY_TO_LAUNCH"
+  | "LIVE";
 
 export interface Collaborator {
   id: string;
