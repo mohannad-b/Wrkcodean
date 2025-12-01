@@ -153,7 +153,8 @@ After a successful (or zero-amount) charge, run a DB transaction:
 - **Flow 16** is the only flow allowed to move:
   - `projects.status`: `'Awaiting Client Approval'` → `'Ready for Build'` (or `'In Build'` when auto-build is immediately triggered).
   - `automation_versions.status`: `'Awaiting Client Approval'` → `'Ready for Build'` (or `'Build in Progress'` when auto-build fires).
-- **Flow 13** owns every transition *after* `'Ready for Build'` (e.g., `Ready for Build → Build in Progress → QA → Live/Paused`). Flow 16 MUST NOT advance any state beyond the initial post-signing move.
+- **Flow 21** owns the lifecycle transition `'Ready for Build'` → `'Build in Progress'` (requesting a build).
+- **Flow 13** owns all transitions after `'Build in Progress'` (e.g., `Build in Progress → QA → Live/Paused`). Flow 16 MUST NOT advance any state beyond the initial post-signing move.
 
 #### Quote Types and Lifecycle Effects
 

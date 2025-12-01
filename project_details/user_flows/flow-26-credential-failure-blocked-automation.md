@@ -2,49 +2,56 @@
 
 **Trigger**: WRK Platform run_events or monitoring detect auth errors (e.g., 401, 403)
 
-**Flow Diagram**:
+---
+
+### Access & Auth
+
+- Internal monitoring/worker service uses a service identity to consume telemetry (`run_events`, `workflow_bindings`, `automation_versions`).
+- Tenant derivation is always from trusted internal IDs (e.g., each run_event references `automation_version_id` + `tenant_id`). The worker MUST ignore any tenant hints from untrusted payloads.
+- All write operations (creating tasks, calling lifecycle helpers, inserting audit logs) MUST be scoped by `(tenant_id, automation_version_id)` per the core tenant isolation rules.
+- The worker MUST enforce AuthN/AuthZ before exposing credential status in alerts/notifications (e.g., only send client notifications to the owning tenant contacts).
+
+---
+
+### Flow Diagram
 ```
-Usage aggregation or monitoring detects auth errors:
-    - Run events show status='failure' with error_message containing 'AUTH_ERROR' or '401' or '403'
-    - OR monitoring detects repeated auth failures for integration step
+Monitoring detects credential/auth failures:
+    - Run events show status='failure' with error_message like AUTH_ERROR / 401 / 403
+    - or integration monitor detects repeated auth failures
     ↓
-Check failure threshold:
-    - X consecutive auth failures (e.g., 3)
-    - OR Y% of runs failing for reason AUTH_ERROR (e.g., >50% in last hour)
+Evaluate threshold policy (X consecutive failures, Y% failure window)
+    - Thresholding handled entirely in the monitoring service (not Flow 13) to prevent flapping
     ↓
-If threshold exceeded:
-    Set automation_versions.status = 'Blocked'
-    Set automation_versions.blocked_reason = 'Credentials invalid or expired for [system_name]'
+If threshold exceeded and current_status in allowed set (e.g., {'Live','Ready to Launch','Build in Progress'}):
+    - Call lifecycle helper `request_block_for_credentials(tenant_id, automation_version_id, actor_context, failed_systems)` (owned by Flow 13)
+    - Helper validates allowed source state, applies concurrency/idempotency rules, sets status='Blocked', updates blocked_reason, writes audit log
     ↓
-Create high-priority task for ops:
-    - context_type = 'project' or 'automation_version'
-    - kind = 'general_todo'
-    - title = 'Fix credentials for [system_name]'
-    - priority = 'high' or 'critical'
-    - assignee = project owner or ops team
+Create high-priority task (one per failed system) with structured fields:
+    - context_type/context_id include tenant_id/project_id/automation_version_id
+    - kind='build_checklist' or 'credentials_issue'
+    - system_key/provider stored explicitly; titles never include secrets
     ↓
-Notify client to update credentials
+Notify client + ops (masked reason, remediation steps)
     ↓
-Notify ops team (high priority)
+Once credentials fixed via Flow 25 + lifecycle helper verifies all required credentials active:
+    - Ops/system invokes `request_unblock_for_credentials(tenant_id, automation_version_id, actor_context)`
+    - Flow 13 helper owns Blocked → healthy transition, honoring state machine rules
     ↓
-[Once credentials fixed via Flow 24]
-    ↓
-Ops or system can move status from Blocked:
-    - Check if transition from 'Blocked' → previous_status is allowed
-    - If allowed: Update status via Flow 13
-    - If not allowed: Move to nearest valid status (e.g., 'Blocked' → 'Build in Progress' if was in build)
-    ↓
-Clear blocked_reason
-    ↓
-Send unblocked notifications
+Clear blocked_reason via lifecycle helper response, send unblocked notifications
 ```
 
 **API Endpoints**: Internal monitoring/worker, no external API
 
 **Database Changes**:
-- Update `automation_versions` (status='Blocked', blocked_reason)
-- Insert into `tasks` (context_type, context_id, kind='general_todo', title, priority='high', status='pending')
-- Insert into `audit_logs` (action_type='block_automation', resource_type='automation_version', changes_json with blocked_reason)
+- Flow 26 NEVER updates `automation_versions.status` directly. The Flow 13 lifecycle helper performs:
+  - Re-select automation_version (and related rows) `FOR UPDATE` filtered by `(tenant_id, automation_version_id)`.
+  - Validate current_status is in the allowed set (e.g., `'Live','Ready to Launch','Build in Progress'`) before moving to `'Blocked'`.
+  - Update `status='Blocked'`, `blocked_reason`, `blocked_at`, plus audit logs inside the same transaction.
+- `tasks`:
+  - Insert structured tasks `{ tenant_id, project_id, automation_version_id, kind='credentials_issue', system_key, priority='high' }`.
+  - Titles/descriptions must never include secrets or raw error payloads (only system names / high-level causes).
+- `audit_logs`:
+  - `action_type='block_automation'`, metadata with `{ failed_systems, blocked_reason_summary, threshold_policy_id }` (no tokens or raw logs).
 
 **Notifications**:
 - **Email**: Automation blocked notification (template: `automation_blocked`, to client, includes blocked_reason and instructions)
@@ -53,9 +60,10 @@ Send unblocked notifications
 - **Slack** (optional): Critical alert to ops channel
 
 **Exceptions**:
-- **Misconfigured alert thresholds**: Log warning, adjust thresholds, but don't flail statuses
-- **False positive detection**: Ops team can manually unblock if false positive
-- **Multiple systems failing**: Block with reason listing all failed systems
+- **Misconfigured alert thresholds**: Monitoring service logs warning/metric; Flow 13 helper SHOULD NOT be called unless thresholds are satisfied.
+- **False positive detection**: Ops team may call `request_unblock_for_credentials` via Flow 13 helper to revert.
+- **Multiple systems failing**: `failed_systems` array is passed to lifecycle helper/task creation; reason lists all affected systems.
+- **Threshold evaluation**: Performed entirely by the monitoring service BEFORE invoking `request_block_for_credentials`; lifecycle helper enforces transitions only.
 
 **Manual Intervention**: 
 - Ops team reviews blocked automations and contacts client

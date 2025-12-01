@@ -1,53 +1,62 @@
-### Flow 28: Usage Aggregation
+### Flow 28: Usage Sync & Threshold Alerts
 
-**Trigger**: Usage Aggregation Worker processes run events
+> **Scope**: Flow 28 now covers both usage aggregation and threshold alerting. Instead of reading every run event from WRK Copilot, we ingest periodic summaries produced by the WRK Platform engine (e.g., hourly/daily snapshots with run counts, successes/failures, cost). After persisting those aggregates, the same worker evaluates alert thresholds and sends notifications. This consolidation replaces the old Flow 28/29 split.
+
+**Trigger**: Scheduler pulls or receives summarized usage payloads from WRK Platform (e.g., hourly REST pull or daily push)
 
 **Flow Diagram**:
 ```
-Worker receives run event message
+Scheduled job requests usage snapshot from WRK Platform (hourly/daily)
     ↓
-Find workflow_binding and automation_version
+WRK Platform responds with summarized metrics:
+    { automation_version_id, tenant_id, period_start, period_end, run_count, success_count, failure_count, total_cost }
     ↓
-Calculate time period (hourly or daily):
-    period_start = truncate_to_hour/day(started_at)
-    period_end = period_start + 1 hour/day
+Usage Sync Worker validates payload (tenant + automation exist, signature if push)
     ↓
-Find or create usage_aggregate for period
+Upsert usage_aggregate for (automation_version_id, period)
+    - run_count, success_count, failure_count, total_cost
+    - recalc derived fields (failure_rate, average_cost_per_run, etc.)
     ↓
-Increment counters:
-    - run_count += 1
-    - success_count += 1 (if status='success')
-    - failure_count += 1 (if status='failure')
-    - total_cost += (effective_unit_price)
+Check configured thresholds for that automation/version/tenant:
+    - Volume > committed_volume * X
+    - Failure rate > Y%
+    - Cost > spend target
     ↓
-Update usage_aggregate record
+If a threshold breaches and an alert for that period hasn’t been sent:
+    - Insert/update alerts table (de-dup per period)
+    - Send notifications (email, in-app, Slack) to owners + ops/AM as needed
     ↓
-Create audit log entry (for significant usage milestones)
+Optional: publish summary audit log entry for significant usage milestones
     ↓
-Check usage thresholds:
-    - If run_count > volume_threshold: Alert ops
-    - If failure_rate > threshold: Alert ops
-    ↓
-If monthly period complete:
-    Trigger billing calculation
+If period close condition met (e.g., end of month), enqueue billing/finalization job
 ```
 
-**API Endpoints**: Internal worker, no external API
+**API / Integration Points**:
+- **Internal pull**: Worker calls WRK Platform usage endpoint (e.g., `GET /wrk-platform/usage-summary?period=2024-07-15T00:00Z`), authenticated with service credentials.
+- **Optional push**: WRK Platform can POST summarized data to a Copilot ingestion endpoint (future enhancement; not required for v1).
+- No public API is exposed to customers for this flow in v1.
 
 **Database Changes**:
-- Upsert `usage_aggregates` (automation_version_id, period_start, period_end, run_count, success_count, failure_count, total_cost)
-- Unique constraint on (automation_version_id, period_start, period_end) ensures one aggregate per period
-- Insert into `audit_logs` (action_type='usage_aggregated', resource_type='automation_version', resource_id=automation_version_id, user_id=null, tenant_id, created_at=now(), metadata_json={'period_start': period_start, 'period_end': period_end, 'run_count': run_count}) - system-initiated by worker (optional, for significant milestones only)
+- Upsert `usage_aggregates` with `{ tenant_id, automation_version_id, period_start, period_end, run_count, success_count, failure_count, total_cost, failure_rate }`. Unique constraint on `(automation_version_id, period_start, period_end)`.
+- Insert/update `alerts` (or equivalent) when thresholds breach: `{ tenant_id, automation_version_id, alert_type, threshold_value, current_value, period_start, sent_at }`.
+- Insert `audit_logs` (optional) for major milestones `{ action_type='usage_sync', resource_type='automation_version', metadata_json:{period_start, run_count, alert_triggered?} }`.
 
-**Notifications** (conditional):
-- **Email**: Usage threshold exceeded (template: `usage_threshold_exceeded`)
-- **Email**: Failure rate threshold exceeded (template: `failure_rate_threshold_exceeded`)
+**Notifications**:
+- Email/In-app/Slack templates for:
+  - Usage overage (`usage_threshold_exceeded`)
+  - Failure-rate alert (`failure_rate_threshold_exceeded`)
+  - Cost overrun (`cost_threshold_alert`)
+- Notifications include summary metrics (no raw run-level data) and links to dashboards.
 
-**Exceptions**:
-- **Missing workflow_binding**: Skip, log error
-- **Invalid period calculation**: Log error, use fallback period
-- **Aggregate update conflict**: Retry with current values
+**Exceptions & Retry Logic**:
+- Missing automation or tenant: log + skip (Copilot DB may not yet know about the automation; reconciliation job handles later).
+- Validation error (bad period range, negative counts): log, quarantine payload, alert ops.
+- Aggregate update conflict: retry with exponential backoff.
+- Alert already sent for same `(automation_version_id, alert_type, period_start)`: skip to avoid spam.
+- WRK Platform API unavailable: retry per standard backoff; raise ops alert if repeated failures.
 
-**Manual Intervention**: None (fully automated)
+**Manual Intervention**:
+- Not typical. Ops/AMs review alerts generated by this worker and may adjust thresholds via configuration.
+- Billing/finance teams consume monthly aggregates downstream (Flow 20).
 
 ---

@@ -1,6 +1,8 @@
-### Flow 27: Run Event Webhook (WRK Platform → WRK Copilot)
+### Flow 27: Run Event Webhook (WRK Platform → WRK Copilot) _(Future / not part of v1)_
 
-**Trigger**: WRK Platform sends webhook on workflow execution
+> **Status**: Future enhancement. This flow documents the intended webhook handshake between WRK Platform and WRK Copilot once we add near-real-time run telemetry. Nothing in this flow ships in v1; it exists so we have a vetted design for when we prioritize it later.
+
+**Trigger**: WRK Platform sends webhook on workflow execution (conceptual future feature)
 
 **Flow Diagram**:
 ```
@@ -35,8 +37,8 @@ If status = 'failure' and error is critical:
 Return 200 OK
 ```
 
-**API Endpoints**:
-- `POST /v1/webhooks/wrk-run-event` (internal, webhook receiver)
+**API Endpoints** (future):
+- `POST /v1/webhooks/wrk-run-event` (internal webhook receiver – NOT implemented in v1)
 
 **Database Changes**:
 - Insert into `run_events` (workflow_binding_id, run_id, status, started_at, completed_at, error_message, metadata_json)
@@ -53,8 +55,12 @@ Return 200 OK
 - **Duplicate run_id**: Return 200 (idempotent, already processed)
 - **Malformed webhook payload**: Return 400, log error
 
-**Manual Intervention**: 
-- Ops team reviews critical failures
-- Ops team investigates if failure rate exceeds threshold
+**Manual Intervention** (future): 
+- Ops team reviews critical failures surfaced by the future webhook pipeline
+- Ops team investigates if failure rate exceeds threshold, coordinating with Flow 26 / lifecycle helpers
+
+---
+
+> **Note**: Flow 27 is intentionally scoped as a future enhancement. Until this webhook exists, WRK Copilot relies on periodic usage aggregation jobs. When we decide to implement Flow 27, revisit Flows 24–26 to ensure state-machine hooks (blocking, notifications) align with the real-time telemetry pipeline.
 
 ---
