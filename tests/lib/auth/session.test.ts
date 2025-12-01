@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
+vi.mock("react", () => ({
+  cache: <T extends (...args: any[]) => any>(fn: T) => fn,
+}));
+
 const membershipRows: Array<{ role: string; tenantId: string }> = [];
 
 const selectMock = vi.fn(() => ({

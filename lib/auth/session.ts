@@ -3,8 +3,25 @@ import { cache } from "react";
 import auth0 from "@/lib/auth/auth0";
 import { db } from "@/db";
 import { memberships, users, type MembershipRole } from "@/db/schema";
-const DEFAULT_TENANT_ROLE: MembershipRole =
-  (process.env.DEFAULT_TENANT_ROLE as MembershipRole) ?? "client_admin";
+
+const ALLOWED_DEFAULT_ROLES: readonly MembershipRole[] = ["client_admin", "client_member", "ops_admin", "admin"] as const;
+
+function resolveDefaultTenantRole(): MembershipRole {
+  const raw = process.env.DEFAULT_TENANT_ROLE as MembershipRole | undefined;
+  if (raw && ALLOWED_DEFAULT_ROLES.includes(raw)) {
+    return raw;
+  }
+  if (raw && !ALLOWED_DEFAULT_ROLES.includes(raw)) {
+    console.warn(
+      `[auth] DEFAULT_TENANT_ROLE='${raw}' is not a valid membership role. Falling back to 'client_admin'. Allowed values: ${ALLOWED_DEFAULT_ROLES.join(
+        ", "
+      )}.`
+    );
+  }
+  return "client_admin";
+}
+
+const DEFAULT_TENANT_ROLE = resolveDefaultTenantRole();
 
 
 export type AppSession = {
@@ -124,6 +141,12 @@ async function getAuth0BackedSession(): Promise<AppSession> {
         .select({ role: memberships.role, tenantId: memberships.tenantId })
         .from(memberships)
         .where(eq(memberships.userId, userRecord.id));
+    }
+
+    if (!fallbackTenantId) {
+      throw new Error(
+        "No tenant membership found for current user and DEFAULT_TENANT_ID is not configured. Set DEFAULT_TENANT_ID or seed memberships before logging in."
+      );
     }
   }
 
