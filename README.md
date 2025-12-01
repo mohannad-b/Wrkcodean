@@ -4,7 +4,7 @@ WRK Copilot is a web app that helps businesses describe and manage automated wor
 
 ## Project Structure
 
-This project has been refactored from raw Figma output into a clean Next.js 14 App Router project.
+This project has been refactored from an early design export into a clean Next.js 14 App Router project.
 
 ### Architecture
 
@@ -38,8 +38,6 @@ Top-level layout:
   - `lib/types.ts` – Shared TypeScript types
   - `lib/mock-automations.ts` – Mock data for development
   - `lib/utils.ts` – Utility functions
-- `archive/`
-  - `archive/figma-original/` – Archived original Figma output
 - Config files: `next.config.mjs`, `tailwind.config.cjs`, `postcss.config.cjs`, `tsconfig.json`, etc.
 
 ### Key Features
@@ -91,13 +89,39 @@ Additional admin views can hang off this tree for:
    # or
    pnpm install
    ```
-2. Run the development server:
+2. Create `.env.local` with your Neon connection string and Auth0 settings. Example:
+   ```bash
+   DATABASE_URL="postgres://user:password@host:5432/wrk_copilot"
+   APP_BASE_URL="http://localhost:3000"
+   AUTH0_DOMAIN="dev-1234.us.auth0.com"
+   AUTH0_CLIENT_ID="..."
+   AUTH0_CLIENT_SECRET="..."
+   AUTH0_SECRET="<openssl rand -hex 32>"
+   OPENAI_API_KEY="..."
+   STORAGE_ACCESS_KEY="..."
+   STORAGE_SECRET="..."
+   DEFAULT_TENANT_ID="<acme tenant id from db:seed>"
+   DEFAULT_TENANT_ROLE="client_admin"
+   AUTH0_MOCK_ENABLED=false   # set to true only when bypassing Auth0 locally
+   MOCK_TENANT_ID="<from seed output when using mock mode>"
+   MOCK_USER_ID="<from seed output when using mock mode>"
+   ```
+3. Apply the schema (runs Drizzle migrations):
+   ```bash
+   npm run db:push
+   ```
+4. Seed the database with the default tenant/users (prints IDs to reuse in `.env.local`):
+   ```bash
+   npm run db:seed
+   ```
+   If you ever need to recreate the schema manually (e.g., new Neon database or Vercel preview), run the SQL in `scripts/bootstrap.sql` first, then re-run the seed.
+5. Run the development server:
    ```bash
    npm run dev
    # or
    pnpm dev
    ```
-3. Open the app at http://localhost:3000
+6. Open the app at http://localhost:3000 — unauthenticated users are redirected to `/auth/login` (Auth0). Use `/auth/logout` to sign out.
 
 ### Build & Run (Production)
 - `npm run build`

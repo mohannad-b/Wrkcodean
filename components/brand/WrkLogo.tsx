@@ -1,5 +1,5 @@
 import React from "react";
-import svgPaths from "@/imports/svg-ax5t7pbysy";
+import svgPaths from "./wrkLogoPaths";
 
 export const WrkLogo: React.FC<{ className?: string }> = ({ className }) => {
   return (

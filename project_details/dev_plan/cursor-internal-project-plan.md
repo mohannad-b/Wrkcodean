@@ -18,24 +18,23 @@
 ## 1. Environment & Accounts (Phase 0 prerequisites)
 
 ### Cursor Tasks
-- [ ] Verify Node 18+, pnpm, Tailwind, shadcn/ui already configured; clean leftover figma artifacts if they block TypeScript strict mode.
+- [ ] Verify Node 18+, pnpm, Tailwind, shadcn/ui already configured; clean any legacy design artifacts if they block TypeScript strict mode.
 - [ ] Add `.env.example` entries for Auth0, Neon, OpenAI, Vercel Blob (or chosen storage), Sentry (optional), rate-limit store.
-- [ ] Scaffold `packages/db` (or equivalent) with Drizzle + Neon connection helper.
-- [ ] Add `scripts` for `db:generate`, `db:migrate`, `db:seed`.
+- [x] Scaffold Drizzle + Neon connection helper + scripts (`db:generate`, `db:push`, `db:seed`) and documented bootstrap SQL (`scripts/bootstrap.sql`) for recreating environments.
 
 ### USER ACTION
-- [ ] Provision **Neon Postgres** project; share `DATABASE_URL` (dev + staging).
-- [ ] Create **Auth0** tenant + application; provide domain, client ID/secret, callback URLs.
-- [ ] Ensure **OpenAI (vision-capable)** API key is available; confirm usage budget.
-- [ ] Provide **Vercel / Blob** credentials (or confirm S3 alternative).
-- [ ] Confirm GitHub repo access + desired branching strategy (feature branches?).
+- [x] Provision **Neon Postgres** project; share `DATABASE_URL` (dev + staging).
+- [x] Create **Auth0** tenant + application; provide domain, client ID/secret, callback URLs.
+- [x] Ensure **OpenAI (vision-capable)** API key is available; confirm usage budget.
+- [x] Provide **Vercel / Blob** credentials (or confirm S3 alternative).
+- [x] Confirm GitHub repo access + desired branching strategy (feature branches?).
 
 ---
 
 ## 2. Foundation (Phase 0)
 
 - [ ] Enable TypeScript strict mode, ESLint, Prettier; fix existing violations.
-- [ ] Implement session helper (`getSession()`) that returns `{ userId, tenantId, roles[] }`.
+- [x] Implement session helper (`getSession()`) that returns `{ userId, tenantId, roles[] }`.
 - [ ] Model membership & roles (`memberships` table); seed sample tenant + users.
 - [ ] Implement `can(user, action, resource)` helper + central authorisation middleware.
 - [ ] Add base Drizzle schema + migrations:
@@ -43,7 +42,7 @@
   - `automations`, `automation_versions`
   - `projects`, `quotes`, `messages`, `tasks`
   - `audit_logs`, `ai_jobs`, `automation_version_files`
-- [ ] Seed script to create:
+- [x] Seed script to create:
   - Tenant “Acme Demo”
   - `client_admin` user
   - `ops_admin` user
@@ -176,12 +175,12 @@
 
 ## 10. Outstanding USER ACTIONS Summary
 
-- [ ] Provide Auth0 credentials + callback URLs.
-- [ ] Provide Neon database URLs (dev/staging) + credentials.
-- [ ] Provide OpenAI (vision-enabled) API key and billing account.
-- [ ] Provide storage credentials (Vercel Blob or S3) + tokens.
-- [ ] Confirm GitHub branching/PR expectations.
-- [ ] (Optional) Provide Sentry DSN or logging preferences.
+- [x] Provide Auth0 credentials + callback URLs.
+- [x] Provide Neon database URLs (dev/staging) + credentials.
+- [x] Provide OpenAI (vision-enabled) API key and billing account.
+- [x] Provide storage credentials (Vercel Blob or S3) + tokens.
+- [x] Confirm GitHub branching/PR expectations.
+- [x] (Optional) Provide Sentry DSN or logging preferences.
 
 ---
 

@@ -50,7 +50,7 @@ function isAdminRoute(pathname: string): boolean {
 }
 
 export function Sidebar() {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "/";
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   

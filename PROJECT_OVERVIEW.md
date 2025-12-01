@@ -52,7 +52,7 @@ WRK Copilot is a multi-tenant SaaS app that manages the full lifecycle of busine
 
 Think of it as:
 
-- Figma for workflows (visual, collaborative design),
+- A collaborative canvas for workflows (visual, multiplayer design),
 - crossed with GitHub/Vercel for automations (clear pipeline, deploys, and observability),
 - tuned specifically for business processes rather than raw dev workflows.
 

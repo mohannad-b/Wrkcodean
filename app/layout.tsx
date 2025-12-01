@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Auth0Provider } from "@auth0/nextjs-auth0/client";
 import { AppShell } from "@/components/layout/AppShell";
 import "./globals.css";
 
@@ -15,7 +16,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <AppShell>{children}</AppShell>
+        <Auth0Provider>
+          <AppShell>{children}</AppShell>
+        </Auth0Provider>
       </body>
     </html>
   );

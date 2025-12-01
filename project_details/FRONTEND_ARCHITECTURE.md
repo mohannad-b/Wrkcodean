@@ -70,7 +70,6 @@ Wrkcodean/
 │   ├── components/
 │   ├── pages/
 │   └── setupTests.ts
-├── archive/                   # Figma-generated reference
 └── public/
 ```
 

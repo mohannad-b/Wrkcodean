@@ -5,15 +5,14 @@ import { useSearchParams } from "next/navigation";
 
 export default function WorkspaceSettingsPage() {
   const searchParams = useSearchParams();
-  const tab = searchParams.get("tab") as
+  const tab = (searchParams?.get("tab") as
     | "profile"
     | "billing"
     | "members"
     | "systems"
     | "notifications"
     | "security"
-    | "branding"
-    | undefined;
+    | "branding") ?? undefined;
 
   return (
     <div className="h-full overflow-hidden">

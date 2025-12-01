@@ -798,7 +798,7 @@ Think in **vertical slices** (DB → API → UI). Each phase should result in so
 
 ### Phase 0 – Foundation & Auth
 
-- [ ] Align existing Next.js repo with this doc (cleanup dead code / figma artifacts as needed).
+- [ ] Align existing Next.js repo with this doc (cleanup dead code / legacy artifacts as needed).
 - [ ] Enable TypeScript strict mode; configure ESLint + Prettier.
 - [ ] Confirm Tailwind + shadcn/ui are correctly wired.
 - [ ] Integrate Drizzle with Neon Postgres.
