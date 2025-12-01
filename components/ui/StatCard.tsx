@@ -19,3 +19,6 @@ export function StatCard({ label, value, icon, trend }: StatCardProps) {
     </div>
   );
 }
+
+
+

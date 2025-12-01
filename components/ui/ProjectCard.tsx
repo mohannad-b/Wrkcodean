@@ -119,3 +119,6 @@ export function ProjectCard({ project }: ProjectCardProps) {
     </motion.div>
   );
 }
+
+
+
