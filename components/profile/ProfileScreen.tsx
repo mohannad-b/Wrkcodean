@@ -76,7 +76,7 @@ export function ProfileScreen() {
   const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);
   const [tempAvatarPreviewUrl, setTempAvatarPreviewUrl] = useState<string | null>(null);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
-  const { toast } = useToast();
+  const toast = useToast();
 
   useEffect(() => {
     if (profile) {
@@ -221,7 +221,7 @@ export function ProfileScreen() {
         toast({
           title: "Avatar upload failed",
           description: message,
-          variant: "destructive",
+          variant: "error",
         });
         return;
       }
@@ -240,7 +240,7 @@ export function ProfileScreen() {
       toast({
         title: "Avatar upload failed",
         description: "We could not upload that file. Please try again.",
-        variant: "destructive",
+        variant: "error",
       });
     } finally {
       setIsUploadingAvatar(false);
@@ -285,7 +285,7 @@ export function ProfileScreen() {
         toast({
           title: "Unable to update profile",
           description: data?.error ?? "Please fix the highlighted fields and try again.",
-          variant: "destructive",
+          variant: "error",
         });
         return;
       }
@@ -300,7 +300,7 @@ export function ProfileScreen() {
       toast({
         title: "Something went wrong",
         description: "We could not save your changes. Please try again.",
-        variant: "destructive",
+        variant: "error",
       });
     } finally {
       setIsSaving(false);

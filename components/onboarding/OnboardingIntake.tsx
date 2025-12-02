@@ -453,10 +453,10 @@ export function OnboardingIntake({ onNext }: { onNext: () => void }) {
           }`}
         >
           <StudioInspector
-            selectedStep={selectedStepData}
+            step={selectedStepData as any}
             onClose={() => setSelectedStepId(null)}
-            onConnect={() => {}}
-            onAddException={() => {}}
+            onChange={() => {}}
+            onDelete={() => {}}
           />
         </div>
       </div>

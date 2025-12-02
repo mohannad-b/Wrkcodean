@@ -249,7 +249,7 @@ export async function updateAutomationVersionMetadata(params: UpdateMetadataPara
     updatePayload.intakeNotes = params.intakeNotes;
   }
   if (params.blueprintJson !== undefined) {
-    updatePayload.blueprintJson = params.blueprintJson;
+    updatePayload.blueprintJson = params.blueprintJson ?? undefined;
   }
 
   if (Object.keys(updatePayload).length === 0) {
