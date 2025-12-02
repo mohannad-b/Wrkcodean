@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uuid, uniqueIndex, index } from "drizzle-orm/pg-core";
+import type { Blueprint } from "@/lib/blueprint/types";
 
 const membershipRoleEnum = pgEnum("membership_role", [
   "client_admin",
@@ -112,7 +113,7 @@ export const automationVersions = pgTable(
       .$type<Record<string, unknown>>()
       .default(sql`'{}'::jsonb`),
     blueprintJson: jsonb("blueprint_json")
-      .$type<Record<string, unknown>>()
+      .$type<Blueprint>()
       .notNull()
       .default(
         sql`jsonb_build_object(

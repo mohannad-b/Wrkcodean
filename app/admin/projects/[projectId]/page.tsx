@@ -53,6 +53,7 @@ const STATUS_STYLES: Record<ProjectStatus, { bg: string; text: string; border: s
   Archived: { bg: "bg-gray-100", text: "text-gray-500", border: "border-gray-200" },
 };
 
+// TODO: replace with real pricing analytics once backend exposes per-run cost metrics.
 const ANALYSIS_STATS = [
   { label: "API Cost / Run", value: "$0.012" },
   { label: "Human Time / Run", value: "$1.333" },
@@ -60,12 +61,14 @@ const ANALYSIS_STATS = [
   { label: "Est. Monthly Cost (5k runs)", value: "$6726.67" },
 ];
 
+// TODO: replace with AI suggestions sourced from pricing service tiers.
 const AI_SUGGESTIONS = [
   { tier: "0 - 5,000", discount: "0%", price: "$0.0450" },
   { tier: "5,000 - 20,000", discount: "10%", price: "$0.0405" },
   { tier: "20,000 - ∞", discount: "20%", price: "$0.0360" },
 ];
 
+// TODO: replace with blueprint checklist data from automation_versions.blueprint_json.
 const CHECKLIST_ITEMS = [
   "Overview",
   "Business Requirements",
@@ -268,6 +271,134 @@ function OverviewTab({ project }: { project: AdminProject }) {
           View Full Requirements
         </Button>
       </Card>
+    </div>
+  );
+}
+
+interface ProjectHeaderProps {
+  displayProject: AdminProject;
+  projectName: string;
+  statusStyle: { bg: string; text: string; border: string };
+  canMarkLive: boolean;
+  markingLive: boolean;
+  onMarkLive: () => void;
+  latestQuote: Quote | null;
+  onMarkQuoteSigned: () => void;
+  updatingQuote: "SENT" | "SIGNED" | null;
+}
+
+function ProjectHeader({
+  displayProject,
+  projectName,
+  statusStyle,
+  canMarkLive,
+  markingLive,
+  onMarkLive,
+  latestQuote,
+  onMarkQuoteSigned,
+  updatingQuote,
+}: ProjectHeaderProps) {
+  return (
+    <header className="bg-white border-b border-gray-200 px-6 py-4 shrink-0 z-20 shadow-sm">
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-2 text-xs text-gray-500">
+          <Link href="/admin/projects" className="hover:text-[#0A0A0A] flex items-center gap-1 transition-colors">
+            <ArrowLeft size={12} /> Projects
+          </Link>
+          <span>/</span>
+          <span className="font-bold text-[#0A0A0A]">{displayProject.clientName}</span>
+          <span>/</span>
+          <span className="font-bold text-[#0A0A0A]">{projectName}</span>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <CommercialSummary displayProject={displayProject} projectName={projectName} statusStyle={statusStyle} />
+          <AdminActions
+            canMarkLive={canMarkLive}
+            markingLive={markingLive}
+            onMarkLive={onMarkLive}
+            canMarkSigned={latestQuote?.status === "SENT"}
+            onMarkSigned={onMarkQuoteSigned}
+            updatingQuote={updatingQuote}
+          />
+        </div>
+      </div>
+    </header>
+  );
+}
+
+interface CommercialSummaryProps {
+  displayProject: AdminProject;
+  projectName: string;
+  statusStyle: { bg: string; text: string; border: string };
+}
+
+function CommercialSummary({ displayProject, projectName, statusStyle }: CommercialSummaryProps) {
+  return (
+    <div className="flex items-center gap-4">
+      <Link
+        href={`/admin/clients/${displayProject.clientId}`}
+        className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200 text-gray-500 font-bold text-lg hover:bg-gray-200 transition-colors"
+        title={`View ${displayProject.clientName} client details`}
+      >
+        {displayProject.clientName.charAt(0)}
+      </Link>
+      <div>
+        <div className="flex items-center gap-3 mb-1">
+          <h1 className="text-2xl font-bold text-[#0A0A0A] leading-none">{projectName}</h1>
+          <Badge variant="outline" className="text-sm bg-blue-50 text-blue-700 border-blue-200 font-mono">
+            {displayProject.version}
+          </Badge>
+          <Badge className={cn("border font-medium px-2.5 py-0.5 rounded-full shadow-none", statusStyle.bg, statusStyle.text, statusStyle.border)}>
+            {displayProject.status}
+          </Badge>
+        </div>
+        <p className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
+          <Link href={`/admin/clients/${displayProject.clientId}`} className="hover:text-[#0A0A0A] hover:underline transition-colors">
+            Client: <span className="font-bold">{displayProject.clientName}</span>
+          </Link>
+          <span className="w-1 h-1 bg-gray-300 rounded-full" />
+          <span>
+            ETA: <span className="font-bold">{displayProject.eta}</span>
+          </span>
+          <span className="w-1 h-1 bg-gray-300 rounded-full" />
+          <span>
+            Owner: <span className="font-bold">{displayProject.owner.name}</span>
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+interface AdminActionsProps {
+  canMarkLive: boolean;
+  markingLive: boolean;
+  onMarkLive: () => void;
+  canMarkSigned: boolean;
+  onMarkSigned: () => void;
+  updatingQuote: "SENT" | "SIGNED" | null;
+}
+
+function AdminActions({ canMarkLive, markingLive, onMarkLive, canMarkSigned, onMarkSigned, updatingQuote }: AdminActionsProps) {
+  return (
+    <div className="flex gap-2 flex-wrap">
+      <Button variant="outline" asChild>
+        <Link href="/admin/projects">Back to projects</Link>
+      </Button>
+      {canMarkLive ? (
+        <Button onClick={onMarkLive} disabled={markingLive}>
+          {markingLive ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+          Mark Live
+        </Button>
+      ) : null}
+      {canMarkSigned ? (
+        <Button onClick={onMarkSigned} disabled={updatingQuote === "SIGNED"}>
+          {updatingQuote === "SIGNED" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Signature className="mr-2 h-4 w-4" />}
+          Mark Signed
+        </Button>
+      ) : null}
+      <Button className="bg-[#0A0A0A] text-white hover:bg-gray-800">Save Changes</Button>
     </div>
   );
 }
@@ -796,84 +927,17 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
 
   return (
     <div className="flex flex-col h-full bg-gray-50 text-[#1A1A1A] font-sans">
-      <header className="bg-white border-b border-gray-200 px-6 py-4 shrink-0 z-20 shadow-sm">
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center gap-2 text-xs text-gray-500">
-            <Link href="/admin/projects" className="hover:text-[#0A0A0A] flex items-center gap-1 transition-colors">
-              <ArrowLeft size={12} /> Projects
-            </Link>
-            <span>/</span>
-            <span className="font-bold text-[#0A0A0A]">{displayProject.clientName}</span>
-            <span>/</span>
-            <span className="font-bold text-[#0A0A0A]">{project.name}</span>
-          </div>
-
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-center gap-4">
-              <Link
-                href={`/admin/clients/${displayProject.clientId}`}
-                className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200 text-gray-500 font-bold text-lg hover:bg-gray-200 transition-colors"
-                title={`View ${displayProject.clientName} client details`}
-              >
-                {displayProject.clientName.charAt(0)}
-              </Link>
-              <div>
-                <div className="flex items-center gap-3 mb-1">
-                  <h1 className="text-2xl font-bold text-[#0A0A0A] leading-none">{project.name}</h1>
-                  <Badge variant="outline" className="text-sm bg-blue-50 text-blue-700 border-blue-200 font-mono">
-                    {displayProject.version}
-                  </Badge>
-                  <Badge
-                    className={cn(
-                      "border font-medium px-2.5 py-0.5 rounded-full shadow-none",
-                      statusStyle.bg,
-                      statusStyle.text,
-                      statusStyle.border
-                    )}
-                  >
-                    {displayProject.status}
-                  </Badge>
-                </div>
-                <p className="text-xs text-gray-500 flex items-center gap-2">
-                  <Link href={`/admin/clients/${displayProject.clientId}`} className="hover:text-[#0A0A0A] hover:underline transition-colors">
-                    Client: <span className="font-bold">{displayProject.clientName}</span>
-                  </Link>
-                  <span className="w-1 h-1 bg-gray-300 rounded-full" />
-                  <span>
-                    ETA: <span className="font-bold">{displayProject.eta}</span>
-                  </span>
-                  <span className="w-1 h-1 bg-gray-300 rounded-full" />
-                  <span>
-                    Owner: <span className="font-bold">{displayProject.owner.name}</span>
-                  </span>
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-2 flex-wrap">
-              <Button variant="outline" asChild>
-                <Link href="/admin/projects">Back to projects</Link>
-              </Button>
-              {project.version?.status === "BuildInProgress" ? (
-                <Button onClick={handleMarkLive} disabled={markingLive}>
-                  {markingLive ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-                  Mark Live
-                </Button>
-              ) : null}
-              {latestQuote?.status === "SENT" ? (
-                <Button onClick={() => handleQuoteStatus("SIGNED")} disabled={updatingQuote === "SIGNED"}>
-                  {updatingQuote === "SIGNED" ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Signature className="mr-2 h-4 w-4" />
-                  )}
-                  Mark Signed
-                </Button>
-              ) : null}
-              <Button className="bg-[#0A0A0A] text-white hover:bg-gray-800">Save Changes</Button>
-            </div>
-          </div>
-        </div>
-      </header>
+      <ProjectHeader
+        displayProject={displayProject}
+        projectName={project.name}
+        statusStyle={statusStyle}
+        canMarkLive={project.version?.status === "BuildInProgress"}
+        markingLive={markingLive}
+        onMarkLive={handleMarkLive}
+        latestQuote={latestQuote}
+        onMarkQuoteSigned={() => handleQuoteStatus("SIGNED")}
+        updatingQuote={updatingQuote}
+      />
 
       {error ? (
         <div className="bg-red-50 border-b border-red-200 px-6 py-2 text-sm text-red-700 flex items-center gap-2">

@@ -98,6 +98,7 @@
 - [x] Sync TypeScript types, Zod schema, DB defaults, and helper factories to the v1 contract.
 - [x] Update supporting docs (AI System Design, Backend/System Design, user flows 9/10/11/21, Realtime Collab, Project Overview) to reference the new schema and remove “phases / nodes + edges” assumptions.
 - [x] Refresh Studio blueprint summary/editor UIs and API tests to read/write `sections[]` + `steps[]`.
+- [x] Bind `automation_versions.blueprint_json` to the exported Blueprint type so Drizzle + API callers share one source of truth.
 - [ ] Extend Flow 9 ingestion and Flow 11 validation scoring to emit/require the richer metadata (goalOutcome, systems, notifications, etc.).
 
 ### 5.2 Canvas & Copilot UX
@@ -107,6 +108,7 @@
 - [ ] Improve `/automations/[id]` layout:
   - Tabs for Intake, Files, AI Draft, Blueprint, Quote.
   - Intake progress indicator.
+- [x] Extracted the Blueprint tab into `BlueprintTabLayout` (chat + red-chip sections + canvas + inspector) so Studio/editor reuse a single layout.
 - [ ] Add empty states + toasts for AI success/failure.
 - [ ] Tests: snapshot/DOM-level tests for blueprint rendering, requirement list.
 - [ ] Commit after blueprint UI stable.
@@ -134,6 +136,7 @@
   - Quote panel showing latest quote.
   - Accept/Reject buttons (confirm dialogs) calling API.
   - [x] Build Status tab renders the canonical pipeline (separate from Blueprint tab, which now only shows blueprint status).
+- [x] Refined Studio + Admin detail headers/status blocks into dedicated subcomponents (AutomationHeader, StatusStepper, ProjectHeader, AdminActions) with mock data clearly annotated.
 - [ ] Tests: acceptance flow (quote + status update + audit), permissions.
 - [ ] Commit after admin + studio quote flows work end-to-end.
 

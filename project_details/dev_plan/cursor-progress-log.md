@@ -2,6 +2,20 @@
 
 Newest updates appear first. Each entry includes the timestamp (Pacific Time) when the work was logged.
 
+## 2025-12-02 · 21:30 PT
+
+### Phase 2 – Architecture Guardrails
+- ✅ Captured the current architecture contract in `docs/architecture-co-pilot.md` (domain ownership, state machines, API/tenant guardrails, blueprint source of truth, UI rules) so future work has a concise design reference.
+- ✅ Removed legacy route surfaces (`app/(admin)/*`, empty `pages/`, unused `backend/`) to keep the App Router tree aligned with the canonical Studio/Admin paths.
+- ✅ Tightened blueprint type usage by binding `automation_versions.blueprint_json` to the exported Blueprint type, refactoring the Studio blueprint tab into a single `BlueprintTabLayout`, and reusing centralized helpers in automation metadata APIs.
+- ✅ Broke the Studio Automation detail and Admin Project detail pages into documented subcomponents (headers, metrics, status steppers, admin action bars) with clearly labeled mock data stubs; reran `npm run lint` and `npm test`.
+
+### Next Steps
+- [ ] Wire React Flow nodes/edges directly to `Blueprint.steps` plus derived `nextStepIds` so the Studio canvas stops depending on mock nodes.
+- [ ] Replace the remaining Admin mock panels (Blueprint/Tasks/Chat tabs) with live data once their endpoints are prioritized.
+
+---
+
 ## 2025-12-02 · 18:55 PT
 
 ### Phase 2 – Build vs. Blueprint State Machines

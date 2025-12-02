@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { FormEvent, MouseEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -29,7 +30,7 @@ import {
   ArrowRight,
   History,
 } from "lucide-react";
-import { useNodesState, useEdgesState, addEdge, Connection, Node } from "reactflow";
+import { useNodesState, useEdgesState, addEdge, Connection, Node, type Edge, type OnEdgesChange, type OnNodesChange } from "reactflow";
 import { StudioChat } from "@/components/automations/StudioChat";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 import { nodesV1_1, edgesV1_1 } from "@/lib/mock-blueprint";
@@ -88,6 +89,9 @@ type AutomationDetail = {
   description: string | null;
   versions: AutomationVersion[];
 };
+
+type StudioInspectorProps = Parameters<typeof StudioInspector>[0];
+type InspectorStep = StudioInspectorProps["selectedStep"];
 
 interface AutomationDetailPageProps {
   params: {
@@ -601,7 +605,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   );
 
   const selectedNode = nodes.find((node) => node.id === selectedStepId);
-  const selectedStepData = selectedNode
+  const selectedStepData: InspectorStep | null = selectedNode
     ? {
         id: selectedNode.id,
         title: selectedNode.data.title || "",
@@ -681,188 +685,32 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
 
   const overviewContent = (
     <div className="space-y-8">
-      <section className="flex flex-col md:flex-row md:items-start md:justify-between gap-6">
-        <div className="space-y-2">
-          <div className="flex items-center flex-wrap gap-3">
-            <h1 className="text-2xl font-bold text-[#0A0A0A] leading-tight">{automation.name}</h1>
-            {selectedVersion ? <StatusBadge status={selectedVersion.status} /> : null}
-            {latestQuote ? <StatusBadge status={latestQuote.status} /> : null}
-          </div>
-          <p className="text-gray-500 max-w-2xl leading-relaxed text-sm">
-            {automation.description ?? "No description provided yet. Capture the goal of this automation so stakeholders stay aligned."}
-          </p>
-          <div className="flex items-center gap-4 text-xs text-gray-400 pt-1 flex-wrap">
-            <span className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-blue-500" />
-              {selectedVersion?.versionLabel ?? "Draft"} (Current)
-            </span>
-            <span className="w-1 h-1 rounded-full bg-gray-300" />
-            <span className="flex items-center gap-1.5">
-              <Calendar size={12} />
-              Last updated {formatDateTime(selectedVersion?.updatedAt)} by <span className="text-gray-600 font-medium">Wrk Ops</span>
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-3 shrink-0 flex-wrap">
-          <Button
-            onClick={handleInviteTeam}
-            variant="outline"
-            className="h-9 text-xs font-medium bg-white hover:bg-gray-50 text-gray-700 border-gray-200"
-          >
-            <Users size={14} className="mr-2" />
-            Invite Team
-          </Button>
-          <Button
-            variant="outline"
-            className="h-9 text-xs font-medium bg-white hover:bg-gray-50 text-gray-700 border-gray-200"
-            onClick={handleRunTest}
-          >
-            <Play size={14} className="mr-2" />
-            Run Test
-          </Button>
-          <Button
-            onClick={() => setActiveTab("Blueprint")}
-            className="h-9 text-xs font-bold bg-[#0A0A0A] hover:bg-gray-900 text-white shadow-lg shadow-gray-900/10 transition-all hover:-translate-y-0.5"
-          >
-            <Edit3 size={14} className="mr-2" />
-            Edit Blueprint
-          </Button>
-        </div>
-      </section>
+      <AutomationHeader
+        name={automation.name}
+        description={automation.description}
+        versionLabel={selectedVersion?.versionLabel ?? "Draft"}
+        versionStatus={selectedVersion?.status}
+        quoteStatus={latestQuote?.status ?? null}
+        updatedAt={selectedVersion?.updatedAt ?? null}
+        onInviteTeam={handleInviteTeam}
+        onRunTest={handleRunTest}
+        onEditBlueprint={() => setActiveTab("Blueprint")}
+      />
 
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpiStats.map((kpi) => (
-          <div
-            key={kpi.label}
-            className="bg-white p-5 rounded-xl border border-gray-200 shadow-[0_2px_8px_rgba(0,0,0,0.02)] hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)] transition-all group"
-          >
-            <div className="flex items-start justify-between mb-4">
-              <div className="p-2 bg-gray-50 rounded-lg group-hover:bg-red-50 group-hover:text-[#E43632] transition-colors text-gray-400">
-                <kpi.icon size={18} />
-              </div>
-              <div
-                className={cn(
-                  "flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full",
-                  kpi.trendPositive ? "text-emerald-700 bg-emerald-50" : "text-amber-700 bg-amber-50"
-                )}
-              >
-                {kpi.trendPositive ? (
-                  <ArrowUpRight size={10} />
-                ) : (
-                  <ArrowRight size={10} className="rotate-45" />
-                )}
-                {kpi.trend}
-              </div>
-            </div>
-            <div>
-              <h3 className="text-2xl font-bold text-[#0A0A0A] mb-1 tracking-tight">{kpi.value}</h3>
-              <p className="text-xs text-gray-500 font-medium">{kpi.label}</p>
-              <p className="text-[10px] text-gray-400 mt-0.5">{kpi.subtext}</p>
-            </div>
-          </div>
-        ))}
-      </section>
+      <OverviewMetrics stats={kpiStats} />
 
       <section className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-6">
-          <Card className="shadow-sm border-gray-100">
-            <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <CardTitle>Commercial status</CardTitle>
-                <CardDescription>Track pricing progress and quote state.</CardDescription>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                {selectedVersion ? <StatusBadge status={selectedVersion.status} /> : null}
-                {latestQuote ? <StatusBadge status={latestQuote.status} /> : <Badge variant="outline">No quote</Badge>}
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {latestQuote ? (
-                <div className="rounded-lg border border-gray-100 bg-white p-4">
-                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">Quote</p>
-                      <p className="text-xs text-gray-500">Status: {latestQuote.status}</p>
-                    </div>
-                    <StatusBadge status={latestQuote.status} />
-                  </div>
-                  <div className="mt-3 grid gap-3 md:grid-cols-3 text-sm text-gray-600">
-                    <div>
-                      <p className="text-xs uppercase text-gray-400 mb-1">Setup fee</p>
-                      <p className="font-medium text-gray-900">{currency(latestQuote.setupFee)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase text-gray-400 mb-1">Unit price</p>
-                      <p className="font-medium text-gray-900">{perUnit(latestQuote.unitPrice)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase text-gray-400 mb-1">Estimated volume</p>
-                      <p className="font-medium text-gray-900">{latestQuote.estimatedVolume ?? "—"}</p>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">
-                  No quote generated yet. Request pricing to send this automation to the commercial team.
-                </div>
-              )}
-
-              {showSendForPricing ? (
-                <Button type="button" onClick={handleSendForPricing} disabled={transitioning}>
-                  {transitioning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                  Request pricing
-                </Button>
-              ) : awaitingApproval ? (
-                <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                  Quote sent—awaiting approval.
-                </div>
-              ) : buildUnderway ? (
-                <div className="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                  Signed – Build underway.
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-sm border-gray-100">
-            <CardHeader className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-bold text-[#0A0A0A]">
-                <History size={16} className="text-gray-400" />
-                Recent activity
-              </div>
-              <Button variant="ghost" size="sm" className="h-auto p-0 text-xs text-gray-400 hover:text-[#E43632]">
-                View all
-              </Button>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-8 relative before:absolute before:left-2.5 before:top-2 before:h-full before:w-px before:bg-gray-100">
-                {activityEntries.map((entry) => (
-                  <div key={entry.title} className="relative pl-8">
-                    <div
-                      className={cn(
-                        "absolute left-0 top-0 w-5 h-5 rounded-full flex items-center justify-center border-2 border-white ring-1 ring-gray-100 shadow-sm",
-                        entry.iconBg,
-                        entry.iconColor
-                      )}
-                    >
-                      <entry.icon size={10} />
-                    </div>
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <p className="text-sm font-bold text-gray-900">{entry.title}</p>
-                      <span className="text-[10px] text-gray-400">{entry.time}</span>
-                    </div>
-                    <p className="text-xs text-gray-600 leading-relaxed">{entry.description}</p>
-                    <div className="flex items-center gap-1.5 mt-2">
-                      <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-[8px] font-bold text-gray-500">
-                        {entry.user.charAt(0)}
-                      </div>
-                      <span className="text-[10px] text-gray-500 font-medium">{entry.user}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+          <StatusStepper
+            selectedVersion={selectedVersion}
+            latestQuote={latestQuote}
+            showSendForPricing={Boolean(showSendForPricing)}
+            awaitingApproval={awaitingApproval}
+            buildUnderway={buildUnderway}
+            onSendForPricing={handleSendForPricing}
+            transitioning={transitioning}
+          />
+          <RecentActivity entries={activityEntries} onViewAll={() => handleMockAction("View all activity")} />
         </div>
 
         <div className="space-y-6">
@@ -912,67 +760,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             </CardContent>
           </Card>
 
-          <div className="bg-amber-50/60 rounded-xl border border-amber-100 shadow-sm overflow-hidden">
-            <div className="px-5 py-4 flex items-center gap-2 border-b border-amber-100/50">
-              <AlertTriangle size={16} className="text-amber-600" />
-              <span className="text-sm font-bold text-amber-900">Needs attention</span>
-            </div>
-            <div className="p-5 space-y-3">
-              {MOCK_ATTENTION_ITEMS.map((item) => (
-                <div key={item.id} className="rounded-lg bg-white/80 border border-amber-100 p-3 space-y-2">
-                  <p className="text-xs font-bold text-amber-900">{item.title}</p>
-                  <p className="text-xs text-amber-800">{item.description}</p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-full border border-amber-200 text-amber-700 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300 shadow-sm h-8 text-xs font-bold"
-                    onClick={() => handleMockAction(item.title)}
-                  >
-                    {item.actionLabel}
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <Card className="shadow-sm border-gray-100">
-            <CardHeader className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles size={16} className="text-[#E43632]" />
-                <span className="text-sm font-bold text-[#0A0A0A]">Copilot suggestions</span>
-              </div>
-              <Badge variant="secondary" className="bg-gray-100 text-gray-600 text-[10px]">
-                2 New
-              </Badge>
-            </CardHeader>
-            <CardContent className="divide-y divide-gray-50 p-0">
-              {MOCK_SUGGESTIONS.map((suggestion) => (
-                <button
-                  key={suggestion.title}
-                  type="button"
-                  className="w-full text-left p-4 hover:bg-gray-50 transition-colors cursor-pointer group"
-                >
-                  <div className="flex items-start justify-between mb-1">
-                    <h4 className="text-xs font-bold text-gray-700 group-hover:text-[#0A0A0A]">{suggestion.title}</h4>
-                    <ArrowRight
-                      size={12}
-                      className="text-gray-300 group-hover:text-[#E43632] transition-colors opacity-0 group-hover:opacity-100"
-                    />
-                  </div>
-                  <p className="text-[11px] text-gray-500 leading-relaxed">{suggestion.description}</p>
-                </button>
-              ))}
-            </CardContent>
-            <div className="p-3 bg-gray-50 border-t border-gray-100">
-              <Button
-                variant="ghost"
-                className="w-full text-xs text-gray-500 hover:text-[#E43632] h-auto py-1"
-                onClick={() => handleMockAction("Ask Copilot")}
-              >
-                Ask Copilot for more...
-              </Button>
-            </div>
-          </Card>
+          <NeedsAttentionCard items={MOCK_ATTENTION_ITEMS} onAction={handleMockAction} />
+          <CopilotSuggestions
+            suggestions={MOCK_SUGGESTIONS}
+            onSelectSuggestion={(title) => handleMockAction(title)}
+            onAskForMore={() => handleMockAction("Ask Copilot")}
+          />
         </div>
       </section>
 
@@ -1019,77 +812,28 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     </div>
   );
 
-  const blueprintBuilder = (
-    <div className="rounded-3xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-      <div className="h-14 border-b border-gray-100 bg-white flex items-center px-6 overflow-x-auto no-scrollbar">
-        <div className="flex items-center gap-6 min-w-max">
-          {BLUEPRINT_CHECKLIST.map((item) => (
-            <div key={item.id} className="flex items-center gap-2">
-              <div
-                className={cn(
-                  "w-5 h-5 rounded-full border flex items-center justify-center text-[10px] font-bold transition-colors",
-                  item.completed ? "bg-[#E43632] border-[#E43632] text-white" : "border-gray-300 text-gray-400 bg-white"
-                )}
-              >
-                {item.completed ? <CheckCircle2 size={12} /> : item.id.charAt(0).toUpperCase()}
-              </div>
-              <span
-                className={cn(
-                  "text-xs font-semibold tracking-wide",
-                  item.completed ? "text-[#0A0A0A]" : "text-gray-400"
-                )}
-              >
-                {item.label}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="flex h-[640px] bg-gray-50">
-        <div className="w-[320px] shrink-0 border-r border-gray-200 bg-[#F9FAFB]">
-          <StudioChat isContributorMode={isContributorMode} onAiCommand={handleAiCommand} />
-        </div>
-        <div className="flex-1 relative h-full">
-          <StudioCanvas
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={handleConnectNodes}
-            onNodeClick={handleNodeClick}
-            isSynthesizing={isSynthesizing}
-          />
-          <div className="absolute bottom-4 left-4 z-30">
-            <button
-              onClick={() => setIsContributorMode((prev) => !prev)}
-              className="text-[10px] text-gray-500 hover:text-[#E43632] bg-white/70 backdrop-blur px-3 py-1.5 rounded-full border border-gray-200 shadow-sm transition-colors"
-            >
-              {isContributorMode ? "Switch to builder view" : "Toggle contributor view"}
-            </button>
-          </div>
-        </div>
-        <div
-          className={cn(
-            "h-full bg-white border-l border-gray-200 shadow-xl shadow-gray-200/40 transition-all duration-300 ease-out",
-            selectedStepId ? "w-[360px] opacity-100" : "w-0 opacity-0 pointer-events-none"
-          )}
-        >
-          <StudioInspector
-            selectedStep={selectedStepData}
-            onClose={() => setSelectedStepId(null)}
-            onConnect={() =>
-              toast({ title: "Connect a system", description: "System picker will plug in here soon." })
-            }
-            onAddException={() => setShowExceptionModal(true)}
-          />
-        </div>
-      </div>
-    </div>
-  );
-
   const blueprintContent = (
     <div className="space-y-6">
-      {blueprintBuilder}
+      <BlueprintTabLayout
+        checklist={BLUEPRINT_CHECKLIST}
+        isContributorMode={isContributorMode}
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnectNodes={handleConnectNodes}
+        onNodeClick={handleNodeClick}
+        isSynthesizing={isSynthesizing}
+        onToggleContributorMode={() => setIsContributorMode((prev) => !prev)}
+        selectedStepId={selectedStepId}
+        selectedStep={selectedStepData}
+        onCloseInspector={() => setSelectedStepId(null)}
+        onRequestAddException={() => setShowExceptionModal(true)}
+        onConnectSystem={() =>
+          toast({ title: "Connect a system", description: "System picker will plug in here soon." })
+        }
+        onAiCommand={handleAiCommand}
+      />
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="shadow-sm border-gray-100">
           <CardHeader>
@@ -1222,6 +966,416 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           setShowExceptionModal(false);
         }}
       />
+    </div>
+  );
+}
+
+interface AutomationHeaderProps {
+  name: string;
+  description: string | null;
+  versionLabel: string;
+  versionStatus?: AutomationLifecycleStatus;
+  quoteStatus?: string | null;
+  updatedAt: string | null;
+  onInviteTeam: () => void;
+  onRunTest: () => void;
+  onEditBlueprint: () => void;
+}
+
+function AutomationHeader({
+  name,
+  description,
+  versionLabel,
+  versionStatus,
+  quoteStatus,
+  updatedAt,
+  onInviteTeam,
+  onRunTest,
+  onEditBlueprint,
+}: AutomationHeaderProps) {
+  return (
+    <section className="flex flex-col md:flex-row md:items-start md:justify-between gap-6">
+      <div className="space-y-2">
+        <div className="flex items-center flex-wrap gap-3">
+          <h1 className="text-2xl font-bold text-[#0A0A0A] leading-tight">{name}</h1>
+          {versionStatus ? <StatusBadge status={versionStatus} /> : null}
+          {quoteStatus ? <StatusBadge status={quoteStatus} /> : null}
+        </div>
+        <p className="text-gray-500 max-w-2xl leading-relaxed text-sm">
+          {description ?? "No description provided yet. Capture the goal of this automation so stakeholders stay aligned."}
+        </p>
+        <div className="flex items-center gap-4 text-xs text-gray-400 pt-1 flex-wrap">
+          <span className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-blue-500" />
+            {versionLabel} (Current)
+          </span>
+          <span className="w-1 h-1 rounded-full bg-gray-300" />
+          <span className="flex items-center gap-1.5">
+            <Calendar size={12} />
+            Last updated {formatDateTime(updatedAt)} by <span className="text-gray-600 font-medium">Wrk Ops</span>
+          </span>
+        </div>
+      </div>
+      <div className="flex items-center gap-3 shrink-0 flex-wrap">
+        <Button onClick={onInviteTeam} variant="outline" className="h-9 text-xs font-medium bg-white hover:bg-gray-50 text-gray-700 border-gray-200">
+          <Users size={14} className="mr-2" />
+          Invite Team
+        </Button>
+        <Button variant="outline" className="h-9 text-xs font-medium bg-white hover:bg-gray-50 text-gray-700 border-gray-200" onClick={onRunTest}>
+          <Play size={14} className="mr-2" />
+          Run Test
+        </Button>
+        <Button
+          onClick={onEditBlueprint}
+          className="h-9 text-xs font-bold bg-[#0A0A0A] hover:bg-gray-900 text-white shadow-lg shadow-gray-900/10 transition-all hover:-translate-y-0.5"
+        >
+          <Edit3 size={14} className="mr-2" />
+          Edit Blueprint
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+interface StatusStepperProps {
+  selectedVersion: AutomationVersion | null;
+  latestQuote: QuoteSummary | null;
+  showSendForPricing: boolean;
+  awaitingApproval: boolean;
+  buildUnderway: boolean;
+  onSendForPricing: () => void;
+  transitioning: boolean;
+}
+
+function StatusStepper({
+  selectedVersion,
+  latestQuote,
+  showSendForPricing,
+  awaitingApproval,
+  buildUnderway,
+  onSendForPricing,
+  transitioning,
+}: StatusStepperProps) {
+  return (
+    <Card className="shadow-sm border-gray-100">
+      <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <CardTitle>Commercial status</CardTitle>
+          <CardDescription>Track pricing progress and quote state.</CardDescription>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {selectedVersion ? <StatusBadge status={selectedVersion.status} /> : null}
+          {latestQuote ? <StatusBadge status={latestQuote.status} /> : <Badge variant="outline">No quote</Badge>}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {latestQuote ? (
+          <div className="rounded-lg border border-gray-100 bg-white p-4">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Quote</p>
+                <p className="text-xs text-gray-500">Status: {latestQuote.status}</p>
+              </div>
+              <StatusBadge status={latestQuote.status} />
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-3 text-sm text-gray-600">
+              <div>
+                <p className="text-xs uppercase text-gray-400 mb-1">Setup fee</p>
+                <p className="font-medium text-gray-900">{currency(latestQuote.setupFee)}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase text-gray-400 mb-1">Unit price</p>
+                <p className="font-medium text-gray-900">{perUnit(latestQuote.unitPrice)}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase text-gray-400 mb-1">Estimated volume</p>
+                <p className="font-medium text-gray-900">{latestQuote.estimatedVolume ?? "—"}</p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">
+            No quote generated yet. Request pricing to send this automation to the commercial team.
+          </div>
+        )}
+
+        {showSendForPricing ? (
+          <Button type="button" onClick={onSendForPricing} disabled={transitioning}>
+            {transitioning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+            Request pricing
+          </Button>
+        ) : awaitingApproval ? (
+          <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">Quote sent—awaiting approval.</div>
+        ) : buildUnderway ? (
+          <div className="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">Signed – Build underway.</div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+interface OverviewMetricsProps {
+  stats: KpiStat[];
+}
+
+function OverviewMetrics({ stats }: OverviewMetricsProps) {
+  return (
+    <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {stats.map((kpi) => (
+        <div
+          key={kpi.label}
+          className="bg-white p-5 rounded-xl border border-gray-200 shadow-[0_2px_8px_rgba(0,0,0,0.02)] hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)] transition-all group"
+        >
+          <div className="flex items-start justify-between mb-4">
+            <div className="p-2 bg-gray-50 rounded-lg group-hover:bg-red-50 group-hover:text-[#E43632] transition-colors text-gray-400">
+              <kpi.icon size={18} />
+            </div>
+            <div
+              className={cn(
+                "flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full",
+                kpi.trendPositive ? "text-emerald-700 bg-emerald-50" : "text-amber-700 bg-amber-50"
+              )}
+            >
+              {kpi.trendPositive ? <ArrowUpRight size={10} /> : <ArrowRight size={10} className="rotate-45" />}
+              {kpi.trend}
+            </div>
+          </div>
+          <div>
+            <h3 className="text-2xl font-bold text-[#0A0A0A] mb-1 tracking-tight">{kpi.value}</h3>
+            <p className="text-xs text-gray-500 font-medium">{kpi.label}</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">{kpi.subtext}</p>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+interface RecentActivityProps {
+  entries: ActivityEntry[];
+  onViewAll?: () => void;
+}
+
+function RecentActivity({ entries, onViewAll }: RecentActivityProps) {
+  return (
+    <Card className="shadow-sm border-gray-100">
+      <CardHeader className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-bold text-[#0A0A0A]">
+          <History size={16} className="text-gray-400" />
+          Recent activity
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-auto p-0 text-xs text-gray-400 hover:text-[#E43632]"
+          onClick={onViewAll}
+        >
+          View all
+        </Button>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-8 relative before:absolute before:left-2.5 before:top-2 before:h-full before:w-px before:bg-gray-100">
+          {entries.map((entry) => (
+            <div key={entry.title} className="relative pl-8">
+              <div
+                className={cn(
+                  "absolute left-0 top-0 w-5 h-5 rounded-full flex items-center justify-center border-2 border-white ring-1 ring-gray-100 shadow-sm",
+                  entry.iconBg,
+                  entry.iconColor
+                )}
+              >
+                <entry.icon size={10} />
+              </div>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <p className="text-sm font-bold text-gray-900">{entry.title}</p>
+                <span className="text-[10px] text-gray-400">{entry.time}</span>
+              </div>
+              <p className="text-xs text-gray-600 leading-relaxed">{entry.description}</p>
+              <div className="flex items-center gap-1.5 mt-2">
+                <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-[8px] font-bold text-gray-500">
+                  {entry.user.charAt(0)}
+                </div>
+                <span className="text-[10px] text-gray-500 font-medium">{entry.user}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface NeedsAttentionCardProps {
+  items: typeof MOCK_ATTENTION_ITEMS;
+  onAction: (label: string) => void;
+}
+
+function NeedsAttentionCard({ items, onAction }: NeedsAttentionCardProps) {
+  return (
+    <div className="bg-amber-50/60 rounded-xl border border-amber-100 shadow-sm overflow-hidden">
+      <div className="px-5 py-4 flex items-center gap-2 border-b border-amber-100/50">
+        <AlertTriangle size={16} className="text-amber-600" />
+        <span className="text-sm font-bold text-amber-900">Needs attention</span>
+      </div>
+      <div className="p-5 space-y-3">
+        {items.map((item) => (
+          <div key={item.id} className="rounded-lg bg-white/80 border border-amber-100 p-3 space-y-2">
+            <p className="text-xs font-bold text-amber-900">{item.title}</p>
+            <p className="text-xs text-amber-800">{item.description}</p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full border border-amber-200 text-amber-700 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300 shadow-sm h-8 text-xs font-bold"
+              onClick={() => onAction(item.title)}
+            >
+              {item.actionLabel}
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface CopilotSuggestionsProps {
+  suggestions: typeof MOCK_SUGGESTIONS;
+  onSelectSuggestion: (title: string) => void;
+  onAskForMore: () => void;
+}
+
+function CopilotSuggestions({ suggestions, onSelectSuggestion, onAskForMore }: CopilotSuggestionsProps) {
+  return (
+    <Card className="shadow-sm border-gray-100">
+      <CardHeader className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Sparkles size={16} className="text-[#E43632]" />
+          <span className="text-sm font-bold text-[#0A0A0A]">Copilot suggestions</span>
+        </div>
+        <Badge variant="secondary" className="bg-gray-100 text-gray-600 text-[10px]">
+          {suggestions.length} New
+        </Badge>
+      </CardHeader>
+      <CardContent className="divide-y divide-gray-50 p-0">
+        {suggestions.map((suggestion) => (
+          <button
+            key={suggestion.title}
+            type="button"
+            className="w-full text-left p-4 hover:bg-gray-50 transition-colors cursor-pointer group"
+            onClick={() => onSelectSuggestion(suggestion.title)}
+          >
+            <div className="flex items-start justify-between mb-1">
+              <h4 className="text-xs font-bold text-gray-700 group-hover:text-[#0A0A0A]">{suggestion.title}</h4>
+              <ArrowRight
+                size={12}
+                className="text-gray-300 group-hover:text-[#E43632] transition-colors opacity-0 group-hover:opacity-100"
+              />
+            </div>
+            <p className="text-[11px] text-gray-500 leading-relaxed">{suggestion.description}</p>
+          </button>
+        ))}
+      </CardContent>
+      <div className="p-3 bg-gray-50 border-t border-gray-100">
+        <Button variant="ghost" className="w-full text-xs text-gray-500 hover:text-[#E43632] h-auto py-1" onClick={onAskForMore}>
+          Ask Copilot for more...
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+interface BlueprintTabLayoutProps {
+  checklist: typeof BLUEPRINT_CHECKLIST;
+  isContributorMode: boolean;
+  nodes: Node[];
+  edges: Edge[];
+  onNodesChange: OnNodesChange;
+  onEdgesChange: OnEdgesChange;
+  onConnectNodes: (connection: Connection) => void;
+  onNodeClick: (event: MouseEvent, node: Node) => void;
+  isSynthesizing: boolean;
+  onToggleContributorMode: () => void;
+  selectedStepId: string | null;
+  selectedStep: InspectorStep | null;
+  onCloseInspector: () => void;
+  onRequestAddException: () => void;
+  onConnectSystem: () => void;
+  onAiCommand: (command: string) => void;
+}
+
+function BlueprintTabLayout({
+  checklist,
+  isContributorMode,
+  nodes,
+  edges,
+  onNodesChange,
+  onEdgesChange,
+  onConnectNodes,
+  onNodeClick,
+  isSynthesizing,
+  onToggleContributorMode,
+  selectedStepId,
+  selectedStep,
+  onCloseInspector,
+  onRequestAddException,
+  onConnectSystem,
+  onAiCommand,
+}: BlueprintTabLayoutProps) {
+  return (
+    <div className="rounded-3xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+      <div className="h-14 border-b border-gray-100 bg-white flex items-center px-6 overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-6 min-w-max">
+          {checklist.map((item) => (
+            <div key={item.id} className="flex items-center gap-2">
+              <div
+                className={cn(
+                  "w-5 h-5 rounded-full border flex items-center justify-center text-[10px] font-bold transition-colors",
+                  item.completed ? "bg-[#E43632] border-[#E43632] text-white" : "border-gray-300 text-gray-400 bg-white"
+                )}
+              >
+                {item.completed ? <CheckCircle2 size={12} /> : item.id.charAt(0).toUpperCase()}
+              </div>
+              <span className={cn("text-xs font-semibold tracking-wide", item.completed ? "text-[#0A0A0A]" : "text-gray-400")}>{item.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex h-[640px] bg-gray-50">
+        <div className="w-[320px] shrink-0 border-r border-gray-200 bg-[#F9FAFB]">
+          <StudioChat isContributorMode={isContributorMode} onAiCommand={onAiCommand} />
+        </div>
+        <div className="flex-1 relative h-full">
+          <StudioCanvas
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnectNodes}
+            onNodeClick={onNodeClick}
+            isSynthesizing={isSynthesizing}
+          />
+          <div className="absolute bottom-4 left-4 z-30">
+            <button
+              onClick={onToggleContributorMode}
+              className="text-[10px] text-gray-500 hover:text-[#E43632] bg-white/70 backdrop-blur px-3 py-1.5 rounded-full border border-gray-200 shadow-sm transition-colors"
+            >
+              {isContributorMode ? "Switch to builder view" : "Toggle contributor view"}
+            </button>
+          </div>
+        </div>
+        <div
+          className={cn(
+            "h-full bg-white border-l border-gray-200 shadow-xl shadow-gray-200/40 transition-all duration-300 ease-out",
+            selectedStepId ? "w-[360px] opacity-100" : "w-0 opacity-0 pointer-events-none"
+          )}
+        >
+          <StudioInspector
+            selectedStep={selectedStep}
+            onClose={onCloseInspector}
+            onConnect={onConnectSystem}
+            onAddException={onRequestAddException}
+          />
+        </div>
+      </div>
     </div>
   );
 }
