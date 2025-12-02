@@ -1113,7 +1113,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         <Card className="shadow-sm border-gray-100">
           <CardHeader>
             <CardTitle>Blueprint editor</CardTitle>
-            <CardDescription>Update status, goals, phases, and steps in one place.</CardDescription>
+            <CardDescription>Update status, sections, and canvas steps in one place.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {blueprintError ? (

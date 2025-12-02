@@ -30,22 +30,33 @@ vi.mock("@/lib/audit/log", () => ({
   logAudit: logAuditMock,
 }));
 
+const sections = [
+  { id: "sec-1", key: "business_requirements", title: "Business Requirements", content: "Outline the workflow" },
+  { id: "sec-2", key: "business_objectives", title: "Business Objectives", content: "Reduce manual work" },
+  { id: "sec-3", key: "success_criteria", title: "Success Criteria", content: "SLA < 24h" },
+  { id: "sec-4", key: "systems", title: "Systems", content: "Email, Slack" },
+  { id: "sec-5", key: "data_needs", title: "Data Needs", content: "Contact info" },
+  { id: "sec-6", key: "exceptions", title: "Exceptions", content: "High value deals" },
+  { id: "sec-7", key: "human_touchpoints", title: "Human Touchpoints", content: "Sales review" },
+  { id: "sec-8", key: "flow_complete", title: "Flow Complete", content: "CRM updated" },
+];
+
 const validBlueprint = {
   version: 1,
   status: "Draft",
-  goals: ["Launch automation"],
-  phases: [
+  summary: "Draft workflow for onboarding new leads.",
+  sections,
+  steps: [
     {
-      id: "phase-1",
-      name: "Phase 1",
-      order: 0,
-      steps: [
-        {
-          id: "step-1",
-          title: "Outline requirements",
-          type: "Intake",
-        },
-      ],
+      id: "step-1",
+      type: "Trigger",
+      name: "Lead submitted",
+      summary: "Capture inbound leads from the public form.",
+      goalOutcome: "Kick off the workflow when a new submission arrives.",
+      responsibility: "Automated",
+      systemsInvolved: ["HubSpot"],
+      notifications: ["Slack"],
+      nextStepIds: [],
     },
   ],
   createdAt: new Date().toISOString(),

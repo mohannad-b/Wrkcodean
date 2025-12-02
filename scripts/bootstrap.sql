@@ -91,7 +91,25 @@ CREATE TABLE automation_versions (
   summary text,
   intake_notes text,
   requirements_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-  blueprint_json jsonb NOT NULL DEFAULT '{"nodes":[],"edges":[]}'::jsonb,
+  blueprint_json jsonb NOT NULL DEFAULT jsonb_build_object(
+    'version', 1,
+    'status', 'Draft',
+    'summary', '',
+    'sections',
+      jsonb_build_array(
+        jsonb_build_object('id', gen_random_uuid(), 'key', 'business_requirements', 'title', 'Business Requirements', 'content', ''),
+        jsonb_build_object('id', gen_random_uuid(), 'key', 'business_objectives', 'title', 'Business Objectives', 'content', ''),
+        jsonb_build_object('id', gen_random_uuid(), 'key', 'success_criteria', 'title', 'Success Criteria', 'content', ''),
+        jsonb_build_object('id', gen_random_uuid(), 'key', 'systems', 'title', 'Systems', 'content', ''),
+        jsonb_build_object('id', gen_random_uuid(), 'key', 'data_needs', 'title', 'Data Needs', 'content', ''),
+        jsonb_build_object('id', gen_random_uuid(), 'key', 'exceptions', 'title', 'Exceptions', 'content', ''),
+        jsonb_build_object('id', gen_random_uuid(), 'key', 'human_touchpoints', 'title', 'Human Touchpoints', 'content', ''),
+        jsonb_build_object('id', gen_random_uuid(), 'key', 'flow_complete', 'title', 'Flow Complete', 'content', '')
+      ),
+    'steps', jsonb_build_array(),
+    'createdAt', now(),
+    'updatedAt', now()
+  ),
   intake_progress integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),

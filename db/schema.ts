@@ -112,7 +112,27 @@ export const automationVersions = pgTable(
     blueprintJson: jsonb("blueprint_json")
       .$type<Record<string, unknown>>()
       .notNull()
-      .default(sql`'{"nodes":[],"edges":[]}'::jsonb`),
+      .default(
+        sql`jsonb_build_object(
+          'version', 1,
+          'status', 'Draft',
+          'summary', '',
+          'sections',
+            jsonb_build_array(
+              jsonb_build_object('id', gen_random_uuid(), 'key', 'business_requirements', 'title', 'Business Requirements', 'content', ''),
+              jsonb_build_object('id', gen_random_uuid(), 'key', 'business_objectives', 'title', 'Business Objectives', 'content', ''),
+              jsonb_build_object('id', gen_random_uuid(), 'key', 'success_criteria', 'title', 'Success Criteria', 'content', ''),
+              jsonb_build_object('id', gen_random_uuid(), 'key', 'systems', 'title', 'Systems', 'content', ''),
+              jsonb_build_object('id', gen_random_uuid(), 'key', 'data_needs', 'title', 'Data Needs', 'content', ''),
+              jsonb_build_object('id', gen_random_uuid(), 'key', 'exceptions', 'title', 'Exceptions', 'content', ''),
+              jsonb_build_object('id', gen_random_uuid(), 'key', 'human_touchpoints', 'title', 'Human Touchpoints', 'content', ''),
+              jsonb_build_object('id', gen_random_uuid(), 'key', 'flow_complete', 'title', 'Flow Complete', 'content', '')
+            ),
+          'steps', jsonb_build_array(),
+          'createdAt', now(),
+          'updatedAt', now()
+        )`
+      ),
     intakeProgress: integer("intake_progress").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
