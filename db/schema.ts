@@ -23,6 +23,7 @@ const quoteStatusEnum = pgEnum("quote_status", ["draft", "sent", "accepted", "re
 const fileStatusEnum = pgEnum("file_status", ["pending", "uploaded", "failed"]);
 const aiJobStatusEnum = pgEnum("ai_job_status", ["pending", "processing", "succeeded", "failed"]);
 const messageTypeEnum = pgEnum("message_type", ["client", "ops"]);
+const copilotMessageRoleEnum = pgEnum("copilot_message_role", ["user", "assistant", "system"]);
 const taskStatusEnum = pgEnum("task_status", ["pending", "in_progress", "complete"]);
 const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high", "critical"]);
 const notificationPreferenceEnum = pgEnum("notification_preference", ["all", "mentions", "none"]);
@@ -250,6 +251,27 @@ export const quotes = pgTable(
   })
 );
 
+export const copilotMessages = pgTable(
+  "copilot_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    automationVersionId: uuid("automation_version_id")
+      .notNull()
+      .references(() => automationVersions.id, { onDelete: "cascade" }),
+    role: copilotMessageRoleEnum("role").notNull(),
+    content: text("content").notNull(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantIdx: index("copilot_messages_tenant_idx").on(table.tenantId),
+    versionIdx: index("copilot_messages_version_idx").on(table.automationVersionId),
+  })
+);
+
 export const messages = pgTable(
   "messages",
   {
@@ -326,9 +348,11 @@ export type AutomationVersionFile = typeof automationVersionFiles.$inferSelect;
 export type AiJob = typeof aiJobs.$inferSelect;
 export type Project = typeof projects.$inferSelect;
 export type Quote = typeof quotes.$inferSelect;
+export type CopilotMessage = typeof copilotMessages.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Task = typeof tasks.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type MembershipRole = typeof membershipRoleEnum.enumValues[number];
 export type NotificationPreference = typeof notificationPreferenceEnum.enumValues[number];
+export type CopilotMessageRole = typeof copilotMessageRoleEnum.enumValues[number];
 

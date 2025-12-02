@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Send, Mic, Upload, AppWindow, MonitorPlay, Sparkles, AlertCircle, Paperclip } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -9,14 +9,19 @@ import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
+type ChatRole = "user" | "assistant" | "system";
+
 export interface CopilotMessage {
   id: string;
-  role: "user" | "ai";
+  role: ChatRole;
   content: string;
-  timestamp: string;
+  createdAt: string;
+  optimistic?: boolean;
+  transient?: boolean;
 }
 
 interface StudioChatProps {
+  automationVersionId: string | null;
   blueprintEmpty: boolean;
   onDraftBlueprint: (messages: CopilotMessage[]) => Promise<void>;
   isDrafting: boolean;
@@ -27,12 +32,24 @@ interface StudioChatProps {
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
   id: "ai-initial",
-  role: "ai",
+  role: "assistant",
   content: "Tell me about the workflow you want to automate. I'll draft the blueprint once you're ready.",
-  timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+  createdAt: new Date().toISOString(),
+  transient: true,
 };
 
+type ApiCopilotMessage = {
+  id: string;
+  role: ChatRole;
+  content: string;
+  createdAt: string;
+};
+
+const formatTimestamp = (iso: string) =>
+  new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+
 export function StudioChat({
+  automationVersionId,
   blueprintEmpty,
   onDraftBlueprint,
   isDrafting,
@@ -43,12 +60,68 @@ export function StudioChat({
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
   const [input, setInput] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
+  const [threadError, setThreadError] = useState<string | null>(null);
+  const [isLoadingThread, setIsLoadingThread] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const prevBlueprintEmptyRef = useRef<boolean>(blueprintEmpty);
+
+  const dropTransientMessages = useCallback(
+    (list: CopilotMessage[]) => list.filter((message) => !message.transient),
+    []
+  );
+
+  const mapApiMessage = useCallback(
+    (message: ApiCopilotMessage): CopilotMessage => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      createdAt: message.createdAt,
+    }),
+    []
+  );
 
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (!automationVersionId) {
+      setMessages([INITIAL_AI_MESSAGE]);
+      setThreadError("Select an automation version to start chatting.");
+      setIsLoadingThread(false);
+      return;
+    }
+
+    let cancelled = false;
+    const loadMessages = async () => {
+      setIsLoadingThread(true);
+      setThreadError(null);
+      try {
+        const response = await fetch(`/api/automation-versions/${automationVersionId}/messages`, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("Failed to load messages");
+        }
+        const data: { messages: ApiCopilotMessage[] } = await response.json();
+        if (cancelled) return;
+        const mapped = data.messages.map(mapApiMessage);
+        setMessages(mapped.length > 0 ? mapped : [INITIAL_AI_MESSAGE]);
+      } catch {
+        if (cancelled) return;
+        setThreadError("Unable to load conversation.");
+        setMessages([INITIAL_AI_MESSAGE]);
+      } finally {
+        if (!cancelled) {
+          setIsLoadingThread(false);
+        }
+      }
+    };
+
+    loadMessages();
+    return () => {
+      cancelled = true;
+    };
+  }, [automationVersionId, mapApiMessage]);
 
   useEffect(() => {
     if (prevBlueprintEmptyRef.current && !blueprintEmpty) {
@@ -56,42 +129,75 @@ export function StudioChat({
         ...prev,
         {
           id: `ai-${Date.now()}`,
-          role: "ai",
+          role: "assistant",
           content: "Draft created. Review the canvas and click any step to refine details.",
-          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          createdAt: new Date().toISOString(),
+          transient: true,
         },
       ]);
     }
     prevBlueprintEmptyRef.current = blueprintEmpty;
   }, [blueprintEmpty]);
 
-  useEffect(() => {
-    onConversationChange?.(messages);
-  }, [messages, onConversationChange]);
+  const durableMessages = useMemo(() => dropTransientMessages(messages), [messages, dropTransientMessages]);
 
-  const hasUserMessage = useMemo(() => messages.some((message) => message.role === "user"), [messages]);
-  const canDraft = blueprintEmpty && hasUserMessage && !isDrafting && !disabled;
+  useEffect(() => {
+    onConversationChange?.(durableMessages);
+  }, [durableMessages, onConversationChange]);
+
+  const hasUserMessage = useMemo(() => durableMessages.some((message) => message.role === "user"), [durableMessages]);
+  const canDraft = blueprintEmpty && hasUserMessage && !isDrafting && !disabled && Boolean(automationVersionId);
   const helperMessage = blueprintEmpty
     ? "Share the workflow, systems, and exception cases so the draft is accurate."
     : "Blueprint synced with Copilot. Keep refining via chat or the inspector.";
 
-  const handleSend = () => {
+  const handleSend = useCallback(async () => {
     const content = input.trim();
     if (!content) return;
+    if (!automationVersionId) {
+      setLocalError("Select an automation version to chat.");
+      return;
+    }
+    if (disabled || isSending) {
+      return;
+    }
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: Date.now().toString(),
-        role: "user",
-        content,
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      },
-    ]);
+    const optimisticMessage: CopilotMessage = {
+      id: `temp-${Date.now()}`,
+      role: "user",
+      content,
+      createdAt: new Date().toISOString(),
+      optimistic: true,
+    };
 
+    setMessages((prev) => [...dropTransientMessages(prev), optimisticMessage]);
     setInput("");
     setLocalError(null);
-  };
+    setIsSending(true);
+
+    try {
+      const response = await fetch(`/api/automation-versions/${automationVersionId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, role: "user" }),
+      });
+      if (!response.ok) {
+        throw new Error("Failed to send message");
+      }
+      const data: { message: ApiCopilotMessage } = await response.json();
+      setMessages((prev) => {
+        const withoutOptimistic = dropTransientMessages(prev).filter((msg) => msg.id !== optimisticMessage.id);
+        return [...withoutOptimistic, mapApiMessage(data.message)].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        );
+      });
+    } catch {
+      setMessages((prev) => prev.filter((msg) => msg.id !== optimisticMessage.id));
+      setLocalError("Failed to send message. Try again.");
+    } finally {
+      setIsSending(false);
+    }
+  }, [automationVersionId, disabled, dropTransientMessages, input, isSending, mapApiMessage]);
 
   const handleDraft = async () => {
     if (!hasUserMessage) {
@@ -99,7 +205,7 @@ export function StudioChat({
       return;
     }
     setLocalError(null);
-    await onDraftBlueprint(messages);
+    await onDraftBlueprint(durableMessages);
   };
 
   return (
@@ -134,10 +240,16 @@ export function StudioChat({
               {isDrafting ? "Drafting Blueprint…" : "Draft Blueprint with Copilot"}
             </Button>
           )}
-          {(localError || lastError) && (
+          {(localError || lastError || threadError) && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 flex items-center gap-1">
               <AlertCircle size={12} />
-              {localError || lastError}
+              {localError || lastError || threadError}
+            </div>
+          )}
+          {isLoadingThread && (
+            <div className="text-[11px] text-gray-400 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-gray-300 animate-pulse" />
+              Loading conversation…
             </div>
           )}
         </div>
@@ -153,7 +265,7 @@ export function StudioChat({
               key={msg.id}
               className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
             >
-              {msg.role === "ai" && (
+              {msg.role === "assistant" && (
                 <div className="w-8 h-8 rounded-full bg-white border border-gray-200 flex items-center justify-center text-[#E43632] shadow-sm shrink-0 mt-0.5">
                   <Sparkles size={14} />
                 </div>
@@ -176,7 +288,9 @@ export function StudioChat({
                   <p className="whitespace-pre-wrap">{msg.content}</p>
                 </div>
 
-                <span className="text-[10px] text-gray-400 px-1 block">{msg.timestamp}</span>
+                <span className="text-[10px] text-gray-400 px-1 block">
+                  {msg.optimistic ? "Sending…" : formatTimestamp(msg.createdAt)}
+                </span>
               </div>
             </motion.div>
           ))}
@@ -201,11 +315,11 @@ export function StudioChat({
               blueprintEmpty ? "Describe the workflow, systems, and exceptions..." : "Capture refinements or clarifications..."
             }
             className="w-full bg-white text-[#0A0A0A] placeholder:text-gray-400 text-sm rounded-xl py-3 pl-10 pr-12 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#E43632]/10 focus:border-[#E43632] transition-all shadow-sm hover:border-gray-300"
-            disabled={disabled}
+            disabled={disabled || !automationVersionId || isSending}
           />
           <button
             onClick={() => handleSend()}
-            disabled={!input.trim() || disabled}
+            disabled={!input.trim() || disabled || isSending || !automationVersionId}
             className="absolute right-1.5 p-2 bg-[#E43632] text-white rounded-lg hover:bg-[#C12E2A] transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Send size={14} />

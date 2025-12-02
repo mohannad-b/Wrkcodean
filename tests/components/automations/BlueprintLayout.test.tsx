@@ -9,7 +9,12 @@ describe("Blueprint workspace shell", () => {
     render(
       <div className="flex w-full h-[600px]">
         <div className="w-[320px] border">
-          <StudioChat blueprintEmpty onDraftBlueprint={async () => {}} isDrafting={false} />
+          <StudioChat
+            automationVersionId={null}
+            blueprintEmpty
+            onDraftBlueprint={async () => {}}
+            isDrafting={false}
+          />
         </div>
         <div className="flex-1 border">
           <StudioCanvas nodes={[]} edges={[]} />

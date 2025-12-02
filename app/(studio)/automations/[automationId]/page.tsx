@@ -960,6 +960,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         <div className="flex flex-col gap-6 lg:flex-row min-h-[620px]">
           <div className="w-full lg:w-[320px] border border-gray-200 rounded-2xl overflow-hidden bg-white flex">
             <StudioChat
+              automationVersionId={selectedVersion?.id ?? null}
               blueprintEmpty={blueprintIsEmpty}
               onDraftBlueprint={handleDraftBlueprint}
               isDrafting={draftingBlueprint}

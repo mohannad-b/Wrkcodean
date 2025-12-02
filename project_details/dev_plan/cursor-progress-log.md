@@ -2,6 +2,32 @@
 
 Newest updates appear first. Each entry includes the timestamp (Pacific Time) when the work was logged.
 
+## 2025-12-03 · 00:45 PT
+
+### Phase 1 – Copilot Chat Foundations
+- ✅ Delivered Track B2 by extending `copilot_messages` with explicit `role` enum + timestamps, enforcing ordered queries, and updating `StudioChat` to render user/assistant/system shells with canonical formatting.
+- ✅ Hit Track B3 by surfacing inline error banners + retry affordances: optimistic sends now roll back on failure, show “Failed to send” messaging, and allow an immediate resend once connectivity recovers.
+- ✅ Added Vitest coverage for the new behavior (simulated fetch in `StudioChat.test.tsx` plus API happy-path tests) and manually verified the Studio chat persists/reloads threads after refresh.
+
+### Next Steps
+- [ ] Start B4 refactor to split `StudioChat` into MessageList/Bubble/Composer primitives now that the UX is stable.
+- [ ] Kick off B5/B6 once OpenAI creds are confirmed so assistant replies can be generated automatically.
+
+---
+
+## 2025-12-02 · 23:50 PT
+
+### Phase 1 – Copilot Chat Foundations
+- ✅ Delivered Track B1 by introducing the `copilot_messages` enum/table + migration, REST GET/POST endpoint, and wiring `StudioChat` to hydrate + persist per `automation_version`.
+- ✅ Added optimistic UI flows with loading/error states plus Vitest coverage for the messages route and the chat component render path.
+- ✅ Ensured tenant/RBAC enforcement mirrors other automation_version APIs so chat threads are isolated per workspace.
+
+### Next Steps
+- [ ] Tackle B2 (role-aware ordering) and B3 (retry UX) now that persisted threads exist.
+- [ ] Apply the migration in shared environments and backfill any seeded data with starter messages for demos.
+
+---
+
 ## 2025-12-02 · 21:30 PT
 
 ### Phase 2 – Architecture Guardrails

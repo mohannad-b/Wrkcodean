@@ -325,7 +325,183 @@ Follow this order unless the repo state dictates a small tweak.
 4. Add Drizzle/Prisma + base migrations for:
    - `tenants`, `users`, `automation`, `automation_versions`, `projects`, `quotes`, `messages`, `tasks`, `audit_logs`, `ai_jobs`, and file metadata table.
 
-### Phase 1 – Automations & Projects (Backend + Minimal UI)
+### Phase 1 – Studio Shell & Copilot (Micro Steps)
+
+These micro-steps define the current P0/P1 roadmap. Each item is a checklist entry so we can track completion explicitly.
+
+#### Track A – Studio Shell & Data Plumbing (P0–P1)
+- [ ] **A1. Lock in “original” Blueprint layout (UI revert & cleanup)**  
+  Goal: ensure the Blueprint page visually matches the original design (no Cursor improvisation).  
+  Scope: `app/(studio)/automations/[automationId]/page.tsx`, `components/automations/*` layout files.  
+  Type: Frontend.  
+  Depends on: _None_ (already kicked off).
+- [ ] **A2. Canonical blueprint state hook**  
+  Goal: centralize reading/writing `automation_versions.blueprintJson` via a reusable hook/state container (e.g., `useBlueprint(automationVersionId)`).  
+  Scope: new hook under `lib/blueprint/` or `hooks/`, plus wiring through page, canvas, inspector.  
+  Type: Frontend.  
+  Depends on: A1.
+- [ ] **A3. Auto-save UX polish (no behavior change)**  
+  Goal: keep existing PATCH logic but add saving/saved/error indicators without touching data contracts.  
+  Scope: automation detail page + any auto-save components.  
+  Type: Frontend.  
+  Depends on: A2.
+
+#### Track B – Copilot Chat (P1)
+_Parallelization notes_: B1/B2 must ship first. B3, B4, B7 can run in parallel afterward. B5/B6 can branch once B1/B2 exist.
+- [x] **B1. Persisted chat thread (no AI)**  
+  Goal: add `copilot_messages` table, GET/POST API, and wire `StudioChat` to load/save per automation_version.  
+  Scope: DB/migration (`db/schema.ts` + migration), API (`app/api/automation-versions/[id]/messages/route.ts`), UI (`components/automations/StudioChat.tsx`).  
+  Type: Both.  
+  Depends on: A2 (automationVersionId/auth context).
+- [x] **B2. Basic message model & roles**  
+  Goal: support `role` (`user`, `assistant`, `system`), timestamps, and deterministic ordering.  
+  Scope: extend schema + API ordering; ensure `StudioChat` groups per role.  
+  Type: Both.  
+  Depends on: B1.
+- [x] **B3. Chat error + retry UX**  
+  Goal: failed POSTs show clear error with retry affordance (no silent failures).  
+  Scope: `StudioChat.tsx`.  
+  Type: Frontend.  
+  Depends on: B1.
+- [ ] **B4. Extract chat UI primitives**  
+  Goal: split `StudioChat` into `MessageList`, `MessageBubble`, `Composer` without behavior change.  
+  Scope: `components/automations/StudioChat*`.  
+  Type: Frontend.  
+  Depends on: B1.
+- [ ] **B5. AI “reply” endpoint (non-streaming)**  
+  Goal: POST `/automation-versions/[id]/copilot/reply` that pulls recent messages, calls OpenAI, persists assistant message, returns it.  
+  Scope: `app/api/automation-versions/[id]/copilot/reply/route.ts`, `lib/ai/openai-client.ts`, `lib/ai/prompts.ts`.  
+  Type: Backend.  
+  Depends on: B1, B2.
+- [ ] **B6. Wire StudioChat to AI reply**  
+  Goal: after user send, hit `copilot/reply` and append assistant message with simple spinner (no streaming).  
+  Scope: `StudioChat.tsx`.  
+  Type: Frontend.  
+  Depends on: B5.
+- [ ] **B7. Token guardrails (simple)**  
+  Goal: enforce max character length per message, emit “too long” error, log total token estimate.  
+  Scope: `StudioChat.tsx` + `copilot/reply` route.  
+  Type: Both.  
+  Depends on: B6.
+
+#### Track C – Canvas & Blueprint Nodes (P1–P2)
+- [ ] **C1. BlueprintNode component + nodeTypes registration**  
+  Goal: replace generic `CustomNode` with Blueprint-aware node reflecting step type.  
+  Scope: `components/blueprint/BlueprintNode.tsx`, `StudioCanvas.tsx`.  
+  Type: Frontend.  
+  Depends on: A2.
+- [ ] **C2. Node selection → Inspector wiring**  
+  Goal: clicking a node selects the correct `BlueprintStep` and updates inspector with single source of truth.  
+  Scope: `StudioCanvas.tsx`, `StudioInspector.tsx`, blueprint state hook.  
+  Type: Frontend.  
+  Depends on: C1.
+- [ ] **C3. Persist node positions**  
+  Goal: store XY positions in blueprint JSON and reload them (no drift on refresh).  
+  Scope: `lib/blueprint/canvas-utils.ts`, blueprint types, PATCH logic.  
+  Type: Both.  
+  Depends on: C2.
+- [ ] **C4. Canvas empty-state polish**  
+  Goal: improved “No steps yet” CTA hooking into Add Step / Copilot triggers.  
+  Scope: `StudioCanvas.tsx`.  
+  Type: Frontend.  
+  Depends on: C2.
+- [ ] **C5. Edge editing rules**  
+  Goal: prevent invalid connections (self-loops, banned types) and surface errors on drop.  
+  Scope: `StudioCanvas.tsx`, `canvas-utils.ts`.  
+  Type: Frontend.  
+  Depends on: C1.
+
+#### Track D – Sections & Validation (P1–P2)
+- [ ] **D1. Canonical sections model binding**  
+  Goal: ensure each of the 8 sections maps to explicit blueprint JSON fields + editor binding.  
+  Scope: `lib/blueprint/types.ts`, section editor UI.  
+  Type: Both.  
+  Depends on: A2.
+- [ ] **D2. SectionChip component**  
+  Goal: extract reusable chip with props (label, active, completion, error count).  
+  Scope: `components/blueprint/SectionChip.tsx` + header usage.  
+  Type: Frontend.  
+  Depends on: D1.
+- [ ] **D3. Section validation module**  
+  Goal: `lib/blueprint/section-validation.ts` returning per-section status + issues.  
+  Scope: new module + possible updates to `completion.ts`.  
+  Type: Logic.  
+  Depends on: D1.
+- [ ] **D4. Chips wired to validation**  
+  Goal: chip completion state + tooltips derive from validation output.  
+  Scope: Blueprint header component.  
+  Type: Frontend.  
+  Depends on: D3.
+- [ ] **D5. Ready-for-Pricing disabled state (50% rule)**  
+  Goal: button visible but disabled until minimum section completion, with tooltip explaining why.  
+  Scope: Blueprint header actions.  
+  Type: Frontend.  
+  Depends on: D3, D4.
+
+#### Track E – Inspector & Step Editing (P2)
+- [ ] **E1. Inspector field mapping cleanup**  
+  Goal: map every inspector field directly to `BlueprintStep` props, remove duplicate local state.  
+  Scope: `StudioInspector.tsx`, blueprint types.  
+  Type: Frontend.  
+  Depends on: C2.
+- [ ] **E2. System tags + integrations editor**  
+  Goal: mini-UI for selecting systems/integrations; persist on step.  
+  Scope: `StudioInspector.tsx`, possibly `SystemTagPicker`.  
+  Type: Frontend.  
+  Depends on: E1.
+- [ ] **E3. Notifications & human touchpoints controls**  
+  Goal: checkboxes/toggles for notifications and human review requirements.  
+  Scope: `StudioInspector.tsx`, blueprint types.  
+  Type: Frontend.  
+  Depends on: E1.
+- [ ] **E4. Delete step modal**  
+  Goal: replace `confirm()` with design-system modal and ensure edges/positions cleanup.  
+  Scope: `StudioInspector.tsx`, shared modal, canvas helpers.  
+  Type: Frontend.  
+  Depends on: C3.
+
+#### Track F – Lifecycle & Actions (P2–P3)
+- [ ] **F1. “Ready for Pricing” action wiring**  
+  Goal: when enabled, button calls status transition API (Draft → Needs Pricing).  
+  Scope: Blueprint header actions + relevant API route.  
+  Type: Both.  
+  Depends on: D5.
+- [ ] **F2. Toasts + activity log hook**  
+  Goal: show success/failure toasts and log action to activity feed/audit log.  
+  Scope: Blueprint header, `lib/audit/log.ts`.  
+  Type: Both.  
+  Depends on: F1.
+
+#### Track G – Tests & Docs (Cross-cutting, P1–P3)
+- [ ] **G1. Messages API tests**  
+  Goal: Vitest coverage for create/list, tenant isolation, bad auth.  
+  Scope: `tests/app/api/automation-versions/messages-route.test.ts`.  
+  Type: Backend.  
+  Depends on: B1/B2.
+- [ ] **G2. Copilot reply route tests**  
+  Goal: ensure reply route reads last N messages, calls OpenAI client, writes assistant message.  
+  Scope: `tests/app/api/automation-versions/copilot-reply-route.test.ts`.  
+  Type: Backend.  
+  Depends on: B5.
+- [ ] **G3. Canvas conversion tests**  
+  Goal: verify blueprintJson ↔ nodes/edges round-trip.  
+  Scope: `tests/lib/blueprint/canvas-utils.test.ts`.  
+  Type: Logic.  
+  Depends on: C3.
+- [ ] **G4. Section validation tests**  
+  Goal: confirm section-validation returns correct statuses for sample blueprints.  
+  Scope: `tests/lib/blueprint/section-validation.test.ts`.  
+  Type: Logic.  
+  Depends on: D3.
+- [ ] **G5. Basic Studio render test**  
+  Goal: render `/automations/[id]` with mocked automation_version and assert chat/canvas/inspector/chips mount.  
+  Scope: `tests/app/(studio)/automations-page.test.tsx`.  
+  Type: Frontend.  
+  Depends on: A2, C2, D2.
+
+---
+
+### Phase 2 – Automations & Projects (Backend + Minimal UI)
 
 1. Implement CRUD + list endpoints for:
    - `/v1/automations` & `/v1/automations/:id`
@@ -334,7 +510,7 @@ Follow this order unless the repo state dictates a small tweak.
 2. Implement status transition endpoints and state machine checks for the simplified statuses.
 3. Wire `/automations` and `/automations/[id]` pages to real APIs (no more mock data).
 
-### Phase 2 – Quotes & Admin Pipeline
+### Phase 3 – Quotes & Admin Pipeline
 
 1. Implement `quotes` table + APIs:
    - Create/update draft
@@ -347,7 +523,7 @@ Follow this order unless the repo state dictates a small tweak.
    - View quote
    - Accept quote button → updates quote + statuses
 
-### Phase 3 – AI Ingestion (Text + PDFs + Screenshots)
+### Phase 4 – AI Ingestion (Text + PDFs + Screenshots)
 
 1. Implement `ai_jobs` and a worker loop.
 2. Implement file upload handling for PDFs + images (screenshots):
@@ -361,7 +537,7 @@ Follow this order unless the repo state dictates a small tweak.
    - Poll status
    - Update canvas
 
-### Phase 4 – Messages, Tasks, Audit & Hardening
+### Phase 5 – Messages, Tasks, Audit & Hardening
 
 1. Implement `messages` backend + UI with simple polling.
 2. Implement `tasks` backend + UI for build checklist.

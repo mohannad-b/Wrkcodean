@@ -8,6 +8,13 @@
       "when": 1764700000000,
       "tag": "add_user_profile_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "0001",
+      "when": 1764700001000,
+      "tag": "add_copilot_messages",
+      "breakpoints": true
     }
   ]
 }
