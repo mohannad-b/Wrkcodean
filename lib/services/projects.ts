@@ -93,19 +93,19 @@ export async function getProjectDetail(tenantId: string, projectId: string) {
       .where(and(eq(automationVersions.id, project.automationVersionId), eq(automationVersions.tenantId, tenantId)))
       .limit(1));
 
-  const quotesForProject =
-    project.automationVersionId &&
-    (await db
-      .select()
-      .from(quotes)
-      .where(and(eq(quotes.automationVersionId, project.automationVersionId), eq(quotes.tenantId, tenantId)))
-      .orderBy(desc(quotes.createdAt)));
+  const quotesForProject = project.automationVersionId
+    ? await db
+        .select()
+        .from(quotes)
+        .where(and(eq(quotes.automationVersionId, project.automationVersionId), eq(quotes.tenantId, tenantId)))
+        .orderBy(desc(quotes.createdAt))
+    : [];
 
   return {
     project,
     automation: automationRow && automationRow[0] ? automationRow[0] : null,
     version: versionRow && versionRow[0] ? versionRow[0] : null,
-    quotes: quotesForProject ?? [],
+    quotes: quotesForProject,
   };
 }
 

@@ -28,7 +28,7 @@ export function parseQuoteStatus(input: unknown): QuoteLifecycleStatus | null {
   return (QUOTE_STATUSES as readonly string[]).includes(normalized) ? (normalized as QuoteLifecycleStatus) : null;
 }
 
-export function toDbQuoteStatus(status: QuoteLifecycleStatus): string {
+export function toDbQuoteStatus(status: QuoteLifecycleStatus): "draft" | "sent" | "accepted" | "rejected" {
   return DB_STATUS_MAP[status];
 }
 

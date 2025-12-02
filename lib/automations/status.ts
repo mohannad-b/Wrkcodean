@@ -75,7 +75,7 @@ export function parseAutomationStatus(input: unknown): AutomationLifecycleStatus
   return legacyMatch ?? null;
 }
 
-export function toDbAutomationStatus(status: AutomationLifecycleStatus): string {
+export function toDbAutomationStatus(status: AutomationLifecycleStatus): AutomationLifecycleStatus {
   return status;
 }
 

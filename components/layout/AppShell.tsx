@@ -3,13 +3,14 @@ import { Sidebar } from "./Sidebar";
 import { UserProfileProvider } from "@/components/providers/user-profile-provider";
 import { getSession } from "@/lib/auth/session";
 import { getTenantScopedProfile } from "@/lib/user/profile";
+import { UserProfile } from "@/lib/user/profile-shared";
 
 interface AppShellProps {
   children: ReactNode;
 }
 
 interface AppShellClientProps extends AppShellProps {
-  initialProfile: unknown;
+  initialProfile: UserProfile | null;
   initialLastUpdatedAt: string | null;
 }
 

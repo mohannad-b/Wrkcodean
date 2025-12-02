@@ -23,6 +23,7 @@ import type { Blueprint, BlueprintSectionKey, BlueprintStep } from "@/lib/bluepr
 import { BLUEPRINT_SECTION_TITLES } from "@/lib/blueprint/types";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
 import { isBlueprintEffectivelyEmpty, sortSections } from "@/lib/blueprint/utils";
+import { blueprintToNodes, blueprintToEdges, addConnection, removeConnection } from "@/lib/blueprint/canvas-utils";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
@@ -119,9 +120,6 @@ const KPI_CONFIG: KpiStatConfig[] = [
   { label: "Total Executions", subtext: "last 30 days", icon: Zap },
   { label: "Success Rate", subtext: "last 30 days", icon: CheckCircle2 },
 ];
-
-const FLOW_NODE_X_GAP = 360;
-const FLOW_NODE_Y_GAP = 210;
 
 const generateStepId = () => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -251,7 +249,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [chatError, setChatError] = useState<string | null>(null);
   const [hasSelectedStep, setHasSelectedStep] = useState(false);
   const [showStepHelper, setShowStepHelper] = useState(false);
-  const [sectionCelebrations, setSectionCelebrations] = useState<Record<BlueprintSectionKey, number>>({});
+  const [sectionCelebrations, setSectionCelebrations] = useState<Partial<Record<BlueprintSectionKey, number>>>({});
   const completionRef = useRef<ReturnType<typeof getBlueprintCompletionState> | null>(null);
 
   const confirmDiscardBlueprintChanges = useCallback(() => {
@@ -625,33 +623,24 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       if (!connection.source || !connection.target || connection.source === connection.target) {
         return;
       }
-      applyBlueprintUpdate((current) => ({
-        ...current,
-        steps: current.steps.map((step) =>
-          step.id === connection.source && !step.nextStepIds.includes(connection.target as string)
-            ? { ...step, nextStepIds: [...step.nextStepIds, connection.target as string] }
-            : step
-        ),
-      }));
+      applyBlueprintUpdate((current) => addConnection(current, connection));
     },
     [applyBlueprintUpdate]
   );
 
   const handleEdgesChange = useCallback(
     (changes: EdgeChange[]) => {
-      if (!changes.some((change) => change.type === "remove")) {
+      const removeChanges = changes.filter((change) => change.type === "remove");
+      if (removeChanges.length === 0) {
         return;
       }
-      applyBlueprintUpdate((current) => ({
-        ...current,
-        steps: current.steps.map((step) => {
-          const updatedNext = step.nextStepIds.filter((targetId) => {
-            const edgeId = `edge-${step.id}-${targetId}`;
-            return !changes.some((change) => change.type === "remove" && change.id === edgeId);
-          });
-          return updatedNext.length === step.nextStepIds.length ? step : { ...step, nextStepIds: updatedNext };
-        }),
-      }));
+      applyBlueprintUpdate((current) => {
+        let updated = current;
+        for (const change of removeChanges) {
+          updated = removeConnection(updated, change.id);
+        }
+        return updated;
+      });
     },
     [applyBlueprintUpdate]
   );
@@ -665,41 +654,8 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const orderedSections = useMemo(() => (blueprint ? sortSections(blueprint.sections) : []), [blueprint]);
   const activeSection = orderedSections.find((section) => section.key === selectedSectionKey) ?? orderedSections[0] ?? null;
   const completion = useMemo(() => getBlueprintCompletionState(blueprint), [blueprint]);
-  const flowNodes = useMemo<Node[]>(() => {
-    if (!blueprint) {
-      return [];
-    }
-    return blueprint.steps.map((step, index) => ({
-      id: step.id,
-      type: "custom",
-      position: {
-        x: (index % 2) * FLOW_NODE_X_GAP,
-        y: Math.floor(index / 2) * FLOW_NODE_Y_GAP,
-      },
-      data: {
-        title: step.name,
-        description: step.summary || "Click to add a summary",
-        type: step.type,
-        status: blueprint.status === "Draft" ? "ai-suggested" : "complete",
-      },
-    }));
-  }, [blueprint]);
-  const flowEdges = useMemo<Edge[]>(() => {
-    if (!blueprint) {
-      return [];
-    }
-    const idSet = new Set(blueprint.steps.map((step) => step.id));
-    return blueprint.steps.flatMap((step) =>
-      step.nextStepIds
-        .filter((targetId) => idSet.has(targetId))
-        .map((targetId) => ({
-          id: `edge-${step.id}-${targetId}`,
-          source: step.id,
-          target: targetId,
-          type: "default",
-        }))
-    );
-  }, [blueprint]);
+  const flowNodes = useMemo<Node[]>(() => blueprintToNodes(blueprint), [blueprint]);
+  const flowEdges = useMemo<Edge[]>(() => blueprintToEdges(blueprint), [blueprint]);
   const selectedStep = useMemo(
     () => (blueprint ? blueprint.steps.find((step) => step.id === selectedStepId) ?? null : null),
     [blueprint, selectedStepId]
@@ -743,6 +699,19 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setShowStepHelper(true);
     }
   }, [blueprint, hasSelectedStep]);
+
+  // Auto-save blueprint with 2-second debounce
+  useEffect(() => {
+    if (!isBlueprintDirty || !blueprint) {
+      return undefined;
+    }
+
+    const timeoutId = setTimeout(() => {
+      handleSaveBlueprint();
+    }, 2000);
+
+    return () => clearTimeout(timeoutId);
+  }, [blueprint, isBlueprintDirty, handleSaveBlueprint]);
 
   if (loading && !automation) {
     return (

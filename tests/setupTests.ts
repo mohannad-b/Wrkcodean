@@ -8,7 +8,6 @@ beforeAll(() => {
     Element.prototype.scrollIntoView = () => {};
   }
   if (typeof window.ResizeObserver === "undefined") {
-    // @ts-expect-error jsdom polyfill for ResizeObserver
     window.ResizeObserver = class ResizeObserver {
       observe() {}
       unobserve() {}
