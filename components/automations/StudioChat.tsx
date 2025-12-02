@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Mic, Upload, AppWindow, MonitorPlay, Sparkles, AlertCircle, Paperclip } from "lucide-react";
+import { Send, Mic, Upload, AppWindow, MonitorPlay, Sparkles, AlertCircle, Paperclip, Loader2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { currentUser } from "@/lib/mock-automations";
@@ -61,8 +61,10 @@ export function StudioChat({
   const [input, setInput] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
   const [threadError, setThreadError] = useState<string | null>(null);
+  const [assistantError, setAssistantError] = useState<string | null>(null);
   const [isLoadingThread, setIsLoadingThread] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isAwaitingReply, setIsAwaitingReply] = useState(false);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const prevBlueprintEmptyRef = useRef<boolean>(blueprintEmpty);
 
@@ -89,6 +91,7 @@ export function StudioChat({
     if (!automationVersionId) {
       setMessages([INITIAL_AI_MESSAGE]);
       setThreadError("Select an automation version to start chatting.");
+      setAssistantError(null);
       setIsLoadingThread(false);
       return;
     }
@@ -97,6 +100,7 @@ export function StudioChat({
     const loadMessages = async () => {
       setIsLoadingThread(true);
       setThreadError(null);
+      setAssistantError(null);
       try {
         const response = await fetch(`/api/automation-versions/${automationVersionId}/messages`, { cache: "no-store" });
         if (!response.ok) {
@@ -151,6 +155,32 @@ export function StudioChat({
     ? "Share the workflow, systems, and exception cases so the draft is accurate."
     : "Blueprint synced with Copilot. Keep refining via chat or the inspector.";
 
+  const requestAssistantReply = useCallback(async () => {
+    if (!automationVersionId) {
+      return;
+    }
+    setIsAwaitingReply(true);
+    setAssistantError(null);
+    try {
+      const response = await fetch(`/api/automation-versions/${automationVersionId}/copilot/reply`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error("Failed to fetch assistant reply");
+      }
+      const data: { message: ApiCopilotMessage } = await response.json();
+      setMessages((prev) => {
+        const trimmed = dropTransientMessages(prev);
+        const next = [...trimmed, mapApiMessage(data.message)];
+        return next.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      });
+    } catch {
+      setAssistantError("Copilot reply failed. Try again.");
+    } finally {
+      setIsAwaitingReply(false);
+    }
+  }, [automationVersionId, dropTransientMessages, mapApiMessage]);
+
   const handleSend = useCallback(async () => {
     const content = input.trim();
     if (!content) return;
@@ -158,7 +188,7 @@ export function StudioChat({
       setLocalError("Select an automation version to chat.");
       return;
     }
-    if (disabled || isSending) {
+    if (disabled || isSending || isAwaitingReply) {
       return;
     }
 
@@ -191,13 +221,14 @@ export function StudioChat({
           (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
         );
       });
+      void requestAssistantReply();
     } catch {
       setMessages((prev) => prev.filter((msg) => msg.id !== optimisticMessage.id));
       setLocalError("Failed to send message. Try again.");
     } finally {
       setIsSending(false);
     }
-  }, [automationVersionId, disabled, dropTransientMessages, input, isSending, mapApiMessage]);
+  }, [automationVersionId, disabled, dropTransientMessages, input, isAwaitingReply, isSending, mapApiMessage, requestAssistantReply]);
 
   const handleDraft = async () => {
     if (!hasUserMessage) {
@@ -235,15 +266,21 @@ export function StudioChat({
 
         <div className="flex flex-col gap-2">
           <div className="text-[11px] text-gray-500">{helperMessage}</div>
+          {isAwaitingReply && (
+            <div className="text-[11px] text-gray-500 flex items-center gap-2">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Copilot is thinking…
+            </div>
+          )}
           {blueprintEmpty && (
             <Button size="sm" onClick={handleDraft} disabled={!canDraft} className="justify-center text-xs font-semibold">
               {isDrafting ? "Drafting Blueprint…" : "Draft Blueprint with Copilot"}
             </Button>
           )}
-          {(localError || lastError || threadError) && (
+          {(localError || lastError || threadError || assistantError) && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 flex items-center gap-1">
               <AlertCircle size={12} />
-              {localError || lastError || threadError}
+              {localError || lastError || threadError || assistantError}
             </div>
           )}
           {isLoadingThread && (
@@ -315,11 +352,11 @@ export function StudioChat({
               blueprintEmpty ? "Describe the workflow, systems, and exceptions..." : "Capture refinements or clarifications..."
             }
             className="w-full bg-white text-[#0A0A0A] placeholder:text-gray-400 text-sm rounded-xl py-3 pl-10 pr-12 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#E43632]/10 focus:border-[#E43632] transition-all shadow-sm hover:border-gray-300"
-            disabled={disabled || !automationVersionId || isSending}
+            disabled={disabled || !automationVersionId || isSending || isAwaitingReply}
           />
           <button
             onClick={() => handleSend()}
-            disabled={!input.trim() || disabled || isSending || !automationVersionId}
+            disabled={!input.trim() || disabled || isSending || !automationVersionId || isAwaitingReply}
             className="absolute right-1.5 p-2 bg-[#E43632] text-white rounded-lg hover:bg-[#C12E2A] transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Send size={14} />

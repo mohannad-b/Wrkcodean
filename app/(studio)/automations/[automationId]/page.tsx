@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { Loader2, RefreshCw, Send, StickyNote, Plus, Users, Play, Edit3, Sparkles, AlertTriangle, Calendar, Clock, DollarSign, Zap, CheckCircle2, ArrowUpRight, ArrowRight, History } from "lucide-react";
+import { Loader2, RefreshCw, Send, StickyNote, Plus, Users, Play, Edit3, Sparkles, AlertTriangle, Calendar, Clock, DollarSign, Zap, CheckCircle2, ArrowUpRight, ArrowRight, History, Activity } from "lucide-react";
 import type { Connection, Node, Edge, EdgeChange } from "reactflow";
 import { StudioChat, type CopilotMessage } from "@/components/automations/StudioChat";
 import { StudioInspector } from "@/components/automations/StudioInspector";
@@ -22,14 +22,13 @@ import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import type { Blueprint, BlueprintSectionKey, BlueprintStep } from "@/lib/blueprint/types";
 import { BLUEPRINT_SECTION_TITLES } from "@/lib/blueprint/types";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
-import { isBlueprintEffectivelyEmpty, sortSections } from "@/lib/blueprint/utils";
+import { isBlueprintEffectivelyEmpty } from "@/lib/blueprint/utils";
 import { blueprintToNodes, blueprintToEdges, addConnection, removeConnection } from "@/lib/blueprint/canvas-utils";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
 import { VersionSelector, type VersionOption } from "@/components/ui/VersionSelector";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 
 const StudioCanvas = dynamic(
   () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
@@ -100,6 +99,15 @@ const formatDateTime = (value?: string | null) => {
 
 const AUTOMATION_TABS = ["Overview", "Build Status", "Blueprint", "Test", "Activity", "Contributors", "Settings"] as const;
 
+const BASE_CHECKLIST = [
+  { id: "overview", label: "Overview", sectionKey: null as BlueprintSectionKey | null },
+  ...Object.entries(BLUEPRINT_SECTION_TITLES).map(([key, title]) => ({
+    id: key,
+    label: title,
+    sectionKey: key as BlueprintSectionKey,
+  })),
+] as const;
+
 const cloneBlueprint = (blueprint: Blueprint | null) => (blueprint ? (JSON.parse(JSON.stringify(blueprint)) as Blueprint) : null);
 
 type KpiStatConfig = {
@@ -120,13 +128,6 @@ const KPI_CONFIG: KpiStatConfig[] = [
   { label: "Total Executions", subtext: "last 30 days", icon: Zap },
   { label: "Success Rate", subtext: "last 30 days", icon: CheckCircle2 },
 ];
-
-const generateStepId = () => {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `step-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-};
 
 const computeSeed = (value: string) => {
   let hash = 0;
@@ -236,7 +237,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [blueprint, setBlueprint] = useState<Blueprint | null>(null);
   const [blueprintError, setBlueprintError] = useState<string | null>(null);
   const [isBlueprintDirty, setBlueprintDirty] = useState(false);
-  const [selectedSectionKey, setSelectedSectionKey] = useState<BlueprintSectionKey>("business_requirements");
   const [loading, setLoading] = useState(true);
   const [savingNotes, setSavingNotes] = useState(false);
   const [savingBlueprint, setSavingBlueprint] = useState(false);
@@ -249,7 +249,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [chatError, setChatError] = useState<string | null>(null);
   const [hasSelectedStep, setHasSelectedStep] = useState(false);
   const [showStepHelper, setShowStepHelper] = useState(false);
-  const [sectionCelebrations, setSectionCelebrations] = useState<Partial<Record<BlueprintSectionKey, number>>>({});
+  const [isContributorMode, setIsContributorMode] = useState(false);
   const completionRef = useRef<ReturnType<typeof getBlueprintCompletionState> | null>(null);
 
   const confirmDiscardBlueprintChanges = useCallback(() => {
@@ -291,7 +291,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setBlueprint(blueprint);
       setBlueprintError(null);
       setBlueprintDirty(false);
-      setSelectedSectionKey("business_requirements");
       setSelectedStepId(null);
       setHasSelectedStep(false);
       setShowStepHelper(false);
@@ -320,7 +319,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setBlueprint(nextBlueprint);
       setBlueprintError(null);
       setBlueprintDirty(false);
-      setSelectedSectionKey("business_requirements");
       setSelectedStepId(null);
       setHasSelectedStep(false);
       setShowStepHelper(false);
@@ -338,7 +336,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     setBlueprint(nextBlueprint);
     setBlueprintDirty(false);
     setBlueprintError(null);
-    setSelectedSectionKey("business_requirements");
     setSelectedStepId(null);
     setHasSelectedStep(false);
     setShowStepHelper(false);
@@ -481,7 +478,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         const nextBlueprint = cloneBlueprint(data.blueprint);
         setBlueprint(nextBlueprint);
         setBlueprintDirty(false);
-        setSelectedSectionKey("business_requirements");
         setSelectedStepId(null);
         setHasSelectedStep(false);
         setShowStepHelper(true);
@@ -502,42 +498,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [selectedVersion, notes, fetchAutomation, toast]
   );
 
-  const validateReadyForPricing = useCallback((candidate: Blueprint) => {
-    const issues: string[] = [];
-    if (!candidate.summary.trim()) {
-      issues.push("Add a short blueprint summary.");
-    }
-    if (!candidate.sections.some((section) => section.content.trim().length > 0)) {
-      issues.push("Document at least one section.");
-    }
-    if (!candidate.steps.some((step) => step.type === "Trigger")) {
-      issues.push("Add at least one trigger step.");
-    }
-    if (!candidate.steps.some((step) => step.type === "Action")) {
-      issues.push("Add at least one action step.");
-    }
-    return issues;
-  }, []);
-
-  const handleMarkReadyForPricing = useCallback(async () => {
-    if (!blueprint) {
-      return;
-    }
-    const issues = validateReadyForPricing(blueprint);
-    if (issues.length > 0) {
-      const message = issues.join(" ");
-      setBlueprintError(message);
-      toast({ title: "Complete the blueprint first", description: message, variant: "error" });
-      return;
-    }
-    await handleSaveBlueprint({ status: "ReadyForQuote" });
-    toast({
-      title: "Blueprint marked Ready for Pricing",
-      description: "The pricing team can now prepare a quote.",
-      variant: "success",
-    });
-  }, [blueprint, handleSaveBlueprint, toast, validateReadyForPricing]);
-
   const applyBlueprintUpdate = useCallback(
     (updater: (current: Blueprint) => Blueprint) => {
       let didUpdate = false;
@@ -555,16 +515,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       }
     },
     [setBlueprintDirty, setBlueprintError]
-  );
-
-  const handleSectionContentChange = useCallback(
-    (sectionId: string, content: string) => {
-      applyBlueprintUpdate((current) => ({
-        ...current,
-        sections: current.sections.map((section) => (section.id === sectionId ? { ...section, content } : section)),
-      }));
-    },
-    [applyBlueprintUpdate]
   );
 
   const handleStepChange = useCallback(
@@ -596,27 +546,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     },
     [applyBlueprintUpdate, selectedStepId]
   );
-
-  const handleAddStep = useCallback(() => {
-    const newStep: BlueprintStep = {
-      id: generateStepId(),
-      type: "Action",
-      name: "New Step",
-      summary: "Describe what happens in this step.",
-      goalOutcome: "Describe the desired outcome.",
-      responsibility: "Automated",
-      systemsInvolved: [],
-      notifications: [],
-      nextStepIds: [],
-    };
-    applyBlueprintUpdate((current) => ({
-      ...current,
-      steps: [...current.steps, newStep],
-    }));
-    setSelectedStepId(newStep.id);
-    setHasSelectedStep(true);
-    setShowStepHelper(false);
-  }, [applyBlueprintUpdate]);
 
   const handleConnectNodes = useCallback(
     (connection: Connection) => {
@@ -651,8 +580,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     setShowStepHelper(false);
   }, []);
 
-  const orderedSections = useMemo(() => (blueprint ? sortSections(blueprint.sections) : []), [blueprint]);
-  const activeSection = orderedSections.find((section) => section.key === selectedSectionKey) ?? orderedSections[0] ?? null;
   const completion = useMemo(() => getBlueprintCompletionState(blueprint), [blueprint]);
   const flowNodes = useMemo<Node[]>(() => blueprintToNodes(blueprint), [blueprint]);
   const flowEdges = useMemo<Edge[]>(() => blueprintToEdges(blueprint), [blueprint]);
@@ -665,6 +592,23 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     () => new Map(completion.sections.map((section) => [section.key, section.complete])),
     [completion]
   );
+  const checklistItems = useMemo(
+    () =>
+      BASE_CHECKLIST.map((item) =>
+        item.sectionKey
+          ? {
+              id: item.id,
+              label: item.label,
+              completed: completionBySection.get(item.sectionKey) ?? false,
+            }
+          : {
+              id: item.id,
+              label: item.label,
+              completed: Boolean(blueprint?.summary?.trim()),
+            }
+      ),
+    [blueprint?.summary, completionBySection]
+  );
 
   useEffect(() => {
     if (!blueprint) {
@@ -675,19 +619,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       completion.sections.forEach((section) => {
         const prevSection = prev.sections.find((entry) => entry.key === section.key);
         if (prevSection && !prevSection.complete && section.complete) {
-          setSectionCelebrations((current) => ({ ...current, [section.key]: Date.now() }));
           toast({
             title: `${BLUEPRINT_SECTION_TITLES[section.key]} captured`,
             description: "Great progress—keep refining the rest of the blueprint.",
             variant: "success",
           });
-          setTimeout(() => {
-            setSectionCelebrations((current) => {
-              const next = { ...current };
-              delete next[section.key];
-              return next;
-            });
-          }, 2000);
         }
       });
     }
@@ -907,146 +843,101 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     </div>
   );
 
-  const blueprintContent = blueprint ? (
-    <div className="w-full space-y-4">
-      {blueprintError ? (
-        <div className="mx-6 mt-6 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{blueprintError}</div>
-      ) : null}
-      <div className="px-6 pt-4 space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase text-gray-400">Blueprint status</p>
-            <div className="flex items-center gap-2 mt-2 flex-wrap">
-              <Badge variant="outline" className="text-xs font-semibold">
-                {blueprint.status}
-              </Badge>
-              {selectedVersion ? <StatusBadge status={selectedVersion.status} /> : null}
-            </div>
-            <div className="flex items-center gap-3 mt-3">
-              <span className="text-sm font-medium text-gray-700">
-                Completeness {Math.round(completion.score * 100)}%
-              </span>
-              <Progress value={Number((completion.score * 100).toFixed(1))} className="w-48 h-2" />
-            </div>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <Button variant="ghost" onClick={handleAddStep}>
-              <Plus size={14} className="mr-2" />
-              Add Step
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => handleSaveBlueprint()}
-              disabled={!isBlueprintDirty || savingBlueprint}
-            >
-              {savingBlueprint ? "Saving..." : "Save Blueprint"}
-            </Button>
-            <Button
-              onClick={handleMarkReadyForPricing}
-              disabled={
-                !blueprint ||
-                blueprint.status === "ReadyForQuote" ||
-                completion.score < 0.5 ||
-                isBlueprintDirty ||
-                savingBlueprint
-              }
-            >
-              Ready for Pricing
-            </Button>
-          </div>
-        </div>
-      </div>
-      <div className="px-6 pb-6">
-        <div className="flex flex-col gap-6 lg:flex-row min-h-[620px]">
-          <div className="w-full lg:w-[320px] border border-gray-200 rounded-2xl overflow-hidden bg-white flex">
-            <StudioChat
-              automationVersionId={selectedVersion?.id ?? null}
-              blueprintEmpty={blueprintIsEmpty}
-              onDraftBlueprint={handleDraftBlueprint}
-              isDrafting={draftingBlueprint}
-              lastError={chatError}
-            />
-          </div>
-          <div className="flex-1 border border-gray-200 rounded-2xl bg-white flex flex-col min-w-0">
-            <div className="border-b border-gray-100 bg-white/90 backdrop-blur">
-              <div className="flex items-center gap-2 overflow-x-auto px-4 py-3">
-                {orderedSections.map((section) => {
-                  const complete = completionBySection.get(section.key) ?? false;
-                  const isActive = activeSection?.id === section.id;
-                  const celebrating = Boolean(sectionCelebrations[section.key]);
-                  return (
-                    <button
-                      key={section.id}
-                      type="button"
-                      onClick={() => setSelectedSectionKey(section.key)}
-                      className={cn(
-                        "px-3 py-1.5 rounded-full text-xs font-semibold transition-all border",
-                        isActive
-                          ? "bg-[#E43632] border-[#E43632] text-white"
-                          : complete
-                            ? "bg-emerald-50 border-emerald-100 text-emerald-700"
-                            : "bg-gray-100 border-gray-200 text-gray-600 hover:bg-white",
-                        celebrating && "ring-2 ring-[#E43632]/40"
-                      )}
-                    >
-                      {section.title}
-                    </button>
-                  );
-                })}
-              </div>
-              {activeSection ? (
-                <div className="px-4 pb-4">
-                  <Textarea
-                    rows={4}
-                    value={activeSection.content}
-                    onChange={(event) => handleSectionContentChange(activeSection.id, event.target.value)}
-                    placeholder="This copy populates the red-chip overview."
-                  />
-                  <p className="text-[11px] text-gray-400 mt-1">Keep each section concise and actionable.</p>
-                </div>
-              ) : (
-                <div className="px-4 py-6 text-sm text-gray-500">Sections will appear once the blueprint is drafted.</div>
-              )}
-            </div>
-            <div className="flex-1 relative min-h-[320px]">
-              <StudioCanvas
-                nodes={flowNodes}
-                edges={flowEdges}
-                onConnect={handleConnectNodes}
-                onEdgesChange={handleEdgesChange}
-                onNodeClick={handleNodeClick}
-                emptyState={
-                  <div className="max-w-xs text-center text-gray-500 text-sm leading-relaxed">
-                    <p className="font-semibold text-[#0A0A0A] mb-1">No steps yet</p>
-                    Start by telling Copilot about your workflow. I’ll map out the steps for you.
-                  </div>
-                }
-              />
-              {showStepHelper && !blueprintIsEmpty && (
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-gray-900/90 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none">
-                  Click on any step to configure or refine.
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="w-full lg:w-[340px] border border-gray-200 rounded-2xl overflow-hidden bg-white flex">
-            <StudioInspector
-              step={selectedStep}
-              onClose={() => {
-                setSelectedStepId(null);
-                setHasSelectedStep(false);
-                setShowStepHelper(true);
-              }}
-              onChange={handleStepChange}
-              onDelete={handleDeleteStep}
-            />
-          </div>
-        </div>
-      </div>
-    </div>
-  ) : (
+  const blueprintContent = !blueprint ? (
     <div className="p-6">
       <div className="rounded-lg border border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-500">Loading blueprint…</div>
+    </div>
+  ) : (
+    <div className="flex flex-col h-full w-full relative bg-gray-50 min-h-0">
+      <div className="h-14 border-b border-gray-100 bg-white flex items-center px-6 overflow-x-auto no-scrollbar shrink-0 z-20 relative">
+        <div className="flex items-center gap-6 min-w-max">
+          {checklistItems.map((item) => (
+            <div key={item.id} className="flex items-center gap-2">
+              <div
+                className={cn(
+                  "w-4 h-4 rounded-full border flex items-center justify-center transition-colors duration-500",
+                  item.completed ? "bg-[#E43632] border-[#E43632] text-white" : "border-gray-300 bg-white"
+                )}
+              >
+                {item.completed && <CheckCircle2 size={10} />}
+              </div>
+              <span
+                className={cn(
+                  "text-xs font-medium transition-colors duration-500",
+                  item.completed ? "text-[#0A0A0A]" : "text-gray-400"
+                )}
+              >
+                {item.label}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {blueprintError ? (
+        <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{blueprintError}</div>
+      ) : null}
+
+      <div className="flex-1 flex relative overflow-hidden bg-gray-50 min-h-0">
+        <div className="w-[360px] shrink-0 z-20 h-full bg-[#F9FAFB] border-r border-gray-200 shadow-[4px_0_24px_rgba(0,0,0,0.02)] overflow-hidden">
+          <StudioChat
+            automationVersionId={selectedVersion?.id ?? null}
+            blueprintEmpty={blueprintIsEmpty}
+            onDraftBlueprint={handleDraftBlueprint}
+            isDrafting={draftingBlueprint}
+            lastError={chatError}
+          />
+        </div>
+
+        <div className="flex-1 relative h-full z-10 bg-gray-50 min-h-0">
+          <StudioCanvas
+            nodes={flowNodes}
+            edges={flowEdges}
+            onConnect={handleConnectNodes}
+            onEdgesChange={handleEdgesChange}
+            onNodeClick={handleNodeClick}
+            emptyState={
+              <div className="max-w-xs text-center text-gray-500 text-sm leading-relaxed">
+                <p className="font-semibold text-[#0A0A0A] mb-1">No steps yet</p>
+                Start by telling Copilot about your workflow. I’ll map out the steps for you.
+              </div>
+            }
+          />
+
+          <div className="absolute bottom-4 left-4 z-50">
+            <button
+              onClick={() => setIsContributorMode((prev) => !prev)}
+              className="text-[10px] text-gray-400 hover:text-[#E43632] bg-white/70 backdrop-blur px-2 py-1 rounded border border-gray-200"
+            >
+              {isContributorMode ? "Switch to builder view" : "Toggle contributor view"}
+            </button>
+          </div>
+
+          {showStepHelper && !blueprintIsEmpty && (
+            <div className="absolute bottom-4 right-4 bg-gray-900/90 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none">
+              Click on any step to configure or refine.
+            </div>
+          )}
+        </div>
+
+        <div
+          className={cn(
+            "shrink-0 z-20 bg-white transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)] border-l border-gray-200 shadow-xl overflow-y-auto min-h-0",
+            selectedStep ? "w-[420px] translate-x-0" : "w-0 translate-x-full opacity-0"
+          )}
+        >
+          <StudioInspector
+            step={selectedStep}
+            onClose={() => {
+              setSelectedStepId(null);
+              setHasSelectedStep(false);
+              setShowStepHelper(true);
+            }}
+            onChange={handleStepChange}
+            onDelete={handleDeleteStep}
+          />
+        </div>
+      </div>
     </div>
   );
   const errorBanner = error ? (
@@ -1102,12 +993,17 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           </div>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div
+        className={cn(
+          "flex-1",
+          activeTab === "Blueprint" ? "flex flex-col overflow-hidden" : "overflow-y-auto"
+        )}
+      >
         {activeTab === "Blueprint" ? (
-          <div className="w-full space-y-4">
-            <div className="px-6 pt-6">{errorBanner}</div>
-            {blueprintContent}
-          </div>
+          <>
+            {errorBanner ? <div className="px-6 pt-6">{errorBanner}</div> : null}
+            <div className="flex-1 min-h-0">{blueprintContent}</div>
+          </>
         ) : (
           <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
             {errorBanner}

@@ -2,6 +2,42 @@
 
 Newest updates appear first. Each entry includes the timestamp (Pacific Time) when the work was logged.
 
+## 2025-12-03 · 06:20 PT
+
+### Phase 1 – Studio Shell & Data Plumbing
+- ✅ Replaced the Blueprint tab with the exact layout from commit `694ce732c420574b0358898269cdcdd93841d516` (checklist + chat/canvas/inspector) while keeping all modern plumbing (real blueprint JSON, React Flow nodes derived from `steps`, Copilot chat, auto-save, etc.).
+- ✅ Removed the interim summary/editor UI so the Studio surface now visually matches the original design, but every panel still reads/writes the live automation version (step edits go through `StudioInspector`, chat persists via the new API, completions power the checklist).
+- ✅ Verified `npm test` after the swap; the suite passes except for the pre-existing `tests/components/layout/AppShell.test.tsx`, which still fails in the sandbox with the `EPERM` `jose` import error.
+
+### Next Steps
+- [ ] Layer contributor/builder-specific controls onto the restored layout once the design team finalizes those flows.
+
+---
+
+## 2025-12-03 · 05:10 PT
+
+### Phase 1 – Studio Shell & Data Plumbing
+- ✅ Restored the Studio Blueprint tab to the original three-pane layout (chat / canvas / inspector with checklist header) by referencing commit `9b1802288` and reintroducing the summary + editor cards so the UI once again matches the documented mocks.
+- ✅ Kept all modern data plumbing (blueprint JSON loading, auto-save, section validation, Copilot chat) by wiring the resurrected components to the current state helpers and PATCH flow instead of the old mock nodes.
+- ✅ Added back `BlueprintSummary` and `BlueprintEditorPanel` components to give parity with the previous experience while preserving the new schema; Vitest still fails only on the pre-existing `AppShell` suite because of the sandbox `EPERM` error opening `jose`, all other tests pass.
+
+### Next Steps
+- [ ] Finish the contributor/builder mode polish inside the Blueprint tab once we hook the inspector + canvas to real role-based behaviors.
+
+---
+
+## 2025-12-03 · 02:10 PT
+
+### Phase 1 – Copilot Chat Foundations
+- ✅ Finished Track B5 by introducing the `generateCopilotReply` wrapper plus `/api/automation-versions/[id]/copilot/reply`, which loads the latest thread, calls OpenAI, and persists an assistant response per tenant/version.
+- ✅ Completed Track B6 by extending `StudioChat` to await the reply endpoint, show a “Copilot is thinking…” state, and append the assistant message (with retry-friendly errors) after each user send.
+- ✅ Added Vitest coverage for the reply route and the new chat behavior (mocked assistant reply path). `npm test` now runs the full suite; one existing `AppShell` test failed outside our changes due to sandbox `EPERM` when opening a dependency, all others passed.
+
+### Next Steps
+- [ ] Move to B7 token guardrails and D-track validation work while we explore a streaming upgrade for Copilot replies.
+
+---
+
 ## 2025-12-03 · 00:45 PT
 
 ### Phase 1 – Copilot Chat Foundations

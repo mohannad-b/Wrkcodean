@@ -98,6 +98,7 @@ Additional admin views can hang off this tree for:
    AUTH0_CLIENT_SECRET="..."
    AUTH0_SECRET="<openssl rand -hex 32>"
    OPENAI_API_KEY="..."
+   OPENAI_MODEL="gpt-4o-mini"
    STORAGE_ACCESS_KEY="..."
    STORAGE_SECRET="..."
    DEFAULT_TENANT_ID="<acme tenant id from db:seed>"

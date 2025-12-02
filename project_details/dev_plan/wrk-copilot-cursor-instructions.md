@@ -368,12 +368,12 @@ _Parallelization notes_: B1/B2 must ship first. B3, B4, B7 can run in parallel a
   Scope: `components/automations/StudioChat*`.  
   Type: Frontend.  
   Depends on: B1.
-- [ ] **B5. AI “reply” endpoint (non-streaming)**  
+- [x] **B5. AI “reply” endpoint (non-streaming)**  
   Goal: POST `/automation-versions/[id]/copilot/reply` that pulls recent messages, calls OpenAI, persists assistant message, returns it.  
   Scope: `app/api/automation-versions/[id]/copilot/reply/route.ts`, `lib/ai/openai-client.ts`, `lib/ai/prompts.ts`.  
   Type: Backend.  
   Depends on: B1, B2.
-- [ ] **B6. Wire StudioChat to AI reply**  
+- [x] **B6. Wire StudioChat to AI reply**  
   Goal: after user send, hit `copilot/reply` and append assistant message with simple spinner (no streaming).  
   Scope: `StudioChat.tsx`.  
   Type: Frontend.  
