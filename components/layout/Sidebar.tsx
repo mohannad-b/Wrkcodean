@@ -19,9 +19,10 @@ import { cn } from "@/lib/utils";
 import { WrkLogo } from "@/components/brand/WrkLogo";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
-import { currentUser } from "@/lib/mock-automations";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useUserProfile } from "@/components/providers/user-profile-provider";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const navItems = [
   { id: "dashboard", icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
@@ -35,7 +36,7 @@ const navItems = [
     href: "/workspace-settings",
   },
   { id: "team", icon: Users, label: "Team", href: "/team" },
-  { id: "user-settings", icon: UserCog, label: "User Settings", href: "/user-settings" },
+  { id: "profile", icon: UserCog, label: "Profile", href: "/profile" },
 ];
 
 const adminNavItems = [
@@ -49,10 +50,27 @@ function isAdminRoute(pathname: string): boolean {
   return pathname.startsWith("/admin");
 }
 
+function getInitials(name?: string | null, email?: string) {
+  const base = name && name.trim().length > 0 ? name : email ?? "";
+  if (!base) {
+    return "??";
+  }
+  const segments = base.split(/\s+/).filter(Boolean);
+  if (segments.length === 0 && email) {
+    return email.slice(0, 2).toUpperCase();
+  }
+  return segments
+    .slice(0, 2)
+    .map((segment) => segment.charAt(0).toUpperCase())
+    .join("");
+}
+
 export function Sidebar() {
   const pathname = usePathname() ?? "/";
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
+  const { profile, isHydrating } = useUserProfile();
+  const userInitials = useMemo(() => getInitials(profile?.name, profile?.email), [profile]);
   
   const isAdmin = isAdminRoute(pathname);
   
@@ -235,35 +253,47 @@ export function Sidebar() {
       </nav>
 
       {/* User Profile */}
-      <div
-        className={cn("mt-auto border-t border-white/10 mb-2", collapsed ? "p-1 mx-1" : "p-4 mx-2")}
-      >
+      <div className={cn("mt-auto border-t border-white/10 mb-2", collapsed ? "p-1 mx-1" : "p-4 mx-2")}>
         <Link
-          href="/settings"
+          href="/profile"
           className={cn(
             "flex items-center group cursor-pointer rounded-lg hover:bg-white/5 transition-colors",
             collapsed ? "justify-center p-1" : "gap-3 p-2",
-            pathname === "/settings" ? "bg-white/10" : ""
+            pathname === "/profile" ? "bg-white/10" : ""
           )}
         >
-          <Avatar className="w-8 h-8 border border-white/20 group-hover:border-white/40 transition-colors">
-            <AvatarImage src={currentUser.avatar} alt={currentUser.name} />
-            <AvatarFallback>
-              {currentUser.name
-                .split(" ")
-                .map((n) => n[0])
-                .join("")}
-            </AvatarFallback>
-          </Avatar>
+          {profile ? (
+            <Avatar className="w-8 h-8 border border-white/20 group-hover:border-white/40 transition-colors">
+              {profile.avatarUrl ? <AvatarImage src={profile.avatarUrl} alt={profile.name} /> : null}
+              <AvatarFallback>{userInitials}</AvatarFallback>
+            </Avatar>
+          ) : (
+            <Skeleton className="w-8 h-8 rounded-full bg-white/10 border border-white/20" />
+          )}
           {!collapsed && (
             <div className="flex-1 min-w-0 text-left">
-              <p className="text-sm font-medium text-white truncate">{currentUser.name}</p>
-              <p className="text-[11px] text-gray-500 truncate group-hover:text-gray-400">
-                Engineering Lead
-              </p>
+              {profile ? (
+                <>
+                  <p className="text-sm font-medium text-white truncate">{profile.name}</p>
+                  <p className="text-[11px] text-gray-500 truncate group-hover:text-gray-400">
+                    {profile.title ?? "View profile"}
+                  </p>
+                </>
+              ) : (
+                <div className="space-y-1 py-0.5">
+                  <Skeleton className="h-3 w-24 bg-white/10" />
+                  <Skeleton className="h-3 w-16 bg-white/5" />
+                </div>
+              )}
             </div>
           )}
         </Link>
+        {!collapsed && profile && !profile.avatarUrl && (
+          <p className="text-[10px] text-gray-500 mt-1">Add an avatar to personalize your account.</p>
+        )}
+        {!collapsed && isHydrating && !profile && (
+          <p className="text-[10px] text-gray-500 mt-1">Loading profile…</p>
+        )}
       </div>
     </div>
   );

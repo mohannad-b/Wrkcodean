@@ -23,6 +23,7 @@ DROP TYPE IF EXISTS file_status;
 DROP TYPE IF EXISTS quote_status;
 DROP TYPE IF EXISTS automation_status;
 DROP TYPE IF EXISTS membership_role;
+DROP TYPE IF EXISTS notification_preference;
 
 -- Enumerations
 CREATE TYPE membership_role AS ENUM ('client_admin','client_member','ops_admin','admin');
@@ -41,6 +42,7 @@ CREATE TYPE ai_job_status AS ENUM ('pending','processing','succeeded','failed');
 CREATE TYPE message_type AS ENUM ('client','ops');
 CREATE TYPE task_status AS ENUM ('pending','in_progress','complete');
 CREATE TYPE task_priority AS ENUM ('low','medium','high','critical');
+CREATE TYPE notification_preference AS ENUM ('all','mentions','none');
 
 -- Tenants
 CREATE TABLE tenants (
@@ -58,7 +60,10 @@ CREATE TABLE users (
   auth0_id text,
   email text NOT NULL,
   name text,
+  title text,
   avatar_url text,
+  timezone text,
+  notification_preference notification_preference NOT NULL DEFAULT 'all',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT users_email_unique UNIQUE (email),

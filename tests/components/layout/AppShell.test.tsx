@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { AppShell } from "@/components/layout/AppShell";
+import { AppShellClient } from "@/components/layout/AppShell";
 
 // Mock next/navigation
 vi.mock("next/navigation", () => ({
@@ -21,17 +21,17 @@ vi.mock("next/link", () => ({
 describe("AppShell", () => {
   it("renders without crashing", () => {
     render(
-      <AppShell>
+      <AppShellClient initialProfile={null} initialLastUpdatedAt={null}>
         <div>Test Content</div>
-      </AppShell>
+      </AppShellClient>
     );
   });
 
   it("renders sidebar and main content", () => {
     render(
-      <AppShell>
+      <AppShellClient initialProfile={null} initialLastUpdatedAt={null}>
         <div>Test Content</div>
-      </AppShell>
+      </AppShellClient>
     );
 
     // Check that main content is rendered
@@ -42,9 +42,9 @@ describe("AppShell", () => {
 
   it("applies correct layout classes", () => {
     const { container } = render(
-      <AppShell>
+      <AppShellClient initialProfile={null} initialLastUpdatedAt={null}>
         <div>Test</div>
-      </AppShell>
+      </AppShellClient>
     );
 
     const shell = container.firstChild;

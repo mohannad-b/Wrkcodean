@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { FormEvent, MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -9,46 +9,26 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import {
-  Loader2,
-  RefreshCw,
-  Send,
-  StickyNote,
-  Plus,
-  Activity,
-  Users,
-  Play,
-  Edit3,
-  Sparkles,
-  AlertTriangle,
-  Calendar,
-  Clock,
-  DollarSign,
-  Zap,
-  CheckCircle2,
-  ArrowUpRight,
-  ArrowRight,
-  History,
-} from "lucide-react";
-import { useNodesState, useEdgesState, addEdge, Connection, Node, type Edge, type OnEdgesChange, type OnNodesChange } from "reactflow";
-import { StudioChat } from "@/components/automations/StudioChat";
+import { Loader2, RefreshCw, Send, StickyNote, Plus, Users, Play, Edit3, Sparkles, AlertTriangle, Calendar, Clock, DollarSign, Zap, CheckCircle2, ArrowUpRight, ArrowRight, History } from "lucide-react";
+import type { Connection, Node, Edge, EdgeChange } from "reactflow";
+import { StudioChat, type CopilotMessage } from "@/components/automations/StudioChat";
 import { StudioInspector } from "@/components/automations/StudioInspector";
-import { nodesV1_1, edgesV1_1 } from "@/lib/mock-blueprint";
-import { ExceptionModal } from "@/components/modals/ExceptionModal";
 import { ActivityTab } from "@/components/automations/ActivityTab";
 import { BuildStatusTab } from "@/components/automations/BuildStatusTab";
 import { ContributorsTab } from "@/components/automations/ContributorsTab";
 import { SettingsTab } from "@/components/automations/SettingsTab";
 import { TestTab } from "@/components/automations/TestTab";
-import { BlueprintSummary } from "@/components/automations/BlueprintSummary";
-import { BlueprintEditorPanel } from "@/components/automations/BlueprintEditorPanel";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
-import type { Blueprint } from "@/lib/blueprint/types";
+import type { Blueprint, BlueprintSectionKey, BlueprintStep } from "@/lib/blueprint/types";
+import { BLUEPRINT_SECTION_TITLES } from "@/lib/blueprint/types";
+import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
+import { isBlueprintEffectivelyEmpty, sortSections } from "@/lib/blueprint/utils";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
 import { VersionSelector, type VersionOption } from "@/components/ui/VersionSelector";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 
 const StudioCanvas = dynamic(
   () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
@@ -90,9 +70,6 @@ type AutomationDetail = {
   versions: AutomationVersion[];
 };
 
-type StudioInspectorProps = Parameters<typeof StudioInspector>[0];
-type InspectorStep = StudioInspectorProps["selectedStep"];
-
 interface AutomationDetailPageProps {
   params: {
     automationId: string;
@@ -122,18 +99,6 @@ const formatDateTime = (value?: string | null) => {
 
 const AUTOMATION_TABS = ["Overview", "Build Status", "Blueprint", "Test", "Activity", "Contributors", "Settings"] as const;
 
-const BLUEPRINT_CHECKLIST = [
-  { id: "overview", label: "Overview", completed: true },
-  { id: "reqs", label: "Business Requirements", completed: true },
-  { id: "objs", label: "Business Objectives", completed: true },
-  { id: "criteria", label: "Success Criteria", completed: true },
-  { id: "systems", label: "Systems", completed: true },
-  { id: "data", label: "Data Needs", completed: true },
-  { id: "exceptions", label: "Exceptions", completed: true },
-  { id: "human", label: "Human Touchpoints", completed: true },
-  { id: "flow", label: "Flow Complete", completed: true },
-] as const;
-
 const cloneBlueprint = (blueprint: Blueprint | null) => (blueprint ? (JSON.parse(JSON.stringify(blueprint)) as Blueprint) : null);
 
 type KpiStatConfig = {
@@ -154,6 +119,16 @@ const KPI_CONFIG: KpiStatConfig[] = [
   { label: "Total Executions", subtext: "last 30 days", icon: Zap },
   { label: "Success Rate", subtext: "last 30 days", icon: CheckCircle2 },
 ];
+
+const FLOW_NODE_X_GAP = 360;
+const FLOW_NODE_Y_GAP = 210;
+
+const generateStepId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `step-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+};
 
 const computeSeed = (value: string) => {
   let hash = 0;
@@ -260,9 +235,10 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [automation, setAutomation] = useState<AutomationDetail | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
-  const [blueprintDraft, setBlueprintDraft] = useState<Blueprint | null>(null);
-  const [initialBlueprint, setInitialBlueprint] = useState<Blueprint | null>(null);
+  const [blueprint, setBlueprint] = useState<Blueprint | null>(null);
   const [blueprintError, setBlueprintError] = useState<string | null>(null);
+  const [isBlueprintDirty, setBlueprintDirty] = useState(false);
+  const [selectedSectionKey, setSelectedSectionKey] = useState<BlueprintSectionKey>("business_requirements");
   const [loading, setLoading] = useState(true);
   const [savingNotes, setSavingNotes] = useState(false);
   const [savingBlueprint, setSavingBlueprint] = useState(false);
@@ -271,30 +247,23 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AutomationTab>("Overview");
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  const [isContributorMode, setIsContributorMode] = useState(false);
-  const [isSynthesizing] = useState(false);
-  const [nodes, setNodes, onNodesChange] = useNodesState(nodesV1_1);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(edgesV1_1);
-  const [stepExceptions, setStepExceptions] = useState<Record<string, { condition: string; outcome: string }[]>>({});
-  const [showExceptionModal, setShowExceptionModal] = useState(false);
-
-  const hasBlueprintChanges = useMemo(() => {
-    if (!blueprintDraft && !initialBlueprint) {
-      return false;
-    }
-    return JSON.stringify(blueprintDraft) !== JSON.stringify(initialBlueprint);
-  }, [blueprintDraft, initialBlueprint]);
+  const [draftingBlueprint, setDraftingBlueprint] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [hasSelectedStep, setHasSelectedStep] = useState(false);
+  const [showStepHelper, setShowStepHelper] = useState(false);
+  const [sectionCelebrations, setSectionCelebrations] = useState<Record<BlueprintSectionKey, number>>({});
+  const completionRef = useRef<ReturnType<typeof getBlueprintCompletionState> | null>(null);
 
   const confirmDiscardBlueprintChanges = useCallback(() => {
-    if (!hasBlueprintChanges) {
+    if (!isBlueprintDirty) {
       return true;
     }
     return window.confirm("You have unsaved blueprint changes. Discard them?");
-  }, [hasBlueprintChanges]);
+  }, [isBlueprintDirty]);
 
   useEffect(() => {
-    if (!hasBlueprintChanges) {
-      return;
+    if (!isBlueprintDirty) {
+      return undefined;
     }
     const handler = (event: BeforeUnloadEvent) => {
       event.preventDefault();
@@ -302,7 +271,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
-  }, [hasBlueprintChanges]);
+  }, [isBlueprintDirty]);
 
   const fetchAutomation = useCallback(async () => {
     setLoading(true);
@@ -320,10 +289,14 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setSelectedVersionId(nextSelected);
       const version = data.automation.versions.find((v) => v.id === nextSelected);
       setNotes(version?.intakeNotes ?? "");
-      const blueprint = version?.blueprintJson ? cloneBlueprint(version.blueprintJson) : null;
-      setBlueprintDraft(blueprint);
-      setInitialBlueprint(blueprint);
+      const blueprint = version?.blueprintJson ? cloneBlueprint(version.blueprintJson) : createEmptyBlueprint();
+      setBlueprint(blueprint);
       setBlueprintError(null);
+      setBlueprintDirty(false);
+      setSelectedSectionKey("business_requirements");
+      setSelectedStepId(null);
+      setHasSelectedStep(false);
+      setShowStepHelper(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error");
     } finally {
@@ -345,10 +318,14 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   useEffect(() => {
     if (selectedVersion) {
       setNotes(selectedVersion.intakeNotes ?? "");
-      const blueprint = selectedVersion.blueprintJson ? cloneBlueprint(selectedVersion.blueprintJson) : null;
-      setBlueprintDraft(blueprint);
-      setInitialBlueprint(blueprint);
+      const nextBlueprint = selectedVersion.blueprintJson ? cloneBlueprint(selectedVersion.blueprintJson) : createEmptyBlueprint();
+      setBlueprint(nextBlueprint);
       setBlueprintError(null);
+      setBlueprintDirty(false);
+      setSelectedSectionKey("business_requirements");
+      setSelectedStepId(null);
+      setHasSelectedStep(false);
+      setShowStepHelper(false);
     }
   }, [selectedVersion?.id, selectedVersion?.blueprintJson?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -359,10 +336,14 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     setSelectedVersionId(versionId);
     const version = automation?.versions.find((v) => v.id === versionId);
     setNotes(version?.intakeNotes ?? "");
-    const blueprint = version?.blueprintJson ? cloneBlueprint(version.blueprintJson) : null;
-    setBlueprintDraft(blueprint);
-    setInitialBlueprint(blueprint);
+    const nextBlueprint = version?.blueprintJson ? cloneBlueprint(version.blueprintJson) : createEmptyBlueprint();
+    setBlueprint(nextBlueprint);
+    setBlueprintDirty(false);
     setBlueprintError(null);
+    setSelectedSectionKey("business_requirements");
+    setSelectedStepId(null);
+    setHasSelectedStep(false);
+    setShowStepHelper(false);
   };
 
   const handleSaveNotes = async (event: FormEvent) => {
@@ -391,48 +372,40 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     }
   };
 
-  const handleSaveBlueprint = async () => {
-    if (!selectedVersion || !blueprintDraft) {
-      setBlueprintError("Create a blueprint before saving.");
-      return;
-    }
-    setSavingBlueprint(true);
-    setBlueprintError(null);
-    const payload = { ...blueprintDraft, updatedAt: new Date().toISOString() };
-    try {
-      const response = await fetch(`/api/automation-versions/${selectedVersion.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ blueprintJson: payload }),
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error ?? "Failed to save blueprint");
+  const handleSaveBlueprint = useCallback(
+    async (overrides?: Partial<Blueprint>) => {
+      if (!selectedVersion || !blueprint) {
+        setBlueprintError("Blueprint is not available yet.");
+        return;
       }
-      setBlueprintDraft(cloneBlueprint(payload));
-      setInitialBlueprint(cloneBlueprint(payload));
-      await fetchAutomation();
-      toast({ title: "Blueprint saved", description: "Metadata updated successfully.", variant: "success" });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unable to save blueprint";
-      setBlueprintError(message);
-      toast({ title: "Unable to save blueprint", description: message, variant: "error" });
-    } finally {
-      setSavingBlueprint(false);
-    }
-  };
-
-  const handleInitializeBlueprint = () => {
-    if (!selectedVersion) return;
-    const blueprint = createEmptyBlueprint();
-    setBlueprintDraft(blueprint);
-    setInitialBlueprint(cloneBlueprint(blueprint));
-    setBlueprintError(null);
-  };
-
-  const handleBlueprintChange = (next: Blueprint | null) => {
-    setBlueprintDraft(next ? cloneBlueprint(next) : null);
-  };
+      const payload = { ...blueprint, ...overrides, updatedAt: new Date().toISOString() };
+      setSavingBlueprint(true);
+      setBlueprintError(null);
+      try {
+        const response = await fetch(`/api/automation-versions/${selectedVersion.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ blueprintJson: payload }),
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error ?? "Failed to save blueprint");
+        }
+        const cloned = cloneBlueprint(payload);
+        setBlueprint(cloned);
+        setBlueprintDirty(false);
+        await fetchAutomation();
+        toast({ title: "Blueprint saved", description: "Metadata updated successfully.", variant: "success" });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to save blueprint";
+        setBlueprintError(message);
+        toast({ title: "Unable to save blueprint", description: message, variant: "error" });
+      } finally {
+        setSavingBlueprint(false);
+      }
+    },
+    [blueprint, fetchAutomation, selectedVersion, toast]
+  );
 
   const handleSendForPricing = async () => {
     if (!selectedVersion) return;
@@ -486,137 +459,290 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     }
   };
 
-  const handleEdgeLabelChange = useCallback(
-    (
-      id: string,
-      newLabel: string,
-      newData: { operator: string; value: string | number; unit: string }
-    ) => {
-      setEdges((current) =>
-        current.map((edge) => {
-          if (edge.id !== id) return edge;
-          return {
-            ...edge,
-            data: {
-              ...edge.data,
-              ...newData,
-              label: newLabel,
-              onLabelChange: handleEdgeLabelChange,
-            },
-          };
-        })
-      );
+  const handleDraftBlueprint = useCallback(
+    async (messages: CopilotMessage[]) => {
+      if (!selectedVersion) {
+        return;
+      }
+      setDraftingBlueprint(true);
+      setChatError(null);
+      try {
+        const response = await fetch(`/api/automation-versions/${selectedVersion.id}/copilot/draft-blueprint`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages,
+            intakeNotes: notes,
+          }),
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error ?? "Failed to draft blueprint");
+        }
+        const data = (await response.json()) as { blueprint: Blueprint };
+        const nextBlueprint = cloneBlueprint(data.blueprint);
+        setBlueprint(nextBlueprint);
+        setBlueprintDirty(false);
+        setSelectedSectionKey("business_requirements");
+        setSelectedStepId(null);
+        setHasSelectedStep(false);
+        setShowStepHelper(true);
+        toast({
+          title: "Blueprint draft created",
+          description: "Click on any step in the canvas to refine details.",
+          variant: "success",
+        });
+        await fetchAutomation();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to draft blueprint";
+        setChatError(message);
+        toast({ title: "Unable to draft blueprint", description: message, variant: "error" });
+      } finally {
+        setDraftingBlueprint(false);
+      }
     },
-    [setEdges]
+    [selectedVersion, notes, fetchAutomation, toast]
   );
 
-  useEffect(() => {
-    setEdges((current) =>
-      current.map((edge) => ({
-        ...edge,
-        data: {
-          ...edge.data,
-          onLabelChange: handleEdgeLabelChange,
-        },
-      }))
-    );
-  }, [handleEdgeLabelChange, setEdges]);
+  const validateReadyForPricing = useCallback((candidate: Blueprint) => {
+    const issues: string[] = [];
+    if (!candidate.summary.trim()) {
+      issues.push("Add a short blueprint summary.");
+    }
+    if (!candidate.sections.some((section) => section.content.trim().length > 0)) {
+      issues.push("Document at least one section.");
+    }
+    if (!candidate.steps.some((step) => step.type === "Trigger")) {
+      issues.push("Add at least one trigger step.");
+    }
+    if (!candidate.steps.some((step) => step.type === "Action")) {
+      issues.push("Add at least one action step.");
+    }
+    return issues;
+  }, []);
+
+  const handleMarkReadyForPricing = useCallback(async () => {
+    if (!blueprint) {
+      return;
+    }
+    const issues = validateReadyForPricing(blueprint);
+    if (issues.length > 0) {
+      const message = issues.join(" ");
+      setBlueprintError(message);
+      toast({ title: "Complete the blueprint first", description: message, variant: "error" });
+      return;
+    }
+    await handleSaveBlueprint({ status: "ReadyForQuote" });
+    toast({
+      title: "Blueprint marked Ready for Pricing",
+      description: "The pricing team can now prepare a quote.",
+      variant: "success",
+    });
+  }, [blueprint, handleSaveBlueprint, toast, validateReadyForPricing]);
+
+  const applyBlueprintUpdate = useCallback(
+    (updater: (current: Blueprint) => Blueprint) => {
+      let didUpdate = false;
+      setBlueprint((current) => {
+        if (!current) {
+          return current;
+        }
+        const next = updater(current);
+        didUpdate = true;
+        return next;
+      });
+      if (didUpdate) {
+        setBlueprintDirty(true);
+        setBlueprintError(null);
+      }
+    },
+    [setBlueprintDirty, setBlueprintError]
+  );
+
+  const handleSectionContentChange = useCallback(
+    (sectionId: string, content: string) => {
+      applyBlueprintUpdate((current) => ({
+        ...current,
+        sections: current.sections.map((section) => (section.id === sectionId ? { ...section, content } : section)),
+      }));
+    },
+    [applyBlueprintUpdate]
+  );
+
+  const handleStepChange = useCallback(
+    (stepId: string, patch: Partial<BlueprintStep>) => {
+      applyBlueprintUpdate((current) => ({
+        ...current,
+        steps: current.steps.map((step) => (step.id === stepId ? { ...step, ...patch } : step)),
+      }));
+    },
+    [applyBlueprintUpdate]
+  );
+
+  const handleDeleteStep = useCallback(
+    (stepId: string) => {
+      applyBlueprintUpdate((current) => ({
+        ...current,
+        steps: current.steps
+          .filter((step) => step.id !== stepId)
+          .map((step) => ({
+            ...step,
+            nextStepIds: step.nextStepIds.filter((id) => id !== stepId),
+          })),
+      }));
+      if (selectedStepId === stepId) {
+        setSelectedStepId(null);
+        setHasSelectedStep(false);
+        setShowStepHelper(true);
+      }
+    },
+    [applyBlueprintUpdate, selectedStepId]
+  );
+
+  const handleAddStep = useCallback(() => {
+    const newStep: BlueprintStep = {
+      id: generateStepId(),
+      type: "Action",
+      name: "New Step",
+      summary: "Describe what happens in this step.",
+      goalOutcome: "Describe the desired outcome.",
+      responsibility: "Automated",
+      systemsInvolved: [],
+      notifications: [],
+      nextStepIds: [],
+    };
+    applyBlueprintUpdate((current) => ({
+      ...current,
+      steps: [...current.steps, newStep],
+    }));
+    setSelectedStepId(newStep.id);
+    setHasSelectedStep(true);
+    setShowStepHelper(false);
+  }, [applyBlueprintUpdate]);
 
   const handleConnectNodes = useCallback(
     (connection: Connection) => {
-      setEdges((eds) => addEdge({ ...connection, type: "default" }, eds));
+      if (!connection.source || !connection.target || connection.source === connection.target) {
+        return;
+      }
+      applyBlueprintUpdate((current) => ({
+        ...current,
+        steps: current.steps.map((step) =>
+          step.id === connection.source && !step.nextStepIds.includes(connection.target as string)
+            ? { ...step, nextStepIds: [...step.nextStepIds, connection.target as string] }
+            : step
+        ),
+      }));
     },
-    [setEdges]
+    [applyBlueprintUpdate]
+  );
+
+  const handleEdgesChange = useCallback(
+    (changes: EdgeChange[]) => {
+      if (!changes.some((change) => change.type === "remove")) {
+        return;
+      }
+      applyBlueprintUpdate((current) => ({
+        ...current,
+        steps: current.steps.map((step) => {
+          const updatedNext = step.nextStepIds.filter((targetId) => {
+            const edgeId = `edge-${step.id}-${targetId}`;
+            return !changes.some((change) => change.type === "remove" && change.id === edgeId);
+          });
+          return updatedNext.length === step.nextStepIds.length ? step : { ...step, nextStepIds: updatedNext };
+        }),
+      }));
+    },
+    [applyBlueprintUpdate]
   );
 
   const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     setSelectedStepId(node.id);
+    setHasSelectedStep(true);
+    setShowStepHelper(false);
   }, []);
 
-  const handleAddExceptionRule = useCallback(
-    (rule: { condition: string; outcome: string }) => {
-      if (!selectedStepId) {
-        toast({
-          title: "Select a step first",
-          description: "Pick a block in the canvas before adding an exception.",
-          variant: "error",
-        });
-        return;
-      }
-      setStepExceptions((prev) => ({
-        ...prev,
-        [selectedStepId]: [...(prev[selectedStepId] ?? []), rule],
-      }));
-      setNodes((nodesState) =>
-        nodesState.map((node) =>
-          node.id === selectedStepId
-            ? {
-                ...node,
-                data: {
-                  ...node.data,
-                  exceptions: [...(node.data.exceptions ?? []), rule],
-                },
-              }
-            : node
-        )
-      );
-    },
-    [selectedStepId, setNodes, toast]
+  const orderedSections = useMemo(() => (blueprint ? sortSections(blueprint.sections) : []), [blueprint]);
+  const activeSection = orderedSections.find((section) => section.key === selectedSectionKey) ?? orderedSections[0] ?? null;
+  const completion = useMemo(() => getBlueprintCompletionState(blueprint), [blueprint]);
+  const flowNodes = useMemo<Node[]>(() => {
+    if (!blueprint) {
+      return [];
+    }
+    return blueprint.steps.map((step, index) => ({
+      id: step.id,
+      type: "custom",
+      position: {
+        x: (index % 2) * FLOW_NODE_X_GAP,
+        y: Math.floor(index / 2) * FLOW_NODE_Y_GAP,
+      },
+      data: {
+        title: step.name,
+        description: step.summary || "Click to add a summary",
+        type: step.type,
+        status: blueprint.status === "Draft" ? "ai-suggested" : "complete",
+      },
+    }));
+  }, [blueprint]);
+  const flowEdges = useMemo<Edge[]>(() => {
+    if (!blueprint) {
+      return [];
+    }
+    const idSet = new Set(blueprint.steps.map((step) => step.id));
+    return blueprint.steps.flatMap((step) =>
+      step.nextStepIds
+        .filter((targetId) => idSet.has(targetId))
+        .map((targetId) => ({
+          id: `edge-${step.id}-${targetId}`,
+          source: step.id,
+          target: targetId,
+          type: "default",
+        }))
+    );
+  }, [blueprint]);
+  const selectedStep = useMemo(
+    () => (blueprint ? blueprint.steps.find((step) => step.id === selectedStepId) ?? null : null),
+    [blueprint, selectedStepId]
+  );
+  const blueprintIsEmpty = useMemo(() => isBlueprintEffectivelyEmpty(blueprint), [blueprint]);
+  const completionBySection = useMemo(
+    () => new Map(completion.sections.map((section) => [section.key, section.complete])),
+    [completion]
   );
 
-  const handleAiCommand = useCallback(
-    (command: string) => {
-      if (command.toLowerCase().includes("10,000") || command.toLowerCase().includes("10k")) {
-        setEdges((current) =>
-          current.map((edge) => {
-            if (edge.id === "e3-4") {
-              return {
-                ...edge,
-                selected: true,
-                data: {
-                  ...edge.data,
-                  value: 10000,
-                  label: "> $10k",
-                  onLabelChange: handleEdgeLabelChange,
-                },
-              };
-            }
-            if (edge.id === "e3-5") {
-              return {
-                ...edge,
-                data: {
-                  ...edge.data,
-                  value: 10000,
-                  label: "< $10k",
-                  onLabelChange: handleEdgeLabelChange,
-                },
-              };
-            }
-            return edge;
-          })
-        );
+  useEffect(() => {
+    if (!blueprint) {
+      return;
+    }
+    const prev = completionRef.current;
+    if (prev) {
+      completion.sections.forEach((section) => {
+        const prevSection = prev.sections.find((entry) => entry.key === section.key);
+        if (prevSection && !prevSection.complete && section.complete) {
+          setSectionCelebrations((current) => ({ ...current, [section.key]: Date.now() }));
+          toast({
+            title: `${BLUEPRINT_SECTION_TITLES[section.key]} captured`,
+            description: "Great progress—keep refining the rest of the blueprint.",
+            variant: "success",
+          });
+          setTimeout(() => {
+            setSectionCelebrations((current) => {
+              const next = { ...current };
+              delete next[section.key];
+              return next;
+            });
+          }, 2000);
+        }
+      });
+    }
+    completionRef.current = completion;
+  }, [blueprint, completion, toast]);
 
-        setTimeout(() => {
-          setEdges((eds) => eds.map((edge) => ({ ...edge, selected: false })));
-        }, 2000);
-      }
-    },
-    [handleEdgeLabelChange, setEdges]
-  );
-
-  const selectedNode = nodes.find((node) => node.id === selectedStepId);
-  const selectedStepData: InspectorStep | null = selectedNode
-    ? {
-        id: selectedNode.id,
-        title: selectedNode.data.title || "",
-        description: selectedNode.data.description || "",
-        type: selectedNode.data.type || "action",
-        status: selectedNode.data.status || "complete",
-        inputs: [],
-        outputs: [],
-        exceptions: stepExceptions[selectedNode.id] ?? selectedNode.data.exceptions ?? [],
-      }
-    : null;
+  useEffect(() => {
+    if (blueprint && blueprint.steps.length > 0 && !hasSelectedStep) {
+      setShowStepHelper(true);
+    }
+  }, [blueprint, hasSelectedStep]);
 
   if (loading && !automation) {
     return (
@@ -812,68 +938,150 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     </div>
   );
 
-  const blueprintContent = (
-    <div className="space-y-6">
-      <BlueprintTabLayout
-        checklist={BLUEPRINT_CHECKLIST}
-        isContributorMode={isContributorMode}
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnectNodes={handleConnectNodes}
-        onNodeClick={handleNodeClick}
-        isSynthesizing={isSynthesizing}
-        onToggleContributorMode={() => setIsContributorMode((prev) => !prev)}
-        selectedStepId={selectedStepId}
-        selectedStep={selectedStepData}
-        onCloseInspector={() => setSelectedStepId(null)}
-        onRequestAddException={() => setShowExceptionModal(true)}
-        onConnectSystem={() =>
-          toast({ title: "Connect a system", description: "System picker will plug in here soon." })
-        }
-        onAiCommand={handleAiCommand}
-      />
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card className="shadow-sm border-gray-100">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Activity className="h-4 w-4" />
-              Blueprint overview
-            </CardTitle>
-            <CardDescription>Share the current plan with stakeholders.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <BlueprintSummary
-              blueprint={blueprintDraft ?? initialBlueprint}
-              onCreate={selectedVersion ? handleInitializeBlueprint : undefined}
-              disableCreate={!selectedVersion}
+  const blueprintContent = blueprint ? (
+    <div className="w-full space-y-4">
+      {blueprintError ? (
+        <div className="mx-6 mt-6 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{blueprintError}</div>
+      ) : null}
+      <div className="px-6 pt-4 space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase text-gray-400">Blueprint status</p>
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              <Badge variant="outline" className="text-xs font-semibold">
+                {blueprint.status}
+              </Badge>
+              {selectedVersion ? <StatusBadge status={selectedVersion.status} /> : null}
+            </div>
+            <div className="flex items-center gap-3 mt-3">
+              <span className="text-sm font-medium text-gray-700">
+                Completeness {Math.round(completion.score * 100)}%
+              </span>
+              <Progress value={Number((completion.score * 100).toFixed(1))} className="w-48 h-2" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="ghost" onClick={handleAddStep}>
+              <Plus size={14} className="mr-2" />
+              Add Step
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => handleSaveBlueprint()}
+              disabled={!isBlueprintDirty || savingBlueprint}
+            >
+              {savingBlueprint ? "Saving..." : "Save Blueprint"}
+            </Button>
+            <Button
+              onClick={handleMarkReadyForPricing}
+              disabled={
+                !blueprint ||
+                blueprint.status === "ReadyForQuote" ||
+                completion.score < 0.5 ||
+                isBlueprintDirty ||
+                savingBlueprint
+              }
+            >
+              Ready for Pricing
+            </Button>
+          </div>
+        </div>
+      </div>
+      <div className="px-6 pb-6">
+        <div className="flex flex-col gap-6 lg:flex-row min-h-[620px]">
+          <div className="w-full lg:w-[320px] border border-gray-200 rounded-2xl overflow-hidden bg-white flex">
+            <StudioChat
+              blueprintEmpty={blueprintIsEmpty}
+              onDraftBlueprint={handleDraftBlueprint}
+              isDrafting={draftingBlueprint}
+              lastError={chatError}
             />
-          </CardContent>
-        </Card>
-        <Card className="shadow-sm border-gray-100">
-          <CardHeader>
-            <CardTitle>Blueprint editor</CardTitle>
-            <CardDescription>Update status, sections, and canvas steps in one place.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {blueprintError ? (
-              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{blueprintError}</div>
-            ) : null}
-            <BlueprintEditorPanel
-              blueprint={blueprintDraft}
-              onBlueprintChange={handleBlueprintChange}
-              onCreateBlueprint={handleInitializeBlueprint}
-              onSave={handleSaveBlueprint}
-              saving={savingBlueprint}
-              canSave={hasBlueprintChanges}
-              disabled={!selectedVersion}
+          </div>
+          <div className="flex-1 border border-gray-200 rounded-2xl bg-white flex flex-col min-w-0">
+            <div className="border-b border-gray-100 bg-white/90 backdrop-blur">
+              <div className="flex items-center gap-2 overflow-x-auto px-4 py-3">
+                {orderedSections.map((section) => {
+                  const complete = completionBySection.get(section.key) ?? false;
+                  const isActive = activeSection?.id === section.id;
+                  const celebrating = Boolean(sectionCelebrations[section.key]);
+                  return (
+                    <button
+                      key={section.id}
+                      type="button"
+                      onClick={() => setSelectedSectionKey(section.key)}
+                      className={cn(
+                        "px-3 py-1.5 rounded-full text-xs font-semibold transition-all border",
+                        isActive
+                          ? "bg-[#E43632] border-[#E43632] text-white"
+                          : complete
+                            ? "bg-emerald-50 border-emerald-100 text-emerald-700"
+                            : "bg-gray-100 border-gray-200 text-gray-600 hover:bg-white",
+                        celebrating && "ring-2 ring-[#E43632]/40"
+                      )}
+                    >
+                      {section.title}
+                    </button>
+                  );
+                })}
+              </div>
+              {activeSection ? (
+                <div className="px-4 pb-4">
+                  <Textarea
+                    rows={4}
+                    value={activeSection.content}
+                    onChange={(event) => handleSectionContentChange(activeSection.id, event.target.value)}
+                    placeholder="This copy populates the red-chip overview."
+                  />
+                  <p className="text-[11px] text-gray-400 mt-1">Keep each section concise and actionable.</p>
+                </div>
+              ) : (
+                <div className="px-4 py-6 text-sm text-gray-500">Sections will appear once the blueprint is drafted.</div>
+              )}
+            </div>
+            <div className="flex-1 relative min-h-[320px]">
+              <StudioCanvas
+                nodes={flowNodes}
+                edges={flowEdges}
+                onConnect={handleConnectNodes}
+                onEdgesChange={handleEdgesChange}
+                onNodeClick={handleNodeClick}
+                emptyState={
+                  <div className="max-w-xs text-center text-gray-500 text-sm leading-relaxed">
+                    <p className="font-semibold text-[#0A0A0A] mb-1">No steps yet</p>
+                    Start by telling Copilot about your workflow. I’ll map out the steps for you.
+                  </div>
+                }
+              />
+              {showStepHelper && !blueprintIsEmpty && (
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-gray-900/90 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none">
+                  Click on any step to configure or refine.
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="w-full lg:w-[340px] border border-gray-200 rounded-2xl overflow-hidden bg-white flex">
+            <StudioInspector
+              step={selectedStep}
+              onClose={() => {
+                setSelectedStepId(null);
+                setHasSelectedStep(false);
+                setShowStepHelper(true);
+              }}
+              onChange={handleStepChange}
+              onDelete={handleDeleteStep}
             />
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
     </div>
+  ) : (
+    <div className="p-6">
+      <div className="rounded-lg border border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-500">Loading blueprint…</div>
+    </div>
   );
+  const errorBanner = error ? (
+    <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>
+  ) : null;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-gray-50">
@@ -925,47 +1133,42 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
-          {error ? (
-            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>
-          ) : null}
-          {activeTab === "Overview" ? (
-            overviewContent
-          ) : activeTab === "Build Status" ? (
-            <BuildStatusTab
-              status={selectedVersion?.status}
-              latestQuote={selectedVersion?.latestQuote}
-              lastUpdated={selectedVersion?.updatedAt ?? null}
-              versionLabel={selectedVersion?.versionLabel ?? ""}
-            />
-          ) : activeTab === "Blueprint" ? (
-            blueprintContent
-          ) : activeTab === "Test" ? (
-            <TestTab />
-          ) : activeTab === "Activity" ? (
-            <ActivityTab onNavigateToBlueprint={() => setActiveTab("Blueprint")} />
-          ) : activeTab === "Contributors" ? (
-            <ContributorsTab onInvite={() => toast({ title: "Invite teammates", description: "Coming soon." })} />
-          ) : activeTab === "Settings" ? (
-            <SettingsTab
-              onInviteUser={() => toast({ title: "Invite teammates", description: "Coming soon." })}
-              onAddSystem={() => handleMockAction("Add system")}
-              onNewVersion={handleCreateVersion}
-              onManageCredentials={(system) => handleMockAction(`Manage ${system}`)}
-              onNavigateToTab={(tab) => handleMockAction(`Navigate to ${tab}`)}
-              onNavigateToSettings={() => handleMockAction("Workspace settings")}
-            />
-          ) : null}
-        </div>
+        {activeTab === "Blueprint" ? (
+          <div className="w-full space-y-4">
+            <div className="px-6 pt-6">{errorBanner}</div>
+            {blueprintContent}
+          </div>
+        ) : (
+          <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+            {errorBanner}
+            {activeTab === "Overview" ? (
+              overviewContent
+            ) : activeTab === "Build Status" ? (
+              <BuildStatusTab
+                status={selectedVersion?.status}
+                latestQuote={selectedVersion?.latestQuote}
+                lastUpdated={selectedVersion?.updatedAt ?? null}
+                versionLabel={selectedVersion?.versionLabel ?? ""}
+              />
+            ) : activeTab === "Test" ? (
+              <TestTab />
+            ) : activeTab === "Activity" ? (
+              <ActivityTab onNavigateToBlueprint={() => setActiveTab("Blueprint")} />
+            ) : activeTab === "Contributors" ? (
+              <ContributorsTab onInvite={() => toast({ title: "Invite teammates", description: "Coming soon." })} />
+            ) : activeTab === "Settings" ? (
+              <SettingsTab
+                onInviteUser={() => toast({ title: "Invite teammates", description: "Coming soon." })}
+                onAddSystem={() => handleMockAction("Add system")}
+                onNewVersion={handleCreateVersion}
+                onManageCredentials={(system) => handleMockAction(`Manage ${system}`)}
+                onNavigateToTab={(tab) => handleMockAction(`Navigate to ${tab}`)}
+                onNavigateToSettings={() => handleMockAction("Workspace settings")}
+              />
+            ) : null}
+          </div>
+        )}
       </div>
-      <ExceptionModal
-        isOpen={showExceptionModal}
-        onClose={() => setShowExceptionModal(false)}
-        onAdd={(rule) => {
-          handleAddExceptionRule(rule);
-          setShowExceptionModal(false);
-        }}
-      />
     </div>
   );
 }
@@ -1283,99 +1486,3 @@ function CopilotSuggestions({ suggestions, onSelectSuggestion, onAskForMore }: C
   );
 }
 
-interface BlueprintTabLayoutProps {
-  checklist: typeof BLUEPRINT_CHECKLIST;
-  isContributorMode: boolean;
-  nodes: Node[];
-  edges: Edge[];
-  onNodesChange: OnNodesChange;
-  onEdgesChange: OnEdgesChange;
-  onConnectNodes: (connection: Connection) => void;
-  onNodeClick: (event: MouseEvent, node: Node) => void;
-  isSynthesizing: boolean;
-  onToggleContributorMode: () => void;
-  selectedStepId: string | null;
-  selectedStep: InspectorStep | null;
-  onCloseInspector: () => void;
-  onRequestAddException: () => void;
-  onConnectSystem: () => void;
-  onAiCommand: (command: string) => void;
-}
-
-function BlueprintTabLayout({
-  checklist,
-  isContributorMode,
-  nodes,
-  edges,
-  onNodesChange,
-  onEdgesChange,
-  onConnectNodes,
-  onNodeClick,
-  isSynthesizing,
-  onToggleContributorMode,
-  selectedStepId,
-  selectedStep,
-  onCloseInspector,
-  onRequestAddException,
-  onConnectSystem,
-  onAiCommand,
-}: BlueprintTabLayoutProps) {
-  return (
-    <div className="rounded-3xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-      <div className="h-14 border-b border-gray-100 bg-white flex items-center px-6 overflow-x-auto no-scrollbar">
-        <div className="flex items-center gap-6 min-w-max">
-          {checklist.map((item) => (
-            <div key={item.id} className="flex items-center gap-2">
-              <div
-                className={cn(
-                  "w-5 h-5 rounded-full border flex items-center justify-center text-[10px] font-bold transition-colors",
-                  item.completed ? "bg-[#E43632] border-[#E43632] text-white" : "border-gray-300 text-gray-400 bg-white"
-                )}
-              >
-                {item.completed ? <CheckCircle2 size={12} /> : item.id.charAt(0).toUpperCase()}
-              </div>
-              <span className={cn("text-xs font-semibold tracking-wide", item.completed ? "text-[#0A0A0A]" : "text-gray-400")}>{item.label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="flex h-[640px] bg-gray-50">
-        <div className="w-[320px] shrink-0 border-r border-gray-200 bg-[#F9FAFB]">
-          <StudioChat isContributorMode={isContributorMode} onAiCommand={onAiCommand} />
-        </div>
-        <div className="flex-1 relative h-full">
-          <StudioCanvas
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnectNodes}
-            onNodeClick={onNodeClick}
-            isSynthesizing={isSynthesizing}
-          />
-          <div className="absolute bottom-4 left-4 z-30">
-            <button
-              onClick={onToggleContributorMode}
-              className="text-[10px] text-gray-500 hover:text-[#E43632] bg-white/70 backdrop-blur px-3 py-1.5 rounded-full border border-gray-200 shadow-sm transition-colors"
-            >
-              {isContributorMode ? "Switch to builder view" : "Toggle contributor view"}
-            </button>
-          </div>
-        </div>
-        <div
-          className={cn(
-            "h-full bg-white border-l border-gray-200 shadow-xl shadow-gray-200/40 transition-all duration-300 ease-out",
-            selectedStepId ? "w-[360px] opacity-100" : "w-0 opacity-0 pointer-events-none"
-          )}
-        >
-          <StudioInspector
-            selectedStep={selectedStep}
-            onClose={onCloseInspector}
-            onConnect={onConnectSystem}
-            onAddException={onRequestAddException}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}

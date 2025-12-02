@@ -25,6 +25,7 @@ const aiJobStatusEnum = pgEnum("ai_job_status", ["pending", "processing", "succe
 const messageTypeEnum = pgEnum("message_type", ["client", "ops"]);
 const taskStatusEnum = pgEnum("task_status", ["pending", "in_progress", "complete"]);
 const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high", "critical"]);
+const notificationPreferenceEnum = pgEnum("notification_preference", ["all", "mentions", "none"]);
 
 export const tenants = pgTable(
   "tenants",
@@ -47,7 +48,10 @@ export const users = pgTable(
     auth0Id: text("auth0_id"),
     email: text("email").notNull(),
     name: text("name"),
+    title: text("title"),
     avatarUrl: text("avatar_url"),
+    timezone: text("timezone"),
+    notificationPreference: notificationPreferenceEnum("notification_preference").notNull().default("all"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -326,4 +330,5 @@ export type Message = typeof messages.$inferSelect;
 export type Task = typeof tasks.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type MembershipRole = typeof membershipRoleEnum.enumValues[number];
+export type NotificationPreference = typeof notificationPreferenceEnum.enumValues[number];
 

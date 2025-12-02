@@ -38,11 +38,12 @@ const defaultEdgeOptions = {
 interface StudioCanvasProps {
   nodes: Node[];
   edges: Edge[];
-  onNodesChange: OnNodesChange;
-  onEdgesChange: OnEdgesChange;
-  onConnect: (connection: Connection) => void;
-  onNodeClick: (event: React.MouseEvent, node: Node) => void;
+  onNodesChange?: OnNodesChange;
+  onEdgesChange?: OnEdgesChange;
+  onConnect?: (connection: Connection) => void;
+  onNodeClick?: (event: React.MouseEvent, node: Node) => void;
   isSynthesizing?: boolean;
+  emptyState?: React.ReactNode;
 }
 
 export function StudioCanvas({
@@ -53,6 +54,7 @@ export function StudioCanvas({
   onConnect,
   onNodeClick,
   isSynthesizing = false,
+  emptyState,
 }: StudioCanvasProps) {
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
 
@@ -69,7 +71,7 @@ export function StudioCanvas({
 
   return (
     <ReactFlowProvider>
-      <div className="w-full h-full bg-[#F9FAFB] relative">
+      <div className="w-full h-full bg-[#F9FAFB] relative" data-testid="canvas-pane">
         {/* Synthesizing Indicator */}
         {isSynthesizing && (
           <div className="absolute top-8 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur border border-[#E43632]/20 px-4 py-2 rounded-full shadow-lg shadow-red-500/10 flex items-center gap-2 animate-in fade-in slide-in-from-top-4 duration-300">
@@ -96,11 +98,21 @@ export function StudioCanvas({
           defaultEdgeOptions={defaultEdgeOptions}
           minZoom={0.1}
           maxZoom={2}
+          nodesDraggable={Boolean(onNodesChange)}
+          nodesConnectable={Boolean(onConnect)}
+          nodesFocusable
+          elementsSelectable
           proOptions={{ hideAttribution: true }}
         >
           <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#E5E7EB" />
           <Controls className="!bg-white !border-gray-200 !shadow-sm !rounded-lg overflow-hidden [&>button]:!border-b-gray-100 [&>button]:text-gray-500 hover:[&>button]:text-[#E43632]" />
         </ReactFlow>
+
+        {nodes.length === 0 && emptyState ? (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            {emptyState}
+          </div>
+        ) : null}
       </div>
     </ReactFlowProvider>
   );

@@ -37,7 +37,7 @@ This doc captures the non-negotiable constraints for the current codebase. Every
   - Admin: `/admin/clients`, `/admin/projects`, `/admin/projects/[id]`.
   - Delete duplicate or legacy versions (e.g., mock `/(admin)` mirrors) so links, breadcrumbs, and tests target a single path.
 - The Studio Blueprint tab is a fixed layout: Copilot chat + red-chip sections + canvas + step drawer. No “phase” abstractions or alternate editors.
-- Blueprint editing/rendering always consumes the shared helpers (`createEmptyBlueprint`, `BlueprintEditorPanel`, `BlueprintSummary`) and never reimplements step/section shapes inline.
+- Blueprint editing/rendering always consumes the shared helpers (`createEmptyBlueprint`, `StudioChat`, `StudioCanvas`, `StudioInspector`) and never reimplements step/section shapes inline.
 - Mock data stays at the top of the component (or in `/lib/mock-*`) and is clearly marked with `// TODO` plus the eventual data source.
 
 ## Types as Source of Truth

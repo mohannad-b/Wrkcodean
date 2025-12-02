@@ -96,5 +96,31 @@ describe("PATCH /api/automation-versions/[id]", () => {
       expect.objectContaining({ blueprintJson: validBlueprint, automationVersionId: "version-1" })
     );
   });
+
+  it("persists inspector step edits", async () => {
+    const { PATCH } = await import("@/app/api/automation-versions/[id]/route");
+    const updatedBlueprint = {
+      ...validBlueprint,
+      steps: validBlueprint.steps.map((step) =>
+        step.id === "step-1"
+          ? {
+              ...step,
+              summary: "Updated summary from inspector",
+              goalOutcome: "Updated goal",
+            }
+          : step
+      ),
+    };
+    const request = new Request("http://localhost/api/automation-versions/version-1", {
+      method: "PATCH",
+      body: JSON.stringify({ blueprintJson: updatedBlueprint }),
+    });
+
+    const response = await PATCH(request, { params: { id: "version-1" } });
+    expect(response.status).toBe(200);
+    expect(updateMetadataMock).toHaveBeenCalledWith(
+      expect.objectContaining({ blueprintJson: updatedBlueprint, automationVersionId: "version-1" })
+    );
+  });
 });
 

@@ -1,127 +1,109 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
-import {
-  Send,
-  Mic,
-  Upload,
-  AppWindow,
-  MonitorPlay,
-  Sparkles,
-  AlertCircle,
-  Paperclip,
-  Wand2,
-  MoveRight,
-} from "lucide-react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
+import { Send, Mic, Upload, AppWindow, MonitorPlay, Sparkles, AlertCircle, Paperclip } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { currentUser } from "@/lib/mock-automations";
 import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
-interface Message {
+export interface CopilotMessage {
   id: string;
   role: "user" | "ai";
   content: string;
   timestamp: string;
-  isSystem?: boolean;
-  suggestions?: string[];
 }
 
 interface StudioChatProps {
-  isContributorMode?: boolean;
-  onAiCommand?: (command: string) => void;
+  blueprintEmpty: boolean;
+  onDraftBlueprint: (messages: CopilotMessage[]) => Promise<void>;
+  isDrafting: boolean;
+  disabled?: boolean;
+  lastError?: string | null;
+  onConversationChange?: (messages: CopilotMessage[]) => void;
 }
 
-export function StudioChat({ isContributorMode = false, onAiCommand }: StudioChatProps) {
-  const [messages, setMessages] = useState<Message[]>(
-    isContributorMode
-      ? [
-          {
-            id: "1",
-            role: "ai",
-            content: "Hi! Mo needs your help to complete the 'Finance Reconciliation' workflow.",
-            timestamp: "10:00 AM",
-          },
-          {
-            id: "2",
-            role: "ai",
-            content:
-              "Could you please upload a screenshot of the invoice approval screen in NetSuite? This will help us understand the UI structure.",
-            timestamp: "10:00 AM",
-          },
-        ]
-      : [
-          {
-            id: "1",
-            role: "ai",
-            content: "I'm ready to help you build. What process are we automating today?",
-            timestamp: "10:00 AM",
-            suggestions: ["Invoice Processing", "Lead Routing", "Employee Onboarding"],
-          },
-          {
-            id: "2",
-            role: "user",
-            content: "I need to automate invoice processing from email to Xero.",
-            timestamp: "10:01 AM",
-          },
-          {
-            id: "3",
-            role: "ai",
-            content:
-              "I've drafted a flow: Email Trigger -> PDF Extraction -> Xero Draft. I inferred the email subject format as 'Invoice #[Number]'. Is that correct?",
-            timestamp: "10:01 AM",
-            suggestions: ["Add Approval Step", "Refine Trigger", "Show in Canvas"],
-          },
-        ]
-  );
+const INITIAL_AI_MESSAGE: CopilotMessage = {
+  id: "ai-initial",
+  role: "ai",
+  content: "Tell me about the workflow you want to automate. I'll draft the blueprint once you're ready.",
+  timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+};
+
+export function StudioChat({
+  blueprintEmpty,
+  onDraftBlueprint,
+  isDrafting,
+  disabled = false,
+  lastError,
+  onConversationChange,
+}: StudioChatProps) {
+  const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
   const [input, setInput] = useState("");
-  const [isThinking, setIsThinking] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
+  const prevBlueprintEmptyRef = useRef<boolean>(blueprintEmpty);
 
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isThinking]);
+  }, [messages]);
 
-  const handleSend = (textOverride?: string) => {
-    const content = typeof textOverride === "string" ? textOverride : input;
-    if (!content.trim()) return;
+  useEffect(() => {
+    if (prevBlueprintEmptyRef.current && !blueprintEmpty) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `ai-${Date.now()}`,
+          role: "ai",
+          content: "Draft created. Review the canvas and click any step to refine details.",
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        },
+      ]);
+    }
+    prevBlueprintEmptyRef.current = blueprintEmpty;
+  }, [blueprintEmpty]);
+
+  useEffect(() => {
+    onConversationChange?.(messages);
+  }, [messages, onConversationChange]);
+
+  const hasUserMessage = useMemo(() => messages.some((message) => message.role === "user"), [messages]);
+  const canDraft = blueprintEmpty && hasUserMessage && !isDrafting && !disabled;
+  const helperMessage = blueprintEmpty
+    ? "Share the workflow, systems, and exception cases so the draft is accurate."
+    : "Blueprint synced with Copilot. Keep refining via chat or the inspector.";
+
+  const handleSend = () => {
+    const content = input.trim();
+    if (!content) return;
 
     setMessages((prev) => [
       ...prev,
       {
         id: Date.now().toString(),
         role: "user",
-        content: content,
+        content,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       },
     ]);
 
-    if (!textOverride) {
-      setInput("");
-    }
-    setIsThinking(true);
+    setInput("");
+    setLocalError(null);
+  };
 
-    setTimeout(() => {
-      setIsThinking(false);
-      if (onAiCommand) {
-        onAiCommand(content);
-      }
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          role: "ai",
-          content: "Understood. Updating the blueprint based on your feedback...",
-          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          suggestions: ["Undo Changes", "Explain Logic"],
-        },
-      ]);
-    }, 1500);
+  const handleDraft = async () => {
+    if (!hasUserMessage) {
+      setLocalError("Add at least one message before drafting.");
+      return;
+    }
+    setLocalError(null);
+    await onDraftBlueprint(messages);
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#F9FAFB] border-r border-gray-200 overflow-hidden">
+    <div className="flex flex-col h-full bg-[#F9FAFB] border-r border-gray-200 overflow-hidden" data-testid="copilot-pane">
       {/* Header */}
       <div className="p-4 border-b border-gray-200 bg-white flex flex-col gap-3 shadow-sm z-10">
         <div className="flex items-center gap-2">
@@ -132,41 +114,33 @@ export function StudioChat({ isContributorMode = false, onAiCommand }: StudioCha
             <span className="font-bold text-sm text-[#0A0A0A] block leading-none">WRK Copilot</span>
             <span className="text-[10px] text-gray-400 font-medium">AI Assistant</span>
           </div>
-          {isContributorMode && (
-            <Badge
-              variant="secondary"
-              className="ml-auto text-[10px] bg-blue-50 text-blue-600 border-blue-100 px-2 py-0.5"
-            >
-              Contributor Mode
-            </Badge>
-          )}
+          <Badge variant="secondary" className="ml-auto text-[10px] bg-gray-100 text-gray-600 border-gray-200 px-2 py-0.5">
+            {blueprintEmpty ? "Draft Needed" : "Blueprint Synced"}
+          </Badge>
         </div>
 
         {/* Quick Actions Row */}
-        {!isContributorMode && (
-          <div className="grid grid-cols-4 gap-2 mt-1">
-            <QuickAction icon={Upload} label="Upload" />
-            <QuickAction icon={MonitorPlay} label="Record" />
-            <QuickAction icon={AppWindow} label="Connect" />
-            <QuickAction icon={Mic} label="Voice" />
-          </div>
-        )}
+        <div className="grid grid-cols-4 gap-2 mt-1">
+          <QuickAction icon={Upload} label="Upload" />
+          <QuickAction icon={MonitorPlay} label="Record" />
+          <QuickAction icon={AppWindow} label="Connect" />
+          <QuickAction icon={Mic} label="Voice" />
+        </div>
 
-        {/* Contributor Task List */}
-        {isContributorMode && (
-          <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-3 space-y-3 mt-1">
-            <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold text-blue-800 uppercase tracking-wider">
-                Your Tasks (2)
-              </p>
-              <span className="text-[10px] text-blue-600 font-medium">0% Complete</span>
+        <div className="flex flex-col gap-2">
+          <div className="text-[11px] text-gray-500">{helperMessage}</div>
+          {blueprintEmpty && (
+            <Button size="sm" onClick={handleDraft} disabled={!canDraft} className="justify-center text-xs font-semibold">
+              {isDrafting ? "Drafting Blueprint…" : "Draft Blueprint with Copilot"}
+            </Button>
+          )}
+          {(localError || lastError) && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 flex items-center gap-1">
+              <AlertCircle size={12} />
+              {localError || lastError}
             </div>
-            <div className="space-y-2">
-              <TaskItem label="Upload NetSuite screenshot" type="upload" />
-              <TaskItem label="Connect Xero Account" type="connect" />
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Chat Area */}
@@ -191,9 +165,7 @@ export function StudioChat({ isContributorMode = false, onAiCommand }: StudioCha
                 </Avatar>
               )}
 
-              <div
-                className={`max-w-[85%] space-y-2 ${msg.role === "user" ? "items-end flex flex-col" : ""}`}
-              >
+              <div className={`max-w-[85%] space-y-2 ${msg.role === "user" ? "items-end flex flex-col" : ""}`}>
                 <div
                   className={`p-4 text-sm shadow-sm relative leading-relaxed ${
                     msg.role === "user"
@@ -204,70 +176,16 @@ export function StudioChat({ isContributorMode = false, onAiCommand }: StudioCha
                   <p className="whitespace-pre-wrap">{msg.content}</p>
                 </div>
 
-                {/* AI Suggestions Chips */}
-                {msg.role === "ai" && msg.suggestions && (
-                  <div className="flex flex-wrap gap-1.5 mt-1">
-                    {msg.suggestions.map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => handleSend(s)}
-                        className="text-[10px] font-medium bg-white border border-gray-200 text-gray-600 px-2 py-1 rounded-full hover:border-[#E43632] hover:text-[#E43632] transition-colors flex items-center gap-1"
-                      >
-                        {s} <MoveRight size={8} />
-                      </button>
-                    ))}
-                  </div>
-                )}
-
                 <span className="text-[10px] text-gray-400 px-1 block">{msg.timestamp}</span>
               </div>
             </motion.div>
           ))}
-
-          {/* AI Thinking Indicator */}
-          {isThinking && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3">
-              <div className="w-8 h-8 rounded-full bg-white border border-gray-200 flex items-center justify-center text-[#E43632] shadow-sm shrink-0">
-                <Sparkles size={14} />
-              </div>
-              <div className="bg-[#F3F4F6] rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1">
-                <span
-                  className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"
-                  style={{ animationDelay: "0ms" }}
-                />
-                <span
-                  className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"
-                  style={{ animationDelay: "150ms" }}
-                />
-                <span
-                  className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"
-                  style={{ animationDelay: "300ms" }}
-                />
-              </div>
-            </motion.div>
-          )}
           <div ref={scrollEndRef} />
         </div>
       </ScrollArea>
 
       {/* Input Area */}
       <div className="p-4 bg-white border-t border-gray-200">
-        {/* Micro-panel / Prompt Suggestion */}
-        {!isContributorMode && messages.length < 3 && (
-          <div
-            className="mb-3 px-3 py-2 bg-gray-50 rounded-lg border border-gray-100 flex items-center justify-between group cursor-pointer hover:bg-red-50 hover:border-red-100 transition-colors"
-            onClick={() =>
-              setInput("Our sales process starts when a lead comes from Facebook ads...")
-            }
-          >
-            <p className="text-xs text-gray-500 group-hover:text-[#E43632] transition-colors truncate pr-2">
-              <span className="font-bold mr-1">Try:</span>
-              &quot;Our sales process starts when a lead comes from Facebook ads...&quot;
-            </p>
-            <Wand2 size={12} className="text-gray-300 group-hover:text-[#E43632]" />
-          </div>
-        )}
-
         <div className="relative flex items-center">
           <div className="absolute left-2 flex items-center gap-1">
             <button className="p-1.5 text-gray-400 hover:text-[#0A0A0A] hover:bg-gray-100 rounded-md transition-colors">
@@ -280,13 +198,14 @@ export function StudioChat({ isContributorMode = false, onAiCommand }: StudioCha
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
             placeholder={
-              isContributorMode ? "Reply to task..." : "Describe your workflow change..."
+              blueprintEmpty ? "Describe the workflow, systems, and exceptions..." : "Capture refinements or clarifications..."
             }
             className="w-full bg-white text-[#0A0A0A] placeholder:text-gray-400 text-sm rounded-xl py-3 pl-10 pr-12 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#E43632]/10 focus:border-[#E43632] transition-all shadow-sm hover:border-gray-300"
+            disabled={disabled}
           />
           <button
             onClick={() => handleSend()}
-            disabled={!input.trim()}
+            disabled={!input.trim() || disabled}
             className="absolute right-1.5 p-2 bg-[#E43632] text-white rounded-lg hover:bg-[#C12E2A] transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Send size={14} />
@@ -311,21 +230,5 @@ function QuickAction({
         {label}
       </span>
     </button>
-  );
-}
-
-function TaskItem({ label, type }: { label: string; type: "upload" | "connect" }) {
-  return (
-    <div className="flex items-center justify-between bg-white p-2 rounded-lg border border-blue-100 shadow-sm group hover:border-blue-300 transition-colors cursor-pointer">
-      <div className="flex items-center gap-2">
-        <div
-          className={`p-1.5 rounded-md ${type === "upload" ? "bg-purple-50 text-purple-600" : "bg-amber-50 text-amber-600"}`}
-        >
-          {type === "upload" ? <Upload size={12} /> : <AlertCircle size={12} />}
-        </div>
-        <span className="text-xs font-medium text-gray-700">{label}</span>
-      </div>
-      <div className="w-4 h-4 rounded-full border-2 border-gray-200 group-hover:border-blue-500 transition-colors" />
-    </div>
   );
 }

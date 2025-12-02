@@ -169,6 +169,9 @@ Core domain for automation definitions, versions, and blueprints.
 
 - `blueprint_json` is JSONB: Blueprint object (sections + steps + metadata per canonical schema).
 - If future query patterns demand it, we can add helper tables/materialized views (e.g., derived `blueprint_steps`), but v1 keeps everything in the JSON blob.
+- For v1, Studio always reads/writes the entire `blueprint_json` document. Inspector/canvas edits update local state and persist through a single PATCH.
+- JSONB is sufficient for dozens of steps and keeps validation centralized via the shared Zod schema.
+- If/when blueprints approach thousands of nodes or analytics need SQL access to individual steps, we can project into helper tables without breaking the JSON contract.
 
 **Status Lifecycle (enforced via Flow 13)**
 

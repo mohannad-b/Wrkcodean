@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { cache } from "react";
+import { cache as reactCache } from "react";
 import auth0 from "@/lib/auth/auth0";
 import { db } from "@/db";
 import { memberships, users, type MembershipRole } from "@/db/schema";
@@ -23,6 +23,11 @@ function resolveDefaultTenantRole(): MembershipRole {
 
 const DEFAULT_TENANT_ROLE = resolveDefaultTenantRole();
 
+const withCache =
+  reactCache ??
+  (<T extends (...args: any[]) => Promise<AppSession>>(fn: T) => {
+    return fn;
+  });
 
 export type AppSession = {
   userId: string;
@@ -173,7 +178,7 @@ async function getAuth0BackedSession(): Promise<AppSession> {
   };
 }
 
-export const getSession = cache(async (): Promise<AppSession> => {
+export const getSession = withCache(async (): Promise<AppSession> => {
   if (process.env.AUTH0_MOCK_ENABLED === "true") {
     return getMockSession();
   }
