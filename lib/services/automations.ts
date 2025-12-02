@@ -150,7 +150,7 @@ export async function createAutomationWithInitialVersion(params: CreateAutomatio
         tenantId: params.tenantId,
         automationId: automation.id,
         versionLabel: params.versionLabel ?? "v1.0",
-        status: toDbAutomationStatus("DRAFT"),
+        status: toDbAutomationStatus("IntakeInProgress"),
         intakeNotes: params.intakeNotes ?? null,
         createdAt: new Date(),
       })
@@ -186,12 +186,12 @@ export async function createAutomationVersion(params: CreateAutomationVersionPar
   const label = params.versionLabel ?? (await nextVersionLabel(params.automationId, params.tenantId));
 
   const [version] = await db
-    .insert(automationVersions)
-    .values({
-      tenantId: params.tenantId,
-      automationId: params.automationId,
-      versionLabel: label,
-      status: toDbAutomationStatus("DRAFT"),
+      .insert(automationVersions)
+      .values({
+        tenantId: params.tenantId,
+        automationId: params.automationId,
+        versionLabel: label,
+        status: toDbAutomationStatus("IntakeInProgress"),
       summary: params.summary ?? null,
       intakeNotes: params.intakeNotes ?? null,
     })
@@ -342,9 +342,9 @@ export async function updateAutomationVersionStatus(params: UpdateStatusParams) 
     throw new Error("Failed to update automation version");
   }
 
-  if (params.nextStatus === "NEEDS_PRICING") {
+  if (params.nextStatus === "NeedsPricing") {
     await ensureProjectForVersion(updated);
-  } else if (params.nextStatus === "READY_TO_BUILD" || params.nextStatus === "LIVE" || params.nextStatus === "ARCHIVED") {
+  } else if (params.nextStatus !== "IntakeInProgress") {
     await syncProjectStatus(updated, params.nextStatus);
   }
 
@@ -359,7 +359,7 @@ export async function ensureProjectForVersion(version: AutomationVersion) {
     .limit(1);
 
   if (existing.length > 0) {
-    await syncProjectStatus(existing[0], "NEEDS_PRICING");
+    await syncProjectStatus(existing[0], "NeedsPricing");
     return existing[0];
   }
 
@@ -373,7 +373,7 @@ export async function ensureProjectForVersion(version: AutomationVersion) {
     throw new Error("Automation not found for version");
   }
 
-  const dbStatus = toDbAutomationStatus("NEEDS_PRICING");
+  const dbStatus = toDbAutomationStatus("NeedsPricing");
 
   const [project] = await db
     .insert(projects)

@@ -30,7 +30,7 @@ describe("PATCH /api/automation-versions/[id]/status", () => {
     const response = await PATCH(
       new Request("http://localhost/api/automation-versions/v1/status", {
         method: "PATCH",
-        body: JSON.stringify({ status: "LIVE" }),
+        body: JSON.stringify({ status: "Live" }),
         headers: { "Content-Type": "application/json" },
       }),
       { params: { id: "v1" } }

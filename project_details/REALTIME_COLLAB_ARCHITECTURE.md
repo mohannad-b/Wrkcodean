@@ -41,7 +41,7 @@ Representative events pushed over channels:
 - `message.created` – includes message metadata, project_id, tenant_id.
 - `task.updated` – includes task id/status plus context.
 - `automation_version.status_changed` – old/new status for dashboards.
-- `blueprint.updated` – incremental diff (added/updated/deleted nodes) + version.
+- `blueprint.updated` – incremental diff (added/updated/deleted sections/steps) + version.
 
 All events include tenant scoping metadata so downstream fanout remains safe.
 
@@ -57,9 +57,9 @@ All events include tenant scoping metadata so downstream fanout remains safe.
 ### 5.2 Concurrency Strategy
 
 - Serialize writes per automation_version (DB locks or per-version mutex).
-- Last-write-wins at node/edge granularity:
-  - Different nodes edited concurrently → both succeed.
-  - Same node edited concurrently → latest write overwrites.
+- Last-write-wins at section/step granularity:
+  - Different steps edited concurrently → both succeed.
+  - Same step edited concurrently → latest write overwrites (server returns merged version with updated `updatedAt`).
 - Clients send `last_known_version`; backend may return `409 concurrency_conflict` if the request is too stale so the UI can refetch.
 
 ### 5.3 Presence (Future)

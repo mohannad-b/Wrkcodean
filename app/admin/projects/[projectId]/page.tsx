@@ -1,12 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, CheckCircle2, AlertTriangle, GitBranch, FileText, ShieldAlert } from "lucide-react";
-import { mockAdminProjects, mockProjectMessages, AdminProject } from "@/lib/admin-mock";
-import { notFound } from "next/navigation";
+import {
+  AlertCircle,
+  AlertTriangle,
+  ArrowLeft,
+  CheckCircle2,
+  GitBranch,
+  Loader2,
+  Send,
+  FileText,
+  ShieldAlert,
+  Signature,
+} from "lucide-react";
+import { mockAdminProjects, mockProjectMessages, AdminProject, PricingStatus, ProjectStatus } from "@/lib/admin-mock";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { PricingOverridePanel } from "@/components/admin/PricingOverridePanel";
@@ -29,6 +39,123 @@ const StudioCanvas = dynamic(
 );
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
+import type { AutomationLifecycleStatus } from "@/lib/automations/status";
+
+const STATUS_STYLES: Record<ProjectStatus, { bg: string; text: string; border: string }> = {
+  "Intake in Progress": { bg: "bg-gray-50", text: "text-gray-600", border: "border-gray-200" },
+  "Needs Pricing": { bg: "bg-yellow-50", text: "text-yellow-700", border: "border-yellow-200" },
+  "Awaiting Client Approval": { bg: "bg-blue-50", text: "text-blue-700", border: "border-blue-200" },
+  "Build in Progress": { bg: "bg-red-50", text: "text-[#E43632]", border: "border-red-200" },
+  "QA & Testing": { bg: "bg-purple-50", text: "text-purple-700", border: "border-purple-200" },
+  "Ready to Launch": { bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200" },
+  Live: { bg: "bg-emerald-100", text: "text-emerald-800", border: "border-emerald-300" },
+  Blocked: { bg: "bg-orange-50", text: "text-orange-700", border: "border-orange-200" },
+  Archived: { bg: "bg-gray-100", text: "text-gray-500", border: "border-gray-200" },
+};
+
+const ANALYSIS_STATS = [
+  { label: "API Cost / Run", value: "$0.012" },
+  { label: "Human Time / Run", value: "$1.333" },
+  { label: "Total Cost / Run", value: "$1.345" },
+  { label: "Est. Monthly Cost (5k runs)", value: "$6726.67" },
+];
+
+const AI_SUGGESTIONS = [
+  { tier: "0 - 5,000", discount: "0%", price: "$0.0450" },
+  { tier: "5,000 - 20,000", discount: "10%", price: "$0.0405" },
+  { tier: "20,000 - ∞", discount: "20%", price: "$0.0360" },
+];
+
+const CHECKLIST_ITEMS = [
+  "Overview",
+  "Business Requirements",
+  "Business Objectives",
+  "Success Criteria",
+  "Systems",
+  "Data Needs",
+  "Exceptions",
+  "Human Touchpoints",
+  "Flow",
+];
+
+type Quote = {
+  id: string;
+  status: string;
+  setupFee: string;
+  unitPrice: string;
+  estimatedVolume: number | null;
+  clientMessage: string | null;
+};
+
+type ProjectDetail = {
+  id: string;
+  name: string;
+  status: AutomationLifecycleStatus | string;
+  automation: {
+    id: string;
+    name: string;
+    description: string | null;
+  } | null;
+  version: {
+    id: string;
+    versionLabel: string;
+    status: AutomationLifecycleStatus | string;
+    intakeNotes: string | null;
+  } | null;
+  quotes: Quote[];
+};
+
+type PricingTabProps = {
+  project: AdminProject;
+  latestQuote: Quote | null;
+  onPricingSave: (payload: { setupFee: number; unitPrice: number }) => void;
+  savingQuote: boolean;
+  onQuoteStatus: (status: "SENT" | "SIGNED") => void;
+  updatingQuote: "SENT" | "SIGNED" | null;
+};
+
+type QuoteStatusCardProps = {
+  latestQuote: Quote | null;
+  onQuoteStatus: (status: "SENT" | "SIGNED") => void;
+  updatingQuote: "SENT" | "SIGNED" | null;
+};
+
+const mapLifecycleToProjectStatus = (status?: AutomationLifecycleStatus | string | null): ProjectStatus => {
+  switch (status) {
+    case "NeedsPricing":
+      return "Needs Pricing";
+    case "AwaitingClientApproval":
+      return "Awaiting Client Approval";
+    case "BuildInProgress":
+      return "Build in Progress";
+    case "QATesting":
+      return "QA & Testing";
+    case "Live":
+      return "Live";
+    case "Archived":
+      return "Archived";
+    case "Blocked":
+      return "Blocked";
+    case "ReadyToLaunch":
+    case "READY_TO_LAUNCH":
+      return "Ready to Launch";
+    default:
+      return "Intake in Progress";
+  }
+};
+
+const mapQuoteStatusToPricing = (status?: string | null): PricingStatus => {
+  switch (status) {
+    case "DRAFT":
+      return "Draft";
+    case "SENT":
+      return "Sent";
+    case "SIGNED":
+      return "Signed";
+    default:
+      return "Not Generated";
+  }
+};
 
 interface ProjectDetailPageProps {
   params: {
@@ -120,18 +247,8 @@ function OverviewTab({ project }: { project: AdminProject }) {
         )}
 
         <div className="space-y-3 flex-1">
-          {[
-            "Overview",
-            "Business Requirements",
-            "Business Objectives",
-            "Success Criteria",
-            "Systems",
-            "Data Needs",
-            "Exceptions",
-            "Human Touchpoints",
-            "Flow",
-          ].map((item, i) => {
-            const isComplete = i < (project.checklistProgress / 100) * 9;
+          {CHECKLIST_ITEMS.map((item, i) => {
+            const isComplete = i < (project.checklistProgress / 100) * CHECKLIST_ITEMS.length;
             return (
               <div key={i} className="flex items-center justify-between text-sm">
                 <span className={cn("text-gray-600", !isComplete && "text-amber-600 font-medium")}>
@@ -402,59 +519,309 @@ function ActivityTab() {
   );
 }
 
-export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
-  const project = mockAdminProjects.find((p) => p.id === params.projectId);
-  const [activeTab, setActiveTab] = useState("overview");
+function PricingTab({ project, latestQuote, onPricingSave, savingQuote, onQuoteStatus, updatingQuote }: PricingTabProps) {
+  return (
+    <div className="h-full overflow-y-auto bg-gray-50">
+      <div className="max-w-6xl mx-auto p-6 space-y-6">
+        <div className="grid gap-6 lg:grid-cols-[320px,_1fr]">
+          <div className="space-y-4">
+            <Card className="p-6 space-y-4">
+              <div>
+                <p className="text-xs font-bold text-gray-500 uppercase">Internal & AI Analysis</p>
+                <p className="text-sm text-gray-500">Estimated costs per run</p>
+              </div>
+              <div className="grid grid-cols-1 gap-4">
+                {ANALYSIS_STATS.map((stat) => (
+                  <div key={stat.label} className="rounded-lg border border-gray-100 bg-white/70 p-3">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase">{stat.label}</p>
+                    <p className="text-lg font-mono font-bold text-[#0A0A0A]">{stat.value}</p>
+                  </div>
+                ))}
+              </div>
+            </Card>
 
-  if (!project) {
-    notFound();
+            <Card>
+              <div className="p-6">
+                <p className="text-xs font-bold text-gray-500 uppercase">AI Suggestions</p>
+                <p className="text-sm text-gray-500">Recommended build fee and tiers</p>
+              </div>
+              <div className="border-t border-gray-100">
+                <div className="grid grid-cols-3 text-[11px] font-bold text-gray-400 uppercase px-6 py-2">
+                  <span>Volume</span>
+                  <span>Discount</span>
+                  <span className="text-right">Final Price</span>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {AI_SUGGESTIONS.map((tier) => (
+                    <div key={tier.tier} className="grid grid-cols-3 px-6 py-3 text-sm text-gray-700">
+                      <span>{tier.tier}</span>
+                      <span>{tier.discount}</span>
+                      <span className="text-right font-mono font-semibold">{tier.price}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          <div className="space-y-4">
+            <QuoteStatusCard latestQuote={latestQuote} onQuoteStatus={onQuoteStatus} updatingQuote={updatingQuote} />
+            <div className="relative">
+              <PricingOverridePanel
+                project={project}
+                onSave={(payload) => onPricingSave({ setupFee: payload.setupFee, unitPrice: payload.unitPrice })}
+              />
+              {savingQuote ? (
+                <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-white/70 backdrop-blur-sm">
+                  <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QuoteStatusCard({ latestQuote, onQuoteStatus, updatingQuote }: QuoteStatusCardProps) {
+  return (
+    <Card className="p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-bold text-[#0A0A0A]">Quote Status</h3>
+          <p className="text-sm text-gray-500">
+            {latestQuote ? "Tracking the most recent pricing draft" : "No quote drafted yet. Use the panel below."}
+          </p>
+        </div>
+        {latestQuote ? (
+          <Badge variant="outline" className="font-mono text-xs bg-gray-50 border-gray-200">
+            {latestQuote.status}
+          </Badge>
+        ) : null}
+      </div>
+
+      {latestQuote ? (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+              <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Setup Fee</p>
+              <p className="font-mono text-lg font-bold text-[#0A0A0A]">${Number(latestQuote.setupFee).toLocaleString()}</p>
+            </div>
+            <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+              <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Unit Price</p>
+              <p className="font-mono text-lg font-bold text-[#0A0A0A]">${Number(latestQuote.unitPrice)}</p>
+            </div>
+          </div>
+          {latestQuote.clientMessage ? (
+            <p className="text-xs text-gray-500 border border-gray-100 rounded-lg p-3 bg-gray-50">
+              {latestQuote.clientMessage}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            {latestQuote.status === "DRAFT" ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onQuoteStatus("SENT")}
+                disabled={updatingQuote !== null}
+              >
+                {updatingQuote === "SENT" ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="mr-2 h-4 w-4" />
+                )}
+                Mark Sent
+              </Button>
+            ) : null}
+            {latestQuote.status === "SENT" ? (
+              <Button size="sm" onClick={() => onQuoteStatus("SIGNED")} disabled={updatingQuote === "SIGNED"}>
+                {updatingQuote === "SIGNED" ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Signature className="mr-2 h-4 w-4" />
+                )}
+                Mark Signed
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">
+          No quote drafted yet.
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
+  const [project, setProject] = useState<ProjectDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("overview");
+  const [updatingQuote, setUpdatingQuote] = useState<"SENT" | "SIGNED" | null>(null);
+  const [markingLive, setMarkingLive] = useState(false);
+  const [savingQuote, setSavingQuote] = useState(false);
+
+  const fetchProject = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/admin/projects/${params.projectId}`, { cache: "no-store" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Failed to load project");
+      }
+      const data = (await response.json()) as { project: ProjectDetail };
+      setProject(data.project);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unexpected error");
+      setProject(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [params.projectId]);
+
+  useEffect(() => {
+    fetchProject();
+  }, [fetchProject]);
+
+  const latestQuote = useMemo(() => project?.quotes[0] ?? null, [project]);
+  const mockProject = useMemo(() => mockAdminProjects.find((p) => p.id === params.projectId) ?? mockAdminProjects[0], [params.projectId]);
+
+  if (loading && !project) {
+    return (
+      <div className="flex h-full items-center justify-center bg-gray-50">
+        <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+      </div>
+    );
   }
 
-  const messages = mockProjectMessages[params.projectId] || [];
-  const statusStyles: Record<string, { bg: string; text: string; border: string }> = {
-    "Intake in Progress": { bg: "bg-gray-50", text: "text-gray-600", border: "border-gray-200" },
-    "Needs Pricing": { bg: "bg-yellow-50", text: "text-yellow-700", border: "border-yellow-200" },
-    "Awaiting Client Approval": { bg: "bg-blue-50", text: "text-blue-700", border: "border-blue-200" },
-    "Build in Progress": { bg: "bg-red-50", text: "text-[#E43632]", border: "border-red-200" },
-    "QA & Testing": { bg: "bg-purple-50", text: "text-purple-700", border: "border-purple-200" },
-    "Ready to Launch": { bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200" },
-    Live: { bg: "bg-emerald-100", text: "text-emerald-800", border: "border-emerald-300" },
-    Blocked: { bg: "bg-orange-50", text: "text-orange-700", border: "border-orange-200" },
-    Archived: { bg: "bg-gray-100", text: "text-gray-500", border: "border-gray-200" },
+  if (!project || !mockProject) {
+    return (
+      <div className="p-10 space-y-3">
+        <p className="text-sm text-gray-600">Project not found.</p>
+        <Button variant="link" className="px-0" asChild>
+          <Link href="/admin/projects">Back to projects</Link>
+        </Button>
+      </div>
+    );
+  }
+
+  const displayProject: AdminProject = {
+    ...mockProject,
+    id: project.id,
+    name: project.name ?? mockProject.name,
+    description: project.automation?.description ?? mockProject.description,
+    version: project.version?.versionLabel ?? mockProject.version,
+    status: mapLifecycleToProjectStatus(project.status),
+    pricingStatus: latestQuote ? mapQuoteStatusToPricing(latestQuote.status) : mockProject.pricingStatus,
+    checklistProgress: mockProject.checklistProgress ?? 60,
+    systems: mockProject.systems ?? [],
+    setupFee: latestQuote ? Number(latestQuote.setupFee) : mockProject.setupFee,
+    unitPrice: latestQuote ? Number(latestQuote.unitPrice) : mockProject.unitPrice,
   };
-  const statusStyle = statusStyles[project.status] || statusStyles["Intake in Progress"];
+
+  const statusStyle = STATUS_STYLES[displayProject.status] ?? STATUS_STYLES["Intake in Progress"];
+  const messages = mockProjectMessages[displayProject.id] || [];
+
+  const handleQuoteStatus = async (nextStatus: "SENT" | "SIGNED") => {
+    if (!latestQuote) return;
+    setUpdatingQuote(nextStatus);
+    setError(null);
+    try {
+      const response = await fetch(`/api/quotes/${latestQuote.id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Failed to update quote");
+      }
+      await fetchProject();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update quote status");
+    } finally {
+      setUpdatingQuote(null);
+    }
+  };
+
+  const handleMarkLive = async () => {
+    if (!project.version) return;
+    setMarkingLive(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/admin/automation-versions/${project.version.id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "Live" }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Failed to mark live");
+      }
+      await fetchProject();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to mark live");
+    } finally {
+      setMarkingLive(false);
+    }
+  };
+
+  const handlePricingSave = async ({ setupFee, unitPrice }: { setupFee: number; unitPrice: number }) => {
+    if (!project.version || savingQuote) {
+      return;
+    }
+    setSavingQuote(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/admin/projects/${params.projectId}/quote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ setupFee, unitPrice }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Failed to draft quote");
+      }
+      await fetchProject();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to draft quote");
+    } finally {
+      setSavingQuote(false);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full bg-gray-50 text-[#1A1A1A] font-sans">
-      {/* Header */}
       <header className="bg-white border-b border-gray-200 px-6 py-4 shrink-0 z-20 shadow-sm">
         <div className="flex flex-col gap-4">
-          {/* Breadcrumbs & Back */}
           <div className="flex items-center gap-2 text-xs text-gray-500">
             <Link href="/admin/projects" className="hover:text-[#0A0A0A] flex items-center gap-1 transition-colors">
               <ArrowLeft size={12} /> Projects
             </Link>
             <span>/</span>
-            <span className="font-bold text-[#0A0A0A]">{project.clientName}</span>
+            <span className="font-bold text-[#0A0A0A]">{displayProject.clientName}</span>
             <span>/</span>
             <span className="font-bold text-[#0A0A0A]">{project.name}</span>
           </div>
 
-          <div className="flex items-center justify-between">
-            {/* Left: Title & Meta */}
+          <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-4">
-              <Link 
-                href={`/admin/clients/${project.clientId}`}
-                className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200 text-gray-500 font-bold text-lg hover:bg-gray-200 transition-colors cursor-pointer"
-                title={`View ${project.clientName} client details`}
+              <Link
+                href={`/admin/clients/${displayProject.clientId}`}
+                className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200 text-gray-500 font-bold text-lg hover:bg-gray-200 transition-colors"
+                title={`View ${displayProject.clientName} client details`}
               >
-                {project.clientName.charAt(0)}
+                {displayProject.clientName.charAt(0)}
               </Link>
               <div>
                 <div className="flex items-center gap-3 mb-1">
                   <h1 className="text-2xl font-bold text-[#0A0A0A] leading-none">{project.name}</h1>
                   <Badge variant="outline" className="text-sm bg-blue-50 text-blue-700 border-blue-200 font-mono">
-                    {project.version}
+                    {displayProject.version}
                   </Badge>
                   <Badge
                     className={cn(
@@ -464,51 +831,63 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
                       statusStyle.border
                     )}
                   >
-                    {project.status}
+                    {displayProject.status}
                   </Badge>
                 </div>
                 <p className="text-xs text-gray-500 flex items-center gap-2">
-                  <Link 
-                    href={`/admin/clients/${project.clientId}`}
-                    className="hover:text-[#0A0A0A] hover:underline transition-colors"
-                  >
-                    Client: <span className="font-bold">{project.clientName}</span>
+                  <Link href={`/admin/clients/${displayProject.clientId}`} className="hover:text-[#0A0A0A] hover:underline transition-colors">
+                    Client: <span className="font-bold">{displayProject.clientName}</span>
                   </Link>
                   <span className="w-1 h-1 bg-gray-300 rounded-full" />
                   <span>
-                    ETA: <span className="font-bold">{project.eta}</span>
+                    ETA: <span className="font-bold">{displayProject.eta}</span>
                   </span>
                   <span className="w-1 h-1 bg-gray-300 rounded-full" />
                   <span>
-                    Owner: <span className="font-bold">{project.owner.name}</span>
+                    Owner: <span className="font-bold">{displayProject.owner.name}</span>
                   </span>
                 </p>
               </div>
             </div>
-
-            {/* Right: Actions */}
-            <div className="flex gap-3">
+            <div className="flex gap-2 flex-wrap">
+              <Button variant="outline" asChild>
+                <Link href="/admin/projects">Back to projects</Link>
+              </Button>
+              {project.version?.status === "BuildInProgress" ? (
+                <Button onClick={handleMarkLive} disabled={markingLive}>
+                  {markingLive ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                  Mark Live
+                </Button>
+              ) : null}
+              {latestQuote?.status === "SENT" ? (
+                <Button onClick={() => handleQuoteStatus("SIGNED")} disabled={updatingQuote === "SIGNED"}>
+                  {updatingQuote === "SIGNED" ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Signature className="mr-2 h-4 w-4" />
+                  )}
+                  Mark Signed
+                </Button>
+              ) : null}
               <Button className="bg-[#0A0A0A] text-white hover:bg-gray-800">Save Changes</Button>
             </div>
           </div>
         </div>
       </header>
 
-      {/* Main Content Row */}
+      {error ? (
+        <div className="bg-red-50 border-b border-red-200 px-6 py-2 text-sm text-red-700 flex items-center gap-2">
+          <AlertCircle size={16} />
+          <span>{error}</span>
+        </div>
+      ) : null}
+
       <div className="flex-1 flex overflow-hidden">
-        {/* TABS AREA */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
             <div className="px-6 border-b border-gray-200 bg-white shrink-0">
               <TabsList className="h-12 bg-transparent p-0 gap-8">
-                {[
-                  "Overview",
-                  "Requirements & Blueprint",
-                  "Pricing & Quote",
-                  "Build Tasks",
-                  "Activity",
-                  "Chat",
-                ].map((tab) => {
+                {["Overview", "Requirements & Blueprint", "Pricing & Quote", "Build Tasks", "Activity", "Chat"].map((tab) => {
                   const value = tab.toLowerCase().replace(/ & /g, "-").replace(/ /g, "-");
                   return (
                     <TabsTrigger
@@ -527,16 +906,20 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
 
             <div className="flex-1 bg-gray-50 overflow-hidden relative">
               <TabsContent value="overview" className="h-full m-0 data-[state=inactive]:hidden">
-                <OverviewTab project={project} />
+                <OverviewTab project={displayProject} />
               </TabsContent>
-              <TabsContent
-                value="requirements-blueprint"
-                className="h-full m-0 data-[state=inactive]:hidden"
-              >
+              <TabsContent value="requirements-blueprint" className="h-full m-0 data-[state=inactive]:hidden">
                 <BlueprintTab />
               </TabsContent>
               <TabsContent value="pricing-quote" className="h-full m-0 data-[state=inactive]:hidden">
-                <PricingOverridePanel project={project} />
+                <PricingTab
+                  project={displayProject}
+                  latestQuote={latestQuote}
+                  onPricingSave={handlePricingSave}
+                  savingQuote={savingQuote}
+                  onQuoteStatus={handleQuoteStatus}
+                  updatingQuote={updatingQuote}
+                />
               </TabsContent>
               <TabsContent value="build-tasks" className="h-full m-0 data-[state=inactive]:hidden">
                 <TasksTab />

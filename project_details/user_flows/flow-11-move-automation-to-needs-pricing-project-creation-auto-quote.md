@@ -79,16 +79,16 @@ Note: `already_priced` is a boolean field in successful 200 OK responses, not an
 5. Validate minimum blueprint requirements (via shared Flow 10 validator)  
    - Implementation MUST call the **same shared blueprint validation + intake_progress scoring utility** used by Flow 10:
      - Same max serialized size: 5 MB.
-     - Same `max_nodes`, `max_edges` limits (from central config).
-     - Same required trigger/start-node rules.
-     - Same graph validity rules (no dangling edges, valid start node, etc.).
+     - Same `max_steps`, `max_systems_per_step`, `max_notifications_per_step` limits (from central config).
+     - Same required Trigger-step + valid reference rules.
+     - Same graph validity rules (no dangling `nextStepIds` / `exceptionIds`, at least one connected path to completion, etc.).
    - Requirements:
      - `blueprint_json` MUST be valid, non-empty JSON (no `null`, empty object/array, or invalid JSON).
-     - Blueprint MUST include at least one trigger node.
-     - Graph MUST be structurally valid (valid start node, no dangling edges, etc.).
+     - Blueprint MUST include at least one Trigger step.
+     - Graph MUST be structurally valid (valid step references, no dangling `nextStepIds`, etc.).
      - `intake_progress` (as computed by the shared scoring utility) MUST be ≥ the configurable threshold (e.g., 60%) from central config.
    - If validation fails → 400 Bad Request with canonical error codes:
-     - No trigger node → `missing_trigger`.
+     - No Trigger step → `missing_trigger`.
      - Empty or invalid JSON → `blueprint_empty_or_invalid`.
      - Intake progress below threshold → `intake_progress_below_threshold`.
 

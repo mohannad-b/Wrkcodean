@@ -2,6 +2,45 @@
 
 Newest updates appear first. Each entry includes the timestamp (Pacific Time) when the work was logged.
 
+## 2025-12-02 · 18:55 PT
+
+### Phase 2 – Build vs. Blueprint State Machines
+- ✅ Canonicalized the BuildStatus pipeline (IntakeInProgress → NeedsPricing → AwaitingClientApproval → BuildInProgress → QATesting → Live) across DB enums, services, and API routes while preserving legacy data via mapping helpers.
+- ✅ Reused the existing backend transition flows (pricing send, quote signed, admin mark-live) so they now advance the canonical statuses and sync `projects` in lockstep.
+- ✅ Rebuilt the Studio Build Status tab into a real, data-driven stepper + summary fed by the canonical status, and confined BlueprintStatus visuals to the Blueprint tab; scrubbed other tabs/admin pages of duplicate steppers.
+- ✅ Added a dedicated BuildStatus transition unit suite plus refreshed API/unit tests; ran `npm run lint` + `npm run test`.
+
+### Next Steps
+- [ ] Cut a Neon migration to backfill existing rows to the new enum values and update Flow docs that still mention legacy status names.
+- [ ] Surface lightweight summary badges on overview/Admin list cards once stakeholders specify the desired at-a-glance fields.
+
+---
+
+## 2025-12-02 · 15:40 PT
+
+### Phase 2 – Admin Console Polish
+- ✅ Restored the full Admin Project Detail experience (header + six-tab layout) to match the approved mocks, including breadcrumb/status chips and action buttons.
+- ✅ Rewired the Pricing & Quote tab to live data: fetches `/api/admin/projects/:id`, reuses quote draft + status mutation routes, and keeps the AI analysis + pricing override UI intact.
+- ✅ Left the blueprint/tasks/activity/chat panels on documented mock data while ensuring the visual scaffolding is in place for future data wiring.
+
+### Next Steps
+- [ ] Replace mock data in the non-pricing tabs once their APIs are available (blueprint canvas, kanban tasks, chat/audit feeds).
+- [ ] Add optimistic toast feedback around quote draft/status mutations.
+
+---
+
+## 2025-12-02 · 13:55 PT
+
+### Phase 2 – Blueprint Spec Alignment
+- ✅ Promoted the Blueprint requirements section to the canonical contract (sections + steps + lifecycle) and cross-linked it to the TypeScript/Zod source of truth.
+- ✅ Updated every dependent doc (AI system design, backend/system design, user flows 9/10/11/21, realtime architecture, project overview) so there are no lingering “nodes/edges” or “phases” assumptions.
+- ✅ Refactored `lib/blueprint/*`, DB defaults, Studio editor/summary UI, and API tests to the new schema; added `createEmptyBlueprint()` helper that seeds the 8 red-chip sections.
+- ✅ Ran the targeted Vitest suites covering the schema + metadata route to confirm the new validation rules.
+
+### Next Steps
+- [ ] Hook React Flow + Copilot UI to `Blueprint.steps` (derive edges from `nextStepIds`) and extend Flow 9 ingestion to output the richer metadata.
+- [ ] Wire optimistic save/status UX around the new sections/steps editor and surface validator errors inline.
+
 ---
 
 ## 2025-12-01 · 18:10 PT

@@ -59,7 +59,7 @@
   - `POST /api/automations/:id/versions`
   - `GET /api/automation-versions/:id`
   - `PATCH /api/automation-versions/:id/status` (uses `canTransition`)
-- [ ] Implement simplified status enum (`Intake`, `Needs Pricing`, `Awaiting Approval`, `Live`, `Archived`).
+- [x] Implement canonical build pipeline (`IntakeInProgress → NeedsPricing → AwaitingClientApproval → BuildInProgress → QATesting → Live`) with DB enum, helpers, and transition guards (maps legacy values to new schema).
 - [ ] Frontend:
   - `/automations` list (filters + create automation modal/form)
   - `/automations/[id]` detail (version selector, status badge, intake text area)
@@ -93,8 +93,16 @@
 
 ## 5. Blueprint Canvas & Studio UX (Phase 3)
 
+### 5.1 Blueprint Spec + Storage
+- [x] Publish canonical Blueprint contract in `wrk-copilot-cursor-v1-instructions.md` (sections + steps + lifecycle + UI note).
+- [x] Sync TypeScript types, Zod schema, DB defaults, and helper factories to the v1 contract.
+- [x] Update supporting docs (AI System Design, Backend/System Design, user flows 9/10/11/21, Realtime Collab, Project Overview) to reference the new schema and remove “phases / nodes + edges” assumptions.
+- [x] Refresh Studio blueprint summary/editor UIs and API tests to read/write `sections[]` + `steps[]`.
+- [ ] Extend Flow 9 ingestion and Flow 11 validation scoring to emit/require the richer metadata (goalOutcome, systems, notifications, etc.).
+
+### 5.2 Canvas & Copilot UX
 - [ ] Add React Flow client component (dynamic import to avoid SSR issues).
-- [ ] Render nodes/edges from `blueprint_json`; handle minimal node types (trigger/action/condition/delay/end).
+- [ ] Render `blueprint_json.steps` as nodes (derive edges from `nextStepIds`; handle Trigger/Action/Logic/Human).
 - [ ] Show `requirements_json` summary panel (systems, triggers, steps).
 - [ ] Improve `/automations/[id]` layout:
   - Tabs for Intake, Files, AI Draft, Blueprint, Quote.
@@ -114,7 +122,7 @@
   - `GET /api/quotes/:id`
 - [ ] Business logic:
   - “Submit for pricing” → create project + draft quote stub.
-  - Accepting quote updates automation_version status (`Awaiting Approval` → `Live`) + writes audit log.
+  - Accepting quote updates automation_version + project status (`NeedsPricing/AwaitingClientApproval` → `BuildInProgress`) and writes audit log; QA/Launch flows will take versions Live.
   - Rejecting quote updates quote status, logs reason.
 - [ ] Admin UI:
   - `/admin/projects` list with filters (status/owner).
@@ -125,6 +133,7 @@
 - [ ] Studio UI:
   - Quote panel showing latest quote.
   - Accept/Reject buttons (confirm dialogs) calling API.
+  - [x] Build Status tab renders the canonical pipeline (separate from Blueprint tab, which now only shows blueprint status).
 - [ ] Tests: acceptance flow (quote + status update + audit), permissions.
 - [ ] Commit after admin + studio quote flows work end-to-end.
 
@@ -193,5 +202,5 @@
 
 ---
 
-_Last updated: 2025-02-14 – Cursor internal tracking doc. Update as work progresses._
+_Last updated: 2025-12-02 – Cursor internal tracking doc. Update as work progresses._
 

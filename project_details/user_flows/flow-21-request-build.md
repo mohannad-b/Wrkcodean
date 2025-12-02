@@ -30,7 +30,7 @@ Validate prerequisites (see below):
     - Signed initial-commitment quote exists (resolved via the same pricing/contract helper used in Flows 16/17: `quote_type='initial_commitment'`, `status='signed'`, not voided/expired, effective now)
     - `projects.pricing_status='Signed'`
     - `automation_versions.status='Ready for Build'` (otherwise 409 `invalid_status_transition`)
-    - Blueprint completeness check passes (required nodes/edges in blueprint table); otherwise 400 `blueprint_incomplete`
+    - Blueprint completeness check passes (all required sections populated + minimum viable steps); otherwise 400 `blueprint_incomplete`
     - No blocking tasks/flags marked as build blockers; otherwise 400 `missing_prerequisites` with details
     ↓
 Single DB transaction:

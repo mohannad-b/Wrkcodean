@@ -9,9 +9,11 @@ const membershipRoleEnum = pgEnum("membership_role", [
 ]);
 
 export const automationStatusEnum = pgEnum("automation_status", [
-  "Intake",
-  "Needs Pricing",
-  "Awaiting Approval",
+  "IntakeInProgress",
+  "NeedsPricing",
+  "AwaitingClientApproval",
+  "BuildInProgress",
+  "QATesting",
   "Live",
   "Archived",
 ]);
@@ -103,7 +105,7 @@ export const automationVersions = pgTable(
       .notNull()
       .references(() => automations.id, { onDelete: "cascade" }),
     versionLabel: text("version_label").notNull().default("v1.0"),
-    status: automationStatusEnum("status").notNull().default("Intake"),
+    status: automationStatusEnum("status").notNull().default("IntakeInProgress"),
     summary: text("summary"),
     intakeNotes: text("intake_notes"),
     requirementsJson: jsonb("requirements_json")
@@ -207,7 +209,7 @@ export const projects = pgTable(
       onDelete: "set null",
     }),
     name: text("name").notNull(),
-    status: automationStatusEnum("status").notNull().default("Intake"),
+    status: automationStatusEnum("status").notNull().default("IntakeInProgress"),
     ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

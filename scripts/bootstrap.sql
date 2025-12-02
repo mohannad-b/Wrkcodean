@@ -26,7 +26,15 @@ DROP TYPE IF EXISTS membership_role;
 
 -- Enumerations
 CREATE TYPE membership_role AS ENUM ('client_admin','client_member','ops_admin','admin');
-CREATE TYPE automation_status AS ENUM ('Intake','Needs Pricing','Awaiting Approval','Live','Archived');
+CREATE TYPE automation_status AS ENUM (
+  'IntakeInProgress',
+  'NeedsPricing',
+  'AwaitingClientApproval',
+  'BuildInProgress',
+  'QATesting',
+  'Live',
+  'Archived'
+);
 CREATE TYPE quote_status AS ENUM ('draft','sent','accepted','rejected');
 CREATE TYPE file_status AS ENUM ('pending','uploaded','failed');
 CREATE TYPE ai_job_status AS ENUM ('pending','processing','succeeded','failed');
@@ -87,7 +95,7 @@ CREATE TABLE automation_versions (
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   automation_id uuid NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
   version_label text NOT NULL DEFAULT 'v1.0',
-  status automation_status NOT NULL DEFAULT 'Intake',
+  status automation_status NOT NULL DEFAULT 'IntakeInProgress',
   summary text,
   intake_notes text,
   requirements_json jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -157,7 +165,7 @@ CREATE TABLE projects (
   automation_id uuid REFERENCES automations(id) ON DELETE SET NULL,
   automation_version_id uuid REFERENCES automation_versions(id) ON DELETE SET NULL,
   name text NOT NULL,
-  status automation_status NOT NULL DEFAULT 'Intake',
+  status automation_status NOT NULL DEFAULT 'IntakeInProgress',
   owner_id uuid REFERENCES users(id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()

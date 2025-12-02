@@ -262,7 +262,7 @@ For a `requirements_to_blueprint` job:
      - Summaries of each screenshot
    - Ask for:
      - A structured `requirements_json` (systems, triggers, actions, data, exceptions)
-     - A `blueprint_json` with `nodes[]` and `edges[]` (compatible with React Flow)
+     - A `blueprint_json` that matches the canonical Blueprint schema (sections + steps; React Flow derives edges from `steps.nextStepIds`)
 3. Save outputs:
    - `requirements_json` in a JSONB column on the version (or in a dedicated table)
    - `blueprint_json` on `automation_versions`

@@ -55,11 +55,11 @@ describe("PATCH /api/quotes/[id]/status", () => {
     limitMock.mockResolvedValue([{ id: "quote-1", tenantId: "tenant-1", automationVersionId: "ver-1", status: "sent" }]);
     signQuoteAndPromoteMock.mockResolvedValue({
       quote: { id: "quote-1", status: "accepted" },
-      automationVersion: { id: "ver-1", status: "Awaiting Approval" },
-      project: { id: "proj-1", status: "Needs Pricing" },
+      automationVersion: { id: "ver-1", status: "BuildInProgress" },
+      project: { id: "proj-1", status: "BuildInProgress" },
       previousQuoteStatus: "SENT",
-      previousAutomationStatus: "NEEDS_PRICING",
-      previousProjectStatus: "NEEDS_PRICING",
+      previousAutomationStatus: "NeedsPricing",
+      previousProjectStatus: "NeedsPricing",
     });
     const { PATCH } = await import("@/app/api/quotes/[id]/status/route");
 

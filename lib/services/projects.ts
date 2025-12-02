@@ -218,10 +218,10 @@ export async function signQuoteAndPromote(params: { tenantId: string; quoteId: s
         previousAutomationStatus = fromDbAutomationStatus(versionRows[0].status);
         automationVersionResult = versionRows[0];
 
-        if (previousAutomationStatus === "NEEDS_PRICING") {
+    if (previousAutomationStatus === "NeedsPricing" || previousAutomationStatus === "AwaitingClientApproval") {
           const [updatedVersion] = await tx
             .update(automationVersions)
-            .set({ status: toDbAutomationStatus("READY_TO_BUILD") })
+        .set({ status: toDbAutomationStatus("BuildInProgress") })
             .where(eq(automationVersions.id, versionRows[0].id))
             .returning();
 
@@ -238,10 +238,10 @@ export async function signQuoteAndPromote(params: { tenantId: string; quoteId: s
           previousProjectStatus = fromDbAutomationStatus(projectRows[0].status);
           projectResult = projectRows[0];
 
-          if (previousProjectStatus === "NEEDS_PRICING") {
+          if (previousProjectStatus === "NeedsPricing" || previousProjectStatus === "AwaitingClientApproval") {
             const [updatedProject] = await tx
               .update(projects)
-              .set({ status: toDbAutomationStatus("READY_TO_BUILD") })
+              .set({ status: toDbAutomationStatus("BuildInProgress") })
               .where(eq(projects.id, projectRows[0].id))
               .returning();
             projectResult = updatedProject ?? projectResult;

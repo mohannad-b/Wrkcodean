@@ -32,7 +32,7 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
     const payload = await parsePayload(request);
     const nextStatus = parseAutomationStatus(payload.status);
 
-    if (nextStatus !== "LIVE") {
+    if (nextStatus !== "Live") {
       throw new ApiError(400, "Only LIVE transitions are supported via this endpoint.");
     }
 
@@ -67,7 +67,7 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
       resourceType: "automation_version",
       resourceId: params.id,
       metadata: {
-        status: { from: previousStatus, to: "LIVE" },
+        status: { from: previousStatus, to: "Live" },
         projectId: detail.project?.id ?? null,
       },
     });

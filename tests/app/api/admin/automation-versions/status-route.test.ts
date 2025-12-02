@@ -31,10 +31,10 @@ describe("PATCH /api/admin/automation-versions/[id]/status", () => {
     canMock.mockReturnValue(true);
   });
 
-  it("marks a READY_TO_BUILD version as live", async () => {
+  it("marks a BuildInProgress version as live", async () => {
     getVersionDetailMock.mockResolvedValue({
-      version: { id: "ver-1", status: "Awaiting Approval" },
-      project: { id: "proj-1", status: "Needs Pricing" },
+      version: { id: "ver-1", status: "BuildInProgress" },
+      project: { id: "proj-1", status: "BuildInProgress" },
       automation: null,
       latestQuote: null,
     });
@@ -44,7 +44,7 @@ describe("PATCH /api/admin/automation-versions/[id]/status", () => {
     const response = await PATCH(
       new Request("http://localhost/api/admin/automation-versions/ver-1/status", {
         method: "PATCH",
-        body: JSON.stringify({ status: "LIVE" }),
+        body: JSON.stringify({ status: "Live" }),
         headers: { "Content-Type": "application/json" },
       }),
       { params: { id: "ver-1" } }
@@ -54,7 +54,7 @@ describe("PATCH /api/admin/automation-versions/[id]/status", () => {
     expect(updateVersionStatusMock).toHaveBeenCalledWith(
       expect.objectContaining({
         automationVersionId: "ver-1",
-        nextStatus: "LIVE",
+        nextStatus: "Live",
       })
     );
     expect(logAuditMock).toHaveBeenCalledWith(
@@ -67,7 +67,7 @@ describe("PATCH /api/admin/automation-versions/[id]/status", () => {
 
   it("returns 400 when transition is invalid", async () => {
     getVersionDetailMock.mockResolvedValue({
-      version: { id: "ver-1", status: "Needs Pricing" },
+      version: { id: "ver-1", status: "NeedsPricing" },
       project: null,
       automation: null,
       latestQuote: null,
@@ -78,7 +78,7 @@ describe("PATCH /api/admin/automation-versions/[id]/status", () => {
     const response = await PATCH(
       new Request("http://localhost/api/admin/automation-versions/ver-1/status", {
         method: "PATCH",
-        body: JSON.stringify({ status: "LIVE" }),
+        body: JSON.stringify({ status: "Live" }),
         headers: { "Content-Type": "application/json" },
       }),
       { params: { id: "ver-1" } }
@@ -94,7 +94,7 @@ describe("PATCH /api/admin/automation-versions/[id]/status", () => {
     const response = await PATCH(
       new Request("http://localhost/api/admin/automation-versions/ver-1/status", {
         method: "PATCH",
-        body: JSON.stringify({ status: "LIVE" }),
+        body: JSON.stringify({ status: "Live" }),
         headers: { "Content-Type": "application/json" },
       }),
       { params: { id: "ver-1" } }

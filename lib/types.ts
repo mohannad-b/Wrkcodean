@@ -21,21 +21,15 @@ export interface AutomationSummary {
 }
 
 export type AutomationStatus =
-  | "Live"
-  | "Ready to Launch"
-  | "Ready to Build"
-  | "QA & Testing"
-  | "Build in Progress"
-  | "Awaiting Client Approval"
-  | "Needs Pricing"
   | "Intake in Progress"
+  | "Needs Pricing"
+  | "Awaiting Client Approval"
+  | "Build in Progress"
+  | "QA & Testing"
+  | "Ready to Launch"
+  | "Live"
   | "Blocked"
-  | "Archived"
-  | "DRAFT"
-  | "NEEDS_PRICING"
-  | "READY_TO_BUILD"
-  | "READY_TO_LAUNCH"
-  | "LIVE";
+  | "Archived";
 
 export interface Collaborator {
   id: string;

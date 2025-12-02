@@ -96,7 +96,7 @@ The design + orchestration + management layer:
 - **Automation** – A logical workflow, e.g. “Invoice Processing”, “Lead Routing”.
 - **Automation Version** – A concrete version (v1.0, v1.1, v2.0) with:
   - Status (Intake → Needs Pricing → Build → QA → Ready to Launch → Live → Blocked/Archived)
-  - Blueprint JSON (nodes/edges)
+  - Blueprint JSON (sections + steps + metadata driving the canvas)
   - Intake progress (% completeness)
 
 ### Projects (Ops View)
@@ -162,7 +162,7 @@ _1:1: each client maps to exactly one tenant._
 | --- | --- | --- |
 | Automations Dashboard | Grid/list view of automations with status, key stats, search & filters | `/automations` |
 | Automation Detail | Overview, build status, blueprint canvas, test tools, activity stream, settings | `/automations/[id]` |
-| Blueprint Canvas | Interactive visual workflow editor (nodes/edges) + AI-assisted intake | Tab within detail |
+| Blueprint Canvas | Interactive visual workflow editor (Blueprint steps + AI-assisted intake) | Tab within detail |
 | Usage Metrics | Execution counts, success rate, cost, ROI | Tab within detail |
 | Version History | Compare and roll back versions | Tab within detail |
 
@@ -191,8 +191,8 @@ _1:1: each client maps to exactly one tenant._
    - Status: `Intake in Progress`.
 
 2. **Blueprint Design**
-   - System generates a draft visual blueprint.
-   - Client + WRK collaborate to refine nodes/edges, branches, error paths.
+  - System generates a draft Blueprint (sections + steps feeding the canvas).
+  - Client + WRK collaborate to refine steps, branches, error paths, and supporting sections.
    - Once agreed, version moves to pricing.
    - Status: `Intake in Progress → Needs Pricing`.
 
@@ -234,7 +234,7 @@ Quote and pricing statuses live at project/quote level and are covered by the Pr
 ### V1 (Already in Scope)
 
 - **Requirements Extraction** – Pull out systems, triggers, actions, and data from freeform descriptions + docs.
-- **Draft Blueprint Generation** – Generate a first-pass blueprint JSON (nodes, edges) from requirements.
+- **Draft Blueprint Generation** – Generate a first-pass Blueprint JSON (sections + steps per the canonical schema) from requirements.
 - **Intake Progress Tracking** – Update completion % as required fields and clarifications are collected.
 
 _Human review is required; AI is assistive, not fully autonomous._

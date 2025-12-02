@@ -53,13 +53,14 @@ AI Ingestion Worker:
         * Triggers and actions
         * Decision points
     - Generates or updates blueprint_json:
-        * Creates nodes (triggers, actions, decisions)
-        * Creates edges (connections with conditions)
+        * Populates sections (business requirements, objectives, etc.) from the intake.
+        * Creates steps (Trigger / Action / Logic / Human) with metadata (summary, responsibility, systems, notifications).
+        * Links steps via `nextStepIds` / `exceptionIds` to describe flow order and branches.
     - Updates intake_progress (e.g., 0 → 50-80% depending on completeness)
     ↓
 Update automation_version:
-    - Reject blueprint_json > 5 MB OR > N nodes (central config).
-    - If worker generates output exceeding safe limits, truncate nodes with a safe summarization routine.
+    - Reject blueprint_json > 5 MB OR > N steps (central config).
+    - If worker generates output exceeding safe limits, truncate steps with a safe summarization routine.
     - blueprint_json = generated draft
     - intake_progress = updated percentage
     - status remains 'Intake in Progress' (no auto-status change)
@@ -115,7 +116,7 @@ Return success
 - Update `automation_versions` (blueprint_json, intake_progress)
 - Status remains 'Intake in Progress' (not changed automatically)
 - Insert into `audit_logs` (action_type='upload_intake_assets', resource_type='automation_version', resource_id=automation_version_id, user_id, tenant_id, created_at=now(), metadata_json={'files_uploaded': N, 'has_description_text': true/false}) - when user uploads assets
-- Insert into `audit_logs` (action_type='ai_ingestion_complete', resource_type='automation_version', resource_id=automation_version_id, user_id=null, tenant_id, created_at=now(), metadata_json={'progress_before': old_progress, 'progress_after': new_progress, 'num_nodes': count(nodes), 'num_edges': count(edges)}) - when AI ingestion worker completes
+- Insert into `audit_logs` (action_type='ai_ingestion_complete', resource_type='automation_version', resource_id=automation_version_id, user_id=null, tenant_id, created_at=now(), metadata_json={'progress_before': old_progress, 'progress_after': new_progress, 'num_steps': count(steps)}) - when AI ingestion worker completes
 
 **Notifications**:
 - **Email**: AI-generated draft blueprint ready (template: `draft_blueprint_ready`, to owner)

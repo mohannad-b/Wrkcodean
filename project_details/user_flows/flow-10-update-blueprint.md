@@ -10,7 +10,7 @@
 
 **Flow Diagram**:
 ```
-User edits blueprint (adds/removes nodes/edges)
+User edits blueprint (updates sections and steps)
     ↓
 Backend: Resolve tenant_id and authorization
     - Global auth middleware performs session validity, active membership, and active tenant checks (401 vs 403 semantics per Global Auth Middleware Rule).
@@ -34,16 +34,17 @@ Load automation_version (and parent automation) with tenant isolation
         * parent automation.status != 'active' → 409 Conflict
     ↓
 Validate blueprint JSON structure
-    - Blueprint validation MUST call the same centralized validator + limits used in Flow 9 (max 5 MB, max_nodes, max_edges, trigger/start-node rules).
-    - Parse blueprint_json from request body; MUST be valid JSON
-    - Enforce expected schema (nodes, edges, metadata) via centralized validator
+    - Blueprint validation MUST call the same centralized validator + limits used in Flow 9 (max 5 MB serialized payload, max_steps, max_systems_per_step, etc.).
+    - Parse blueprint_json from request body; MUST be valid JSON.
+    - Enforce expected schema (sections[], steps[], timestamps, status) via the centralized validator.
     - Enforce constraints:
-        * Must contain at least one trigger node
-        * Must have a valid start node and no dangling edges
-        * Node/edge counts must not exceed centrally configured limits (max_nodes, max_edges from central config)
-        * Serialized JSON size must not exceed canonical max blueprint size (5 MB, consistent with Flow 9)
+        * Sections must include every canonical key exactly once (`business_requirements` → `flow_complete`) with string content limits.
+        * Must contain at least one `Trigger` step.
+        * Every `nextStepId` / `exceptionId` must reference an existing step (no dangling references).
+        * Step counts, systems per step, and notifications per step must not exceed centrally configured limits (e.g., `max_steps`, `max_systems_per_step`, `max_notifications_per_step`).
+        * Serialized JSON size must not exceed canonical max blueprint size (5 MB, consistent with Flow 9).
     - If any validation fails → 400 Bad Request with structured validation errors using canonical error codes (same as Flow 11):
-        * Missing trigger node → error code: `missing_trigger`
+        * Missing Trigger step → error code: `missing_trigger`
         * Empty or structurally invalid blueprint JSON → error code: `blueprint_empty_or_invalid`
     - No partial updates on validation failure; blueprint_json and intake_progress are updated together or not at all
     ↓
@@ -56,13 +57,13 @@ Optimistic concurrency check (OPTIONAL in v1, but recommended)
     - If not provided: proceed without concurrency check (implementation may choose to require this in future versions)
     ↓
 Recalculate intake_progress
-    - Derive intake_progress based on blueprint completeness (e.g., number of triggers, decisions, actions)
-    - Map completeness to 0–100% via shared scoring function (capped at 100%)
+    - Derive intake_progress based on blueprint completeness (e.g., required sections populated, count/diversity of steps, presence of responsibilities/SLA metadata).
+    - Map completeness to 0–100% via shared scoring function (capped at 100%).
     - Do NOT auto-change status here (status remains whatever it currently is, typically 'Intake in Progress')
     - PUT must NOT move to 'Needs Pricing' or any other status; status transitions are exclusively handled by Flow 11
     ↓
 Update automation_versions row in a single transaction (with audit log)
-    - Load current row state to capture "before" values for audit log (num_nodes_before, num_edges_before, intake_progress_before)
+    - Load current row state to capture "before" values for audit log (num_steps_before, intake_progress_before)
     - UPDATE automation_versions
       SET blueprint_json = :validated_blueprint_json,
           intake_progress = :new_intake_progress,
@@ -70,7 +71,7 @@ Update automation_versions row in a single transaction (with audit log)
       WHERE id = :id AND tenant_id = :tenant_id
       AND (optional optimistic concurrency condition on updated_at if provided)
     - If UPDATE affects 0 rows due to concurrency or tenant mismatch → 409 Conflict
-    - Compute "after" values (num_nodes_after, num_edges_after, intake_progress_after) from validated_blueprint_json
+    - Compute "after" values (num_steps_after, intake_progress_after) from validated_blueprint_json
     ↓
 Create audit log entry (within same transaction)
     - action_type = 'update_blueprint'
@@ -80,8 +81,7 @@ Create audit log entry (within same transaction)
     - tenant_id = tenant_id
     - created_at = now()
     - metadata_json includes:
-        * num_nodes_before, num_nodes_after
-        * num_edges_before, num_edges_after
+        * num_steps_before, num_steps_after
         * intake_progress_before, intake_progress_after
     ↓
 Send notifications (best-effort, async)
@@ -115,7 +115,7 @@ Return updated blueprint
         * a newer version exists → 409 Conflict
         * parent automation.status != 'active' → 409 Conflict
   - **Request body**:
-    - `blueprint_json` (required): JSON object describing nodes, edges, and metadata.
+    - `blueprint_json` (required): JSON object describing sections[], steps[], and metadata defined in the canonical Blueprint schema.
     - Optional concurrency token: e.g., `last_known_updated_at` (ISO8601 timestamp) if not using HTTP If-Match.
     - The endpoint MUST ignore any server-owned fields if they appear in the request body: `tenant_id`, `status`, `automation_id`, `owner_id`, `intake_progress`, `created_at`, `updated_at`, or any other server-controlled fields.
     - Only `blueprint_json` (and optional concurrency token) are allowed from the client.
@@ -123,7 +123,7 @@ Return updated blueprint
     - If the client sends server-owned fields (e.g., status, tenant_id, automation_id, owner_id, intake_progress, created_at, updated_at), the endpoint MUST ignore them; they MUST NOT cause errors or status changes.
     - Validate payload (presence and type of blueprint_json).
     - Run the centralized blueprint validator (shared with Flow 9).
-    - Enforce at least one trigger node and a valid starting point.
+    - Enforce at least one `Trigger` step and a valid step graph (no dangling `nextStepIds`).
     - If validation fails → 400 Bad Request with structured errors (no partial writes).
     - Optionally perform optimistic concurrency check (if If-Match or last_known_updated_at provided).
     - Compute updated intake_progress using shared scoring utility (capped at 100%).
@@ -172,8 +172,7 @@ Return updated blueprint
   - tenant_id = tenant_id (from authenticated context, not from client payload)
   - created_at = now()
   - metadata_json includes:
-      * num_nodes_before, num_nodes_after (computed from row as loaded under same transaction to avoid race conditions)
-      * num_edges_before, num_edges_after
+      * num_steps_before, num_steps_after (computed from row as loaded under same transaction to avoid race conditions)
       * intake_progress_before, intake_progress_after
 
 **Notifications**:
@@ -196,8 +195,8 @@ Return updated blueprint
   - Optimistic concurrency mismatch (if concurrency token provided and `updated_at` no longer matches).
 - **400 Bad Request**:
   - Invalid JSON structure or failed schema validation (with canonical error code: `blueprint_empty_or_invalid`, same as Flow 11).
-  - Missing required nodes (no trigger node or invalid start node) → canonical error code: `missing_trigger` (same as Flow 11).
-  - Blueprint too large (node/edge counts or serialized size exceed configured limits: max 5 MB, max_nodes, max_edges).
+  - Missing required steps (no Trigger step or invalid `nextStepIds`) → canonical error code: `missing_trigger` (same as Flow 11).
+  - Blueprint too large (step counts or serialized size exceed configured limits: max 5 MB, max_steps, max_systems_per_step, etc.).
   - Flow 10 reuses the same canonical error codes defined in Flow 11 for overlapping validation cases and DOES NOT invent new strings for the same conditions.
 
 **Security Notes**:

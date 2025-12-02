@@ -22,7 +22,7 @@ Ship a **secure, multi-tenant WRK Copilot** that:
 - Uses AI to:
   - Ingest requirements (text + PDFs + docs + screenshots)
   - Produce a structured `requirements_json`
-  - Generate a **draft blueprint JSON** compatible with React Flow
+  - Generate a **draft Blueprint JSON** (sections + steps that drive React Flow)
 - Enforces:
   - Strong tenant isolation
   - Basic RBAC (client vs ops vs admin)
@@ -54,7 +54,7 @@ Ship a **secure, multi-tenant WRK Copilot** that:
   - Trigger **AI Draft Blueprint** from these inputs
 - Blueprint canvas:
   - React Flow canvas
-  - Renders nodes/edges from `blueprint_json`
+  - Renders `Blueprint.steps` as nodes (edges derived from `nextStepIds`)
   - v1.0 requirement: **read-only** (no complex drag/drop editing needed)
 - Quotes:
   - Client can see the latest quote for an automation version:
@@ -70,6 +70,14 @@ Ship a **secure, multi-tenant WRK Copilot** that:
 - Projects:
   - List projects (each tied to an `automation_version`)
   - View project details: linked automation/version, status, tasks, messages
+    - Detail screen keeps the restored multi-panel layout:
+      - Header with breadcrumbs, status badges (deal / version / quote), owner + ETA chips, and admin actions (`Mark Live`, `Mark Signed`, `Save Changes`).
+      - Tabs: `Overview`, `Requirements & Blueprint`, `Pricing & Quote`, `Build Tasks`, `Activity`, `Chat`.
+    - Pricing tab is the only one wired to live data (latest quote fetch + quote mutation routes) and must surface:
+      - Quote summary card with `setup_fee`, `unit_price`, volume + client message, and `Mark Sent` / `Mark Signed` CTA logic.
+      - Pricing override panel for drafting a new quote (fields + AI suggestions + tier table) that posts to `/api/admin/projects/:id/quote`.
+    - The other tabs (blueprint canvas, kanban tasks, activity timeline, chat) can continue to use mock data but should match the provided design so we have a consistent admin review surface while backend feeds are built.
+    - All data fetches use the scoped admin APIs (`/api/admin/projects/:id`, `/api/quotes/:id/status`, `/api/admin/automation-versions/:id/status`) with optimistic UI feedback where practical.
 - Quotes:
   - Create and edit a simple quote for an automation version.
   - Fields:
@@ -98,7 +106,7 @@ Ship a **secure, multi-tenant WRK Copilot** that:
   - Call LLM with all extracted context
   - Produce:
     - `requirements_json` – structured representation of process requirements
-    - `blueprint_json` – nodes/edges for React Flow
+    - `blueprint_json` – Blueprint object (sections + steps + metadata powering React Flow)
 - Update automation version:
   - Store `requirements_json` + `blueprint_json`
   - Update `intake_progress` (e.g., 70–90%)
@@ -376,9 +384,9 @@ Given `automation_version_id`:
    - Automation context (name, description)
    - Extracted text
    - Screenshot summaries
-   - Instructions to output:
-     - `requirements_json`
-     - `blueprint_json` (React Flow compatible)
+  - Instructions to output:
+    - `requirements_json`
+    - `blueprint_json` (Blueprint object described below; React Flow derives nodes/edges from it)
 
 ### 5.4 Outputs Stored on Automation Version
 
@@ -386,7 +394,7 @@ On success:
 
 - Update `automation_versions`:
   - `requirements_json` – the structured requirement object from the model
-  - `blueprint_json` – React Flow compatible JSON
+  - `blueprint_json` – Blueprint object (sections + steps + metadata)
   - `intake_progress` – set to something like 70–90 based on completeness
 - Update `ai_jobs.status = 'succeeded'`
 - Clear `error_message`
@@ -900,7 +908,7 @@ Think in **vertical slices** (DB → API → UI). Each phase should result in so
 ### Phase 3 – Blueprint Canvas & Studio UX
 
 - [ ] Integrate React Flow (lazy-loaded client component).
-- [ ] Use `blueprint_json` to render nodes/edges.
+- [ ] Use `blueprint_json.steps` to render nodes (derive edges from `nextStepIds`).
 - [ ] Add:
   - Zoom/pan controls.
   - Node rendering by `type`.

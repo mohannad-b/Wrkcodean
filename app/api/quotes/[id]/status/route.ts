@@ -124,13 +124,18 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       throw error;
     });
 
-    if (nextStatus === "SIGNED") {
+    if (nextStatus === "SENT") {
       const versionId = quoteRows[0].automationVersionId;
       if (versionId) {
         await updateAutomationVersionStatus({
           tenantId: session.tenantId,
           automationVersionId: versionId,
-          nextStatus: "READY_TO_BUILD",
+          nextStatus: "AwaitingClientApproval",
+        }).catch((error: unknown) => {
+          if (error instanceof Error && error.message.includes("Invalid status transition")) {
+            throw new ApiError(400, error.message);
+          }
+          throw error;
         });
       }
     }

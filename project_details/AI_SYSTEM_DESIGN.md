@@ -32,7 +32,7 @@ V1 AI focuses on:
    - Generate an initial `blueprint_json`:
      - Nodes (triggers/actions/conditions),
      - Edges (flow between steps).
-   - Annotate nodes with structured metadata (e.g. system name, step description).
+   - Annotate steps with structured metadata (e.g., system name, summary, responsibility).
 
 3. **Explaining & Refining**
    - Summarize current blueprint in plain English.
@@ -162,7 +162,7 @@ Requirements Extraction Prompt (LLM):
 
 Blueprint Proposal Prompt:
 	- System:
-	- “You are an automation architect. Produce a graph of steps as JSON nodes and edges that matches the provided requirements schema. Only use systems explicitly listed.”
+	- “You are an automation architect. Produce a Blueprint object (sections + steps, per canonical schema) that matches the provided requirements. Only use systems explicitly listed.”
 	- Input:
 	- requirements_json
 	- Output:
@@ -186,7 +186,7 @@ Blueprint Proposal Prompt:
 
 Within Studio:
 	- Ops or client can:
-	- Edit generated nodes/edges directly.
+	- Edit generated Blueprint sections/steps directly.
 	- Add comments like “Step 3 is wrong; we use Zendesk, not Intercom.”
 	- System logs:
 	- Which AI suggestions were accepted, modified, or deleted.

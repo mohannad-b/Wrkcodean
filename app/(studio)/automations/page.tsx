@@ -39,15 +39,16 @@ type StatusChipValue = AutomationLifecycleStatus | "ALL" | "BLOCKED";
 
 const STATUS_FILTERS: Array<{ label: string; value: StatusChipValue; helper?: string }> = [
   { label: "All Automations", value: "ALL" },
-  { label: "Intake in Progress", value: "DRAFT" },
-  { label: "Needs Pricing", value: "NEEDS_PRICING" },
-  { label: "Build in Progress", value: "READY_TO_BUILD" },
-  { label: "Live", value: "LIVE" },
+  { label: "Intake in Progress", value: "IntakeInProgress" },
+  { label: "Needs Pricing", value: "NeedsPricing" },
+  { label: "Awaiting client approval", value: "AwaitingClientApproval" },
+  { label: "Build in progress", value: "BuildInProgress" },
+  { label: "QA & Testing", value: "QATesting" },
+  { label: "Live", value: "Live" },
   {
     label: "Blocked",
     value: "BLOCKED",
     helper: "No blocked automations yet",
-    // TODO: replace mock Blocked filter once automations have a BLOCKED lifecycle status.
   },
 ];
 
@@ -69,13 +70,18 @@ const formatQuoteFilterLabel = (value: QuoteFilter) => {
 
 const mapStatusForCards = (status: AutomationLifecycleStatus): AutomationStatus => {
   switch (status) {
-    case "NEEDS_PRICING":
+    case "NeedsPricing":
       return "Needs Pricing";
-    case "READY_TO_BUILD":
+    case "AwaitingClientApproval":
+      return "Awaiting Client Approval";
+    case "BuildInProgress":
       return "Build in Progress";
-    case "LIVE":
+    case "QATesting":
+      return "QA & Testing";
+    case "Live":
       return "Live";
-    case "DRAFT":
+    case "Archived":
+      return "Archived";
     default:
       return "Intake in Progress";
   }
@@ -171,7 +177,7 @@ export default function AutomationsPage() {
         );
       })
       .filter((automation) => {
-        const status = automation.latestVersion?.status ?? "DRAFT";
+        const status = automation.latestVersion?.status ?? "IntakeInProgress";
         if (statusFilter === "ALL") return true;
         if (statusFilter === "BLOCKED") {
           return false;
@@ -190,7 +196,7 @@ export default function AutomationsPage() {
 
   const presentationData: LegacyAutomationSummary[] = filteredAutomations.map((automation) => {
     const version = automation.latestVersion;
-    const status = mapStatusForCards(version?.status ?? "DRAFT");
+    const status = mapStatusForCards(version?.status ?? "IntakeInProgress");
     const owner = getMockOwnerProfile(automation.id);
     const metrics = getMockAutomationMetrics(automation.id);
     const spend = version?.latestQuote?.setupFee ? Number(version.latestQuote.setupFee) : metrics.spend;

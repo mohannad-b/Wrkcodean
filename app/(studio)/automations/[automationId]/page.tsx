@@ -45,7 +45,7 @@ import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import type { Blueprint } from "@/lib/blueprint/types";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
-import { getDisplayStatus, type AutomationLifecycleStatus } from "@/lib/automations/status";
+import type { AutomationLifecycleStatus } from "@/lib/automations/status";
 import { VersionSelector, type VersionOption } from "@/components/ui/VersionSelector";
 import { Badge } from "@/components/ui/badge";
 
@@ -116,7 +116,6 @@ const formatDateTime = (value?: string | null) => {
   }
 };
 
-const LIFECYCLE_STEPS: AutomationLifecycleStatus[] = ["DRAFT", "NEEDS_PRICING", "READY_TO_BUILD", "LIVE"];
 const AUTOMATION_TABS = ["Overview", "Build Status", "Blueprint", "Test", "Activity", "Contributors", "Settings"] as const;
 
 const BLUEPRINT_CHECKLIST = [
@@ -439,7 +438,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       const response = await fetch(`/api/automation-versions/${selectedVersion.id}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "NEEDS_PRICING" }),
+        body: JSON.stringify({ status: "NeedsPricing" }),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -637,17 +636,15 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const latestQuote = selectedVersion?.latestQuote ?? null;
   const showSendForPricing =
     selectedVersion &&
-    (selectedVersion.status === "DRAFT" || selectedVersion.status === "NEEDS_PRICING") &&
+    (selectedVersion.status === "IntakeInProgress" || selectedVersion.status === "NeedsPricing") &&
     !latestQuote;
   const awaitingApproval = latestQuote?.status === "SENT";
-  const signedReady =
-    latestQuote?.status === "SIGNED" && selectedVersion?.status === "READY_TO_BUILD";
-  const currentLifecycleStatus = selectedVersion?.status ?? "DRAFT";
-  const currentLifecycleIndex = LIFECYCLE_STEPS.indexOf(currentLifecycleStatus);
+  const buildUnderway =
+    latestQuote?.status === "SIGNED" && selectedVersion?.status === "BuildInProgress";
   const versionOptions: VersionOption[] = automation.versions.map((version) => ({
     id: version.id,
     label: version.versionLabel,
-    status: version.id === selectedVersion?.id ? "active" : version.status === "DRAFT" ? "draft" : "superseded",
+    status: version.id === selectedVersion?.id ? "active" : version.status === "IntakeInProgress" ? "draft" : "superseded",
     updated: formatDateTime(version.updatedAt),
   }));
   const kpiStats = getKpiStats(automation.id);
@@ -819,9 +816,9 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   Quote sent—awaiting approval.
                 </div>
-              ) : signedReady ? (
+              ) : buildUnderway ? (
                 <div className="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                  Signed – Ready to Build.
+                  Signed – Build underway.
                 </div>
               ) : null}
             </CardContent>
@@ -1182,33 +1179,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             </div>
           </div>
         </div>
-        <div className="border-t border-gray-100 bg-white">
-          <div className="max-w-6xl mx-auto px-6 py-4">
-            <div className="flex flex-wrap items-center gap-6">
-              {LIFECYCLE_STEPS.map((step, index) => {
-                const isComplete = index <= currentLifecycleIndex;
-                return (
-                  <div key={step} className="flex items-center gap-3">
-                    <div
-                      className={cn(
-                        "w-8 h-8 rounded-full border flex items-center justify-center text-xs font-bold",
-                        isComplete ? "bg-[#E43632] border-[#E43632] text-white" : "border-gray-300 text-gray-400 bg-white"
-                      )}
-                    >
-                      {isComplete ? <CheckCircle2 size={14} /> : index + 1}
-                    </div>
-                    <div>
-                      <p className="text-[11px] uppercase tracking-wide text-gray-400">Step {index + 1}</p>
-                      <p className={cn("text-sm font-semibold", isComplete ? "text-[#0A0A0A]" : "text-gray-400")}>
-                        {getDisplayStatus(step)}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
       </div>
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
@@ -1218,7 +1188,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           {activeTab === "Overview" ? (
             overviewContent
           ) : activeTab === "Build Status" ? (
-            <BuildStatusTab version={selectedVersion?.versionLabel ?? ""} />
+            <BuildStatusTab
+              status={selectedVersion?.status}
+              latestQuote={selectedVersion?.latestQuote}
+              lastUpdated={selectedVersion?.updatedAt ?? null}
+              versionLabel={selectedVersion?.versionLabel ?? ""}
+            />
           ) : activeTab === "Blueprint" ? (
             blueprintContent
           ) : activeTab === "Test" ? (

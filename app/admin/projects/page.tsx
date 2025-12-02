@@ -90,10 +90,12 @@ const STATUS_ORDER: ProjectStatus[] = [
 ];
 
 const PROJECT_STATUS_TO_LIFECYCLE: Partial<Record<ProjectStatus, AutomationLifecycleStatus>> = {
-  "Intake in Progress": "DRAFT",
-  "Needs Pricing": "NEEDS_PRICING",
-  "Build in Progress": "READY_TO_BUILD",
-  Live: "LIVE",
+  "Intake in Progress": "IntakeInProgress",
+  "Needs Pricing": "NeedsPricing",
+  "Awaiting Client Approval": "AwaitingClientApproval",
+  "Build in Progress": "BuildInProgress",
+  "QA & Testing": "QATesting",
+  Live: "Live",
 };
 
 const SENSITIVE_STATUSES: ProjectStatus[] = ["Live", "Blocked", "Archived"];
@@ -176,7 +178,7 @@ const TYPE_OPTIONS: Array<"New Automation" | "Revision"> = ["New Automation", "R
 const RISK_OPTIONS: Array<"Low" | "Medium" | "High"> = ["Low", "Medium", "High"];
 const ETA_OPTIONS = ["Today", "Tomorrow", "Next Week", "TBD"];
 const SYSTEM_POOL = ["Salesforce", "Workday", "Slack", "Email", "Zendesk", "Asana"];
-const BUILD_STATUS_FILTERS: AutomationLifecycleStatus[] = ["READY_TO_BUILD", "LIVE"];
+const BUILD_STATUS_FILTERS: AutomationLifecycleStatus[] = ["BuildInProgress", "Live"];
 const QUOTE_STATUS_FILTERS: QuoteFilter[] = ["DRAFT", "SENT", "SIGNED"];
 
 const formatQuoteLabel = (value: QuoteFilter) => {
@@ -187,15 +189,6 @@ const formatQuoteLabel = (value: QuoteFilter) => {
     .split("_")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
-};
-
-const formatDateTime = (value?: string | null) => {
-  if (!value) return "—";
-  try {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
-  } catch {
-    return value;
-  }
 };
 
 const formatRelativeTime = (value?: string | null) => {
@@ -225,15 +218,18 @@ const getOwnerAvatar = (name: string) =>
 
 const mapLifecycleToProjectStatus = (status: AutomationLifecycleStatus): ProjectStatus => {
   switch (status) {
-    case "NEEDS_PRICING":
+    case "NeedsPricing":
       return "Needs Pricing";
-    case "READY_TO_BUILD":
+    case "AwaitingClientApproval":
+      return "Awaiting Client Approval";
+    case "BuildInProgress":
       return "Build in Progress";
-    case "LIVE":
+    case "QATesting":
+      return "QA & Testing";
+    case "Live":
       return "Live";
-    case "ARCHIVED":
+    case "Archived":
       return "Archived";
-    case "DRAFT":
     default:
       return "Intake in Progress";
   }
@@ -256,7 +252,7 @@ const mapQuoteStatusToPricing = (status?: string | null): PricingStatus => {
 const mapProjectToPresentation = (project: ProjectListItem): AdminProjectCard => {
   const seed = hashString(project.id);
   const ownerName = OWNER_POOL[seed % OWNER_POOL.length];
-  const lifecycleStatus = project.status ?? "DRAFT";
+  const lifecycleStatus = project.status ?? "IntakeInProgress";
   const quoteStatus = project.latestQuote?.status ?? null;
 
   return {

@@ -167,8 +167,8 @@ Core domain for automation definitions, versions, and blueprints.
 
 **Blueprint Storage**
 
-- `blueprint_json` is JSONB: nodes + edges.
-- If future query patterns demand it, we can normalize into `blueprint_nodes` / `blueprint_edges`; not required for v1.
+- `blueprint_json` is JSONB: Blueprint object (sections + steps + metadata per canonical schema).
+- If future query patterns demand it, we can add helper tables/materialized views (e.g., derived `blueprint_steps`), but v1 keeps everything in the JSON blob.
 
 **Status Lifecycle (enforced via Flow 13)**
 
