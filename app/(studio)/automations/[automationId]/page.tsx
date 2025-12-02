@@ -249,7 +249,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [chatError, setChatError] = useState<string | null>(null);
   const [hasSelectedStep, setHasSelectedStep] = useState(false);
   const [showStepHelper, setShowStepHelper] = useState(false);
-  const [sectionCelebrations, setSectionCelebrations] = useState<Record<BlueprintSectionKey, number>>({});
+  const [sectionCelebrations, setSectionCelebrations] = useState<Partial<Record<BlueprintSectionKey, number>>>({});
   const completionRef = useRef<ReturnType<typeof getBlueprintCompletionState> | null>(null);
 
   const confirmDiscardBlueprintChanges = useCallback(() => {
