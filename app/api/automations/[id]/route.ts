@@ -4,6 +4,7 @@ import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/contex
 import { getAutomationDetail } from "@/lib/services/automations";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
+import { parseBlueprint } from "@/lib/blueprint/schema";
 
 type RouteParams = {
   params: {
@@ -36,7 +37,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
           versionLabel: version.versionLabel,
           status: fromDbAutomationStatus(version.status),
           intakeNotes: version.intakeNotes,
-          blueprintJson: version.blueprintJson,
+          blueprintJson: parseBlueprint(version.blueprintJson),
           summary: version.summary,
           createdAt: version.createdAt,
           updatedAt: version.updatedAt,
@@ -47,6 +48,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
                 setupFee: version.latestQuote.setupFee,
                 unitPrice: version.latestQuote.unitPrice,
                 estimatedVolume: version.latestQuote.estimatedVolume,
+                updatedAt: version.latestQuote.updatedAt,
               }
             : null,
         })),

@@ -7,9 +7,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertCircle, Loader2 } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 export default function NewAutomationPage() {
   const router = useRouter();
+  const toast = useToast();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [intakeNotes, setIntakeNotes] = useState("");
@@ -41,9 +43,19 @@ export default function NewAutomationPage() {
         throw new Error(data.error ?? "Failed to create automation");
       }
 
+      toast({
+        title: "Automation created",
+        description: `${name} is ready to configure.`,
+        variant: "success",
+      });
       router.push("/automations");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error");
+      toast({
+        title: "Unable to create automation",
+        description: err instanceof Error ? err.message : "Unexpected error",
+        variant: "error",
+      });
     } finally {
       setSubmitting(false);
     }

@@ -1,14 +1,12 @@
 import { NextResponse } from "next/server";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
-import {
-  BlueprintJson,
-  getAutomationVersionDetail,
-  updateAutomationVersionMetadata,
-} from "@/lib/services/automations";
+import { getAutomationVersionDetail, updateAutomationVersionMetadata } from "@/lib/services/automations";
 import { logAudit } from "@/lib/audit/log";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
+import { BlueprintSchema, parseBlueprint } from "@/lib/blueprint/schema";
+import type { Blueprint } from "@/lib/blueprint/types";
 
 type RouteParams = {
   params: {
@@ -37,59 +35,19 @@ function validateIntakeNotes(value: unknown) {
   return value;
 }
 
-const ALLOWED_NODE_TYPES = new Set(["trigger", "action", "condition", "delay", "end"]);
-
-function validateBlueprint(value: unknown): BlueprintJson | null | undefined {
+function validateBlueprint(value: unknown): Blueprint | null | undefined {
   if (value === undefined) {
     return undefined;
   }
   if (value === null) {
     return null;
   }
-  if (typeof value !== "object" || value === null) {
-    throw new ApiError(400, "blueprint_json must be an object.");
+  const result = BlueprintSchema.safeParse(value);
+  if (!result.success) {
+    const message = result.error.issues[0]?.message ?? "Invalid blueprint_json payload.";
+    throw new ApiError(400, message);
   }
-
-  const nodes = Array.isArray((value as { nodes?: unknown }).nodes) ? (value as { nodes: unknown[] }).nodes : null;
-  const edges = Array.isArray((value as { edges?: unknown }).edges) ? (value as { edges: unknown[] }).edges : null;
-
-  if (!nodes || !edges) {
-    throw new ApiError(400, "blueprint_json must include nodes[] and edges[].");
-  }
-
-  nodes.forEach((node, index) => {
-    if (typeof node !== "object" || node === null) {
-      throw new ApiError(400, `Node at index ${index} must be an object.`);
-    }
-    const { id, type, position } = node as { id?: unknown; type?: unknown; position?: { x?: unknown; y?: unknown } };
-    if (typeof id !== "string" || id.length === 0) {
-      throw new ApiError(400, `Node at index ${index} is missing a valid id.`);
-    }
-    if (type && (typeof type !== "string" || !ALLOWED_NODE_TYPES.has(type))) {
-      throw new ApiError(400, `Node type "${String(type)}" is not supported.`);
-    }
-    if (!position || typeof position !== "object" || typeof position.x !== "number" || typeof position.y !== "number") {
-      throw new ApiError(400, `Node at index ${index} must include numeric position.x and position.y.`);
-    }
-  });
-
-  edges.forEach((edge, index) => {
-    if (typeof edge !== "object" || edge === null) {
-      throw new ApiError(400, `Edge at index ${index} must be an object.`);
-    }
-    const { id, source, target } = edge as { id?: unknown; source?: unknown; target?: unknown };
-    if (typeof id !== "string" || id.length === 0) {
-      throw new ApiError(400, `Edge at index ${index} is missing a valid id.`);
-    }
-    if (typeof source !== "string" || typeof target !== "string") {
-      throw new ApiError(400, `Edge at index ${index} must include source and target node ids.`);
-    }
-  });
-
-  return {
-    nodes: nodes as Record<string, unknown>[],
-    edges: edges as Record<string, unknown>[],
-  };
+  return result.data;
 }
 
 async function parsePayload(request: Request): Promise<UpdatePayload> {
@@ -120,7 +78,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
         versionLabel: detail.version.versionLabel,
         status: fromDbAutomationStatus(detail.version.status),
         intakeNotes: detail.version.intakeNotes,
-        blueprintJson: detail.version.blueprintJson,
+        blueprintJson: parseBlueprint(detail.version.blueprintJson),
         summary: detail.version.summary,
         createdAt: detail.version.createdAt,
         updatedAt: detail.version.updatedAt,
@@ -146,6 +104,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
             unitPrice: detail.latestQuote.unitPrice,
             estimatedVolume: detail.latestQuote.estimatedVolume,
             clientMessage: detail.latestQuote.clientMessage,
+            updatedAt: detail.latestQuote.updatedAt,
           }
         : null,
     });

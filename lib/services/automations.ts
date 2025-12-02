@@ -17,9 +17,10 @@ import {
   fromDbAutomationStatus,
   toDbAutomationStatus,
 } from "@/lib/automations/status";
+import type { Blueprint } from "@/lib/blueprint/types";
 
 type AutomationWithLatestVersion = Automation & {
-  latestVersion: AutomationVersion | null;
+  latestVersion: (AutomationVersion & { latestQuote: Quote | null }) | null;
 };
 
 export async function listAutomationsForTenant(tenantId: string): Promise<AutomationWithLatestVersion[]> {
@@ -48,10 +49,32 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
     }
   }
 
-  return automationRows.map((automation) => ({
-    ...automation,
-    latestVersion: latestVersionMap.get(automation.id) ?? null,
-  }));
+  const latestVersionIds = Array.from(latestVersionMap.values())
+    .filter(Boolean)
+    .map((version) => version.id);
+
+  const quoteRows = latestVersionIds.length
+    ? await db
+        .select()
+        .from(quotes)
+        .where(inArray(quotes.automationVersionId, latestVersionIds))
+        .orderBy(desc(quotes.createdAt))
+    : [];
+
+  const latestQuoteMap = new Map<string, Quote>();
+  for (const quote of quoteRows) {
+    if (!latestQuoteMap.has(quote.automationVersionId)) {
+      latestQuoteMap.set(quote.automationVersionId, quote);
+    }
+  }
+
+  return automationRows.map((automation) => {
+    const version = latestVersionMap.get(automation.id);
+    return {
+      ...automation,
+      latestVersion: version ? { ...version, latestQuote: latestQuoteMap.get(version.id) ?? null } : null,
+    };
+  });
 }
 
 export async function getAutomationDetail(tenantId: string, automationId: string) {
@@ -203,16 +226,11 @@ async function nextVersionLabel(automationId: string, tenantId: string) {
   return `v${major}.${minor + 1}`;
 }
 
-export type BlueprintJson = {
-  nodes: Array<Record<string, unknown>>;
-  edges: Array<Record<string, unknown>>;
-};
-
 type UpdateMetadataParams = {
   tenantId: string;
   automationVersionId: string;
   intakeNotes?: string | null;
-  blueprintJson?: BlueprintJson | null;
+  blueprintJson?: Blueprint | null;
 };
 
 export async function updateAutomationVersionMetadata(params: UpdateMetadataParams) {

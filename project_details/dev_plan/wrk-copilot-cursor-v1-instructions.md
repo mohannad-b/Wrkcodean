@@ -395,58 +395,98 @@ On failure:
 
 - See error handling below.
 
-### 5.5 Blueprint JSON Format (React Flow Compatible)
+### 5.5 Blueprint (attached to automation_version)
 
-**Store in**: `automation_versions.blueprint_json`
+> **Source of truth:** Blueprint types live in `lib/blueprint/types.ts` and `lib/blueprint/schema.ts`. Any changes to this doc must be reflected there, and vice versa.
 
-```json
-{
-  "nodes": [
-    {
-      "id": "node-1",
-      "type": "trigger",
-      "position": { "x": 0, "y": 0 },
-      "data": {
-        "label": "New lead submitted",
-        "system": "HubSpot",
-        "event": "contact.created"
-      }
-    },
-    {
-      "id": "node-2",
-      "type": "action",
-      "position": { "x": 250, "y": 0 },
-      "data": {
-        "label": "Enrich with Clearbit",
-        "system": "Clearbit",
-        "action": "enrich_person"
-      }
-    }
-  ],
-  "edges": [
-    {
-      "id": "edge-1",
-      "source": "node-1",
-      "target": "node-2",
-      "type": "default"
-    }
-  ]
+A Blueprint is a structured JSON spec attached to an `automation_version` that gives the Wrk team everything they need to design, price, and build an automation. It is **generated and refined from user chat and uploads** in the Blueprint tab.
+
+**Storage**
+
+- Stored on `automation_versions.blueprint_json`.
+- Validated using a shared TypeScript + Zod schema in `lib/blueprint/types.ts` and `lib/blueprint/schema.ts`.
+
+**Lifecycle**
+
+- `Draft` – early AI/human drafts, not ready for pricing.
+- `ReadyForQuote` – enough detail for the commercial/ops team to price.
+- `ReadyToBuild` – signed off for implementation.
+
+**Shape (v1)**
+
+```ts
+export type BlueprintStatus = 'Draft' | 'ReadyForQuote' | 'ReadyToBuild';
+
+export type BlueprintStepType = 'Trigger' | 'Action' | 'Logic' | 'Human';
+
+export interface BlueprintSection {
+  id: string;
+  key:
+    | 'business_requirements'
+    | 'business_objectives'
+    | 'success_criteria'
+    | 'systems'
+    | 'data_needs'
+    | 'exceptions'
+    | 'human_touchpoints'
+    | 'flow_complete';
+  title: string;   // e.g. "Business Requirements"
+  content: string; // free-form description or notes
+}
+
+export interface BlueprintStep {
+  id: string;
+  type: BlueprintStepType;          // Trigger / Action / Logic / Human
+  name: string;                     // Node label in the canvas
+  summary: string;                  // What the step does
+  goalOutcome: string;              // Why this step exists / outcome
+  responsibility: 'Automated' | 'HumanReview' | 'Approval';
+  notesExceptions?: string;         // Extra notes / exceptions
+  systemsInvolved: string[];        // Email, Slack, Xero, Salesforce, etc.
+  timingSla?: string;               // "24 Hours"
+  riskLevel?: 'Low' | 'Medium' | 'High';
+  notifications: string[];          // "Slack", "Email", "SMS", "MS Teams"
+  notesForOps?: string;             // Technical implementation details
+  exceptionIds?: string[];          // Optional linked exception/edge-case steps
+  nextStepIds: string[];            // Edges in the flow graph
+}
+
+export interface Blueprint {
+  version: 1;
+  status: BlueprintStatus;
+  summary: string;                  // 2–3 sentence overview of the workflow
+  sections: BlueprintSection[];     // Business Requirements, Objectives, etc.
+  steps: BlueprintStep[];           // Canvas nodes / flow
+  createdAt: string;
+  updatedAt: string;
 }
 ```
 
-**Supported node types** (v1.0):
+**Notes**
 
-- `trigger`
-- `action`
-- `condition`
-- `delay`
-- `end`
+- `blueprint_json` **does not** model “phases” as a first-class concept in v1. If needed later, phases will be derived from `steps` or added as an internal-only field.
+- The sections map 1:1 to the red chip nav in the Blueprint tab UI:
+  - Business Requirements
+  - Business Objectives
+  - Success Criteria
+  - Systems
+  - Data Needs
+  - Exceptions
+  - Human Touchpoints
+  - Flow Complete
+- Each `BlueprintStep` corresponds to a node in the visual canvas and is edited via the right-hand step drawer (Summary, Goal/Outcome, Responsibility, Systems, Timing/SLA, Risk Level, Notifications, Notes for Ops).
+- AI infers both the sections and the steps from user chat + uploaded material; humans refine them before saving.
 
-React Flow canvas should:
+### Blueprint in the UI
 
-- Render nodes by type
-- Use `data.label` as the primary display label
-- Respect `position` as given (we can let the model guess or lay them out linearly and then slightly adjust positions).
+- **Blueprint tab** pairs:
+  - Left: WRK Copilot chat + upload/record/connect/voice.
+  - Center: visual canvas rendering `Blueprint.steps` as nodes and edges.
+  - Right: step detail drawer bound to a single `BlueprintStep`.
+- The red-chip section nav at the top of the Blueprint tab reads/writes `Blueprint.sections[*].content`.
+- When the user asks CoPilot to “draft the workflow”:
+  - We call an AI endpoint that returns a `Blueprint` object in this schema.
+  - The draft is validated with Zod and shown to the user for review before saving to `blueprint_json`.
 
 ### 5.6 Error Handling Strategy (AI)
 

@@ -3,6 +3,7 @@ import { can } from "@/lib/auth/rbac";
 import { handleApiError, requireTenantSession, ApiError } from "@/lib/api/context";
 import { listAutomationsForTenant, createAutomationWithInitialVersion } from "@/lib/services/automations";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
+import { fromDbQuoteStatus } from "@/lib/quotes/status";
 import { logAudit } from "@/lib/audit/log";
 
 type CreateAutomationPayload = {
@@ -44,6 +45,15 @@ export async function GET() {
               intakeNotes: automation.latestVersion.intakeNotes,
               summary: automation.latestVersion.summary,
               updatedAt: automation.latestVersion.updatedAt,
+              latestQuote: automation.latestVersion.latestQuote
+                ? {
+                    id: automation.latestVersion.latestQuote.id,
+                    status: fromDbQuoteStatus(automation.latestVersion.latestQuote.status),
+                    setupFee: automation.latestVersion.latestQuote.setupFee,
+                    unitPrice: automation.latestVersion.latestQuote.unitPrice,
+                    updatedAt: automation.latestVersion.latestQuote.updatedAt,
+                  }
+                : null,
             }
           : null,
       })),

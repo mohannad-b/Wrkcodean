@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Auth0Provider } from "@auth0/nextjs-auth0/client";
 import { AppShell } from "@/components/layout/AppShell";
+import { Toaster } from "@/components/ui/sonner";
 import { getSession } from "@/lib/auth/session";
 import "./globals.css";
 
@@ -32,6 +33,7 @@ export default async function RootLayout({
       <body>
         <Auth0Provider>
           <AppShell>{children}</AppShell>
+          <Toaster position="top-center" richColors closeButton />
         </Auth0Provider>
       </body>
     </html>

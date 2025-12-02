@@ -37,6 +37,7 @@ export async function GET() {
         id: item.project.id,
         name: item.project.name,
         status: fromDbAutomationStatus(item.project.status),
+        updatedAt: item.project.updatedAt,
         automation: item.automation
           ? {
               id: item.automation.id,

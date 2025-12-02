@@ -138,38 +138,14 @@ We keep a structured representation alongside the blueprint:
 
 4.2 Blueprint JSON (Execution-Oriented)
 
-blueprint_json is the actual canvas representation:
+See `project_details/dev_plan/wrk-copilot-cursor-v1-instructions.md#55-blueprint-attached-to-automation_version` for the canonical schema, lifecycle, and UI contract. This system-design doc intentionally avoids duplicating that source of truth.
 
-{
-  "nodes": [
-    {
-      "id": "trigger-1",
-      "type": "trigger",
-      "data": {
-        "system": "HubSpot",
-        "event": "new_lead",
-        "summary": "New lead submitted via website form"
-      }
-    },
-    {
-      "id": "action-1",
-      "type": "action",
-      "data": {
-        "system": "Clearbit",
-        "action": "enrich_contact",
-        "summary": "Enrich lead with company/title"
-      }
-    }
-  ],
-  "edges": [
-    {
-      "id": "e1",
-      "source": "trigger-1",
-      "target": "action-1",
-      "label": "on new lead"
-    }
-  ]
-}
+Key takeaways for this architecture:
+
+- `blueprint_json` stores the sections + steps structure defined in the canonical doc (no “phases” field). Each `BlueprintStep.nextStepIds` produces the edges rendered in React Flow, so the canvas is derived data.
+- AI ingestion takes the current chat transcript + uploaded docs and returns a `Blueprint` object that is validated with the shared Zod schema before writing to `automation_versions.blueprint_json`.
+- Ops / clients edit sections and individual steps via the Blueprint tab (chat + canvas + drawer). Any mutation must keep the schema aligned with `lib/blueprint/types.ts`.
+- Legacy node/edge-only payloads are considered invalid once everything migrates to the new schema; the backend should treat them as `null` and ask the user to re-draft.
 
 5. Prompting & Guardrails
 

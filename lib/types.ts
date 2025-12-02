@@ -23,6 +23,7 @@ export interface AutomationSummary {
 export type AutomationStatus =
   | "Live"
   | "Ready to Launch"
+  | "Ready to Build"
   | "QA & Testing"
   | "Build in Progress"
   | "Awaiting Client Approval"
