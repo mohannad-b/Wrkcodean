@@ -1,10 +1,12 @@
 "use client";
 
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { UserProfileProvider } from "@/components/providers/user-profile-provider";
 import { UserProfile } from "@/lib/user/profile-shared";
 import { cn } from "@/lib/utils";
+
+const SIDEBAR_STORAGE_KEY = "wrk:sidebar-collapsed";
 
 interface AppShellClientProps {
   children: ReactNode;
@@ -15,6 +17,27 @@ interface AppShellClientProps {
 export function AppShellClient({ children, initialProfile, initialLastUpdatedAt }: AppShellClientProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const contentPaddingClass = sidebarCollapsed ? "md:pl-12" : "md:pl-64";
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const storedValue = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+      if (storedValue !== null) {
+        setSidebarCollapsed(storedValue === "true");
+      }
+    } catch {
+      // Ignore read errors
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_STORAGE_KEY, sidebarCollapsed ? "true" : "false");
+    } catch {
+      // Ignore write errors (e.g., private mode)
+    }
+  }, [sidebarCollapsed]);
 
   return (
     <UserProfileProvider initialProfile={initialProfile} initialLastUpdatedAt={initialLastUpdatedAt}>

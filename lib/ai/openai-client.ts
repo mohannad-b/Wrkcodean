@@ -13,6 +13,8 @@ type ChatMessage = {
   content: string;
 };
 
+export type CopilotChatMessage = ChatMessage;
+
 type CopilotDbMessage = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -99,6 +101,20 @@ export async function generateCopilotReply({
     model: COPILOT_MODEL,
     temperature: COPILOT_TEMPERATURE,
     maxTokens: COPILOT_MAX_TOKENS,
+  });
+}
+
+export async function callCopilotChat(params: {
+  messages: CopilotChatMessage[];
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}): Promise<string> {
+  return callChatCompletion({
+    messages: params.messages,
+    model: params.model ?? COPILOT_MODEL,
+    temperature: params.temperature ?? COPILOT_TEMPERATURE,
+    maxTokens: params.maxTokens ?? COPILOT_MAX_TOKENS,
   });
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Mic, Upload, Sparkles, AlertCircle, Paperclip, MonitorPlay, Loader2 } from "lucide-react";
+import { Send, Mic, Upload, Sparkles, AlertCircle, Paperclip, MonitorPlay, Loader2, CheckCircle2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { currentUser } from "@/lib/mock-automations";
@@ -9,6 +9,7 @@ import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { BlueprintUpdates } from "@/lib/blueprint/ai-updates";
+import type { CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
 import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
 
 type ChatRole = "user" | "assistant" | "system";
@@ -31,6 +32,7 @@ interface StudioChatProps {
   lastError?: string | null;
   onConversationChange?: (messages: CopilotMessage[]) => void;
   onBlueprintUpdates?: (updates: BlueprintUpdates) => void;
+  onCopilotAnalysis?: (analysis: CopilotAnalysisState) => void;
 }
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
@@ -51,7 +53,28 @@ type ApiCopilotMessage = {
 type CopilotReplyResponse = {
   message: ApiCopilotMessage;
   blueprintUpdates?: BlueprintUpdates | null;
+  analysis?: CopilotAnalysisState | null;
 };
+
+type AnalysisStepStatus = "pending" | "in_progress" | "done";
+type AnalysisStepDefinition = { id: string; label: string };
+type AnalysisStepState = AnalysisStepDefinition & { status: AnalysisStepStatus };
+
+const ANALYSIS_STEP_DEFINITIONS: AnalysisStepDefinition[] = [
+  { id: "flow", label: "Map flow & core requirements" },
+  { id: "objectives", label: "Capture objectives & success criteria" },
+  { id: "systems", label: "Identify systems & data needs" },
+  { id: "human", label: "Flag exceptions & human touchpoints" },
+  { id: "readiness", label: "Compute readiness & todos" },
+];
+
+const THINKING_INTERVAL_MS = 900;
+
+const buildInitialStepState = (): AnalysisStepState[] =>
+  ANALYSIS_STEP_DEFINITIONS.map((step) => ({
+    ...step,
+    status: "pending",
+  }));
 
 const formatTimestamp = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
@@ -65,6 +88,7 @@ export function StudioChat({
   lastError,
   onConversationChange,
   onBlueprintUpdates,
+  onCopilotAnalysis,
 }: StudioChatProps) {
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
   const [input, setInput] = useState("");
@@ -74,8 +98,11 @@ export function StudioChat({
   const [isLoadingThread, setIsLoadingThread] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isAwaitingReply, setIsAwaitingReply] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
+  const [analysisSteps, setAnalysisSteps] = useState<AnalysisStepState[]>(() => buildInitialStepState());
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const prevBlueprintEmptyRef = useRef<boolean>(blueprintEmpty);
+  const thinkingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const dropTransientMessages = useCallback(
     (list: CopilotMessage[]) => list.filter((message) => !message.transient),
@@ -158,6 +185,44 @@ export function StudioChat({
 
   const durableMessages = useMemo(() => dropTransientMessages(messages), [messages, dropTransientMessages]);
 
+  const clearThinkingTimer = useCallback(() => {
+    if (thinkingTimerRef.current) {
+      clearInterval(thinkingTimerRef.current);
+      thinkingTimerRef.current = null;
+    }
+  }, []);
+
+  const resetThinkingSteps = useCallback(() => {
+    setAnalysisSteps(buildInitialStepState());
+  }, []);
+
+  useEffect(() => {
+    if (!isThinking) {
+      clearThinkingTimer();
+      resetThinkingSteps();
+      return;
+    }
+    setAnalysisSteps(() => {
+      const steps = buildInitialStepState();
+      if (steps.length > 0) {
+        steps[0].status = "in_progress";
+      }
+      return steps;
+    });
+    thinkingTimerRef.current = window.setInterval(() => {
+      setAnalysisSteps((current) => advanceThinkingSteps(current));
+    }, THINKING_INTERVAL_MS);
+    return () => {
+      clearThinkingTimer();
+    };
+  }, [isThinking, clearThinkingTimer, resetThinkingSteps]);
+
+  useEffect(() => {
+    if (isThinking && analysisSteps.every((step) => step.status === "done")) {
+      clearThinkingTimer();
+    }
+  }, [analysisSteps, isThinking, clearThinkingTimer]);
+
   useEffect(() => {
     onConversationChange?.(durableMessages);
   }, [durableMessages, onConversationChange]);
@@ -174,6 +239,7 @@ export function StudioChat({
     }
     setIsAwaitingReply(true);
     setAssistantError(null);
+    setIsThinking(true);
     try {
       const response = await fetch(`/api/automation-versions/${automationVersionId}/copilot/reply`, {
         method: "POST",
@@ -185,6 +251,9 @@ export function StudioChat({
       if (data.blueprintUpdates && onBlueprintUpdates) {
         onBlueprintUpdates(data.blueprintUpdates);
       }
+      if (data.analysis && onCopilotAnalysis) {
+        onCopilotAnalysis(data.analysis);
+      }
       setMessages((prev) => {
         const trimmed = dropTransientMessages(prev);
         const next = [...trimmed, mapApiMessage(data.message)];
@@ -194,8 +263,9 @@ export function StudioChat({
       setAssistantError("Copilot reply failed. Try again.");
     } finally {
       setIsAwaitingReply(false);
+      setIsThinking(false);
     }
-  }, [automationVersionId, dropTransientMessages, mapApiMessage, onBlueprintUpdates]);
+  }, [automationVersionId, dropTransientMessages, mapApiMessage, onBlueprintUpdates, onCopilotAnalysis]);
 
   const handleSend = useCallback(async () => {
     const content = input.trim();
@@ -334,7 +404,7 @@ export function StudioChat({
               </div>
             </motion.div>
           ))}
-          {isAwaitingReply && (
+          {isThinking && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -344,9 +414,19 @@ export function StudioChat({
                 <Sparkles size={14} />
               </div>
               <div className="max-w-[85%] space-y-2">
-                <div className="p-4 text-sm shadow-sm relative leading-relaxed bg-[#F3F4F6] text-[#0A0A0A] rounded-2xl rounded-tl-sm border border-transparent flex items-center gap-2">
-                  <span>Copilot is thinking…</span>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <div className="p-4 text-sm shadow-sm relative leading-relaxed bg-[#F3F4F6] text-[#0A0A0A] rounded-2xl rounded-tl-sm border border-transparent">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#E43632]" />
+                    WRK Copilot is analyzing your workflow…
+                  </div>
+                  <ul className="mt-3 space-y-1.5">
+                    {analysisSteps.map((step) => (
+                      <li key={step.id} className="flex items-center gap-2 text-xs text-gray-600">
+                        {renderStepStatusIcon(step.status)}
+                        <span>{step.label}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </div>
             </motion.div>
@@ -396,3 +476,32 @@ export function StudioChat({
 function QuickAction() {
   return null;
 }
+
+function advanceThinkingSteps(current: AnalysisStepState[]): AnalysisStepState[] {
+  const next = current.map((step) => ({ ...step }));
+  const inProgressIndex = next.findIndex((step) => step.status === "in_progress");
+  if (inProgressIndex === -1) {
+    const pendingIndex = next.findIndex((step) => step.status === "pending");
+    if (pendingIndex !== -1) {
+      next[pendingIndex].status = "in_progress";
+    }
+    return next;
+  }
+  next[inProgressIndex].status = "done";
+  const pendingIndex = next.findIndex((step) => step.status === "pending");
+  if (pendingIndex !== -1) {
+    next[pendingIndex].status = "in_progress";
+  }
+  return next;
+}
+
+function renderStepStatusIcon(status: AnalysisStepStatus) {
+  if (status === "done") {
+    return <CheckCircle2 className="w-3 h-3 text-emerald-500" />;
+  }
+  if (status === "in_progress") {
+    return <Loader2 className="w-3 h-3 text-amber-500 animate-spin" />;
+  }
+  return <span className="w-2 h-2 rounded-full bg-gray-300 inline-block" />;
+}
+

@@ -2,6 +2,20 @@
 
 Newest updates appear first. Each entry includes the timestamp (Pacific Time) when the work was logged.
 
+## 2025-12-03 · 08:55 PT
+
+### Phase 1 – Studio Inspector Polish
+- ✅ Matched the inspect panel behavior from the legacy hash exactly, including the AI badge header, logic decision card, notes controls, and advanced drawer while keeping all live blueprint bindings.
+- ✅ Kept exception/system modals anchored to `document.body` so they float above the Studio shell and no longer get clipped inside the inspector column.
+- ✅ Preserved step selection across auto-saves and API refreshes by teaching the metadata fetcher/auto-save debounce to retain the current step whenever the ID still exists.
+- ✅ Persisted the Studio sidebar’s collapsed state via `localStorage` and documented the behavior with new Vitest coverage for `AppShellClient` (test run still hits the known jose EPERM sandbox issue).
+
+### Next Steps
+- [ ] Layer contributor/builder affordances on top of the restored inspector once product finalizes those flows.
+- [ ] Address the lingering jose EPERM error so the Vitest suite can complete cleanly in CI.
+
+---
+
 ## 2025-12-03 · 06:45 PT
 
 ### Phase 1 – Copilot Blueprint Sync

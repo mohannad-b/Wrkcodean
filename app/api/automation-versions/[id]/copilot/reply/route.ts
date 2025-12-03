@@ -2,11 +2,15 @@ import { NextResponse } from "next/server";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { listCopilotMessages, createCopilotMessage } from "@/lib/services/copilot-messages";
-import { generateCopilotReply, OpenAIError } from "@/lib/ai/openai-client";
+import { OpenAIError } from "@/lib/ai/openai-client";
 import { getAutomationVersionDetail } from "@/lib/services/automations";
 import { fromDbAutomationStatus, type AutomationLifecycleStatus } from "@/lib/automations/status";
 import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
+import { parseBlueprint } from "@/lib/blueprint/schema";
+import { createEmptyBlueprint } from "@/lib/blueprint/factory";
+import { runCopilotOrchestration } from "@/lib/ai/copilot-orchestrator";
+import { getCopilotAnalysis, upsertCopilotAnalysis } from "@/lib/services/copilot-analysis";
 
 const MAX_USER_MESSAGE_LENGTH = 4000;
 const LONG_INPUT_RESPONSE =
@@ -41,39 +45,54 @@ export async function POST(_request: Request, { params }: { params: { id: string
         createdBy: null,
       });
       copilotDebug("reply.long_input", { messageId: assistantMessage.id, content: assistantMessage.content });
-      return NextResponse.json({ message: assistantMessage, blueprintUpdates: null });
+      return NextResponse.json({ message: assistantMessage, blueprintUpdates: null, analysis: null });
     }
 
-    let replyContent: string;
+    const blueprint = parseBlueprint(versionDetail.version.blueprintJson) ?? createEmptyBlueprint();
+    const previousAnalysis = await getCopilotAnalysis({
+      tenantId: session.tenantId,
+      automationVersionId: params.id,
+    });
+
+    let orchestrationResult: Awaited<ReturnType<typeof runCopilotOrchestration>>;
     try {
-      replyContent = await generateCopilotReply({
-        dbMessages: history,
+      orchestrationResult = await runCopilotOrchestration({
+        blueprint,
+        messages: history,
+        previousAnalysis,
         automationName: versionDetail.automation?.name ?? undefined,
         automationStatus: formatAutomationStatusForPrompt(versionDetail.version.status),
       });
     } catch (error) {
-      console.error("Copilot reply failed:", error);
+      console.error("Copilot orchestration failed:", error);
       if (error instanceof OpenAIError) {
         throw new ApiError(502, "Copilot is unavailable. Try again in a moment.");
       }
       throw error;
     }
 
-    copilotDebug("reply.raw_model_content", replyContent);
-
-    const { displayText, blueprintUpdates } = parseCopilotReply(replyContent);
-    copilotDebug("reply.parsed", { displayText, blueprintUpdates });
+    copilotDebug("reply.orchestration", orchestrationResult);
 
     const assistantMessage = await createCopilotMessage({
       tenantId: session.tenantId,
       automationVersionId: params.id,
       role: "assistant",
-      content: displayText,
+      content: orchestrationResult.assistantDisplayText,
       createdBy: null,
     });
     copilotDebug("reply.persisted_message", { messageId: assistantMessage.id, content: assistantMessage.content });
 
-    return NextResponse.json({ message: assistantMessage, blueprintUpdates });
+    await upsertCopilotAnalysis({
+      tenantId: session.tenantId,
+      automationVersionId: params.id,
+      analysis: orchestrationResult.analysis,
+    });
+
+    return NextResponse.json({
+      message: assistantMessage,
+      blueprintUpdates: orchestrationResult.blueprintUpdates,
+      analysis: orchestrationResult.analysis,
+    });
   } catch (error) {
     return handleApiError(error);
   }

@@ -30,6 +30,8 @@ import { cn } from "@/lib/utils";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
 import { VersionSelector, type VersionOption } from "@/components/ui/VersionSelector";
 import { Badge } from "@/components/ui/badge";
+import type { CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
+import { CopilotReadinessCard } from "@/components/automations/CopilotReadinessCard";
 
 const StudioCanvas = dynamic(
   () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
@@ -251,7 +253,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [hasSelectedStep, setHasSelectedStep] = useState(false);
   const [showStepHelper, setShowStepHelper] = useState(false);
   const [isContributorMode, setIsContributorMode] = useState(false);
+  const [copilotAnalysis, setCopilotAnalysis] = useState<CopilotAnalysisState | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const completionRef = useRef<ReturnType<typeof getBlueprintCompletionState> | null>(null);
+  const preserveSelectionRef = useRef(false);
 
   const confirmDiscardBlueprintChanges = useCallback(() => {
     if (!isBlueprintDirty) {
@@ -272,39 +278,71 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     return () => window.removeEventListener("beforeunload", handler);
   }, [isBlueprintDirty]);
 
-  const fetchAutomation = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/automations/${params.automationId}`, { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error("Unable to load automation");
+  const fetchAutomation = useCallback(
+    async (options?: { preserveSelection?: boolean }) => {
+      const shouldPreserveSelection = Boolean(options?.preserveSelection);
+      preserveSelectionRef.current = shouldPreserveSelection;
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetch(`/api/automations/${params.automationId}`, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("Unable to load automation");
+        }
+
+        const data = (await response.json()) as { automation: AutomationDetail };
+        setAutomation(data.automation);
+
+        const nextSelected = selectedVersionId ?? data.automation.versions[0]?.id ?? null;
+        setSelectedVersionId(nextSelected);
+        const version = data.automation.versions.find((v) => v.id === nextSelected);
+        setNotes(version?.intakeNotes ?? "");
+        const blueprint = version?.blueprintJson ? cloneBlueprint(version.blueprintJson) : createEmptyBlueprint();
+        setBlueprint(blueprint);
+        setBlueprintError(null);
+        setBlueprintDirty(false);
+        if (!shouldPreserveSelection) {
+          setSelectedStepId(null);
+          setHasSelectedStep(false);
+          setShowStepHelper(false);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unexpected error");
+      } finally {
+        setLoading(false);
       }
-
-      const data = (await response.json()) as { automation: AutomationDetail };
-      setAutomation(data.automation);
-
-      const nextSelected = selectedVersionId ?? data.automation.versions[0]?.id ?? null;
-      setSelectedVersionId(nextSelected);
-      const version = data.automation.versions.find((v) => v.id === nextSelected);
-      setNotes(version?.intakeNotes ?? "");
-      const blueprint = version?.blueprintJson ? cloneBlueprint(version.blueprintJson) : createEmptyBlueprint();
-      setBlueprint(blueprint);
-      setBlueprintError(null);
-      setBlueprintDirty(false);
-      setSelectedStepId(null);
-      setHasSelectedStep(false);
-      setShowStepHelper(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unexpected error");
-    } finally {
-      setLoading(false);
-    }
-  }, [params.automationId, selectedVersionId]);
+    },
+    [params.automationId, selectedVersionId]
+  );
 
   useEffect(() => {
     fetchAutomation();
   }, [fetchAutomation]);
+
+  const fetchCopilotAnalysis = useCallback(
+    async (automationVersionId: string | null) => {
+      if (!automationVersionId) {
+        setCopilotAnalysis(null);
+        return;
+      }
+      setAnalysisLoading(true);
+      setAnalysisError(null);
+      try {
+        const response = await fetch(`/api/automation-versions/${automationVersionId}/copilot/analysis`, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("Unable to load Copilot analysis");
+        }
+        const data = (await response.json()) as { analysis: CopilotAnalysisState };
+        setCopilotAnalysis(data.analysis);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to load Copilot analysis";
+        setAnalysisError(message);
+      } finally {
+        setAnalysisLoading(false);
+      }
+    },
+    []
+  );
 
   const selectedVersion = useMemo(() => {
     if (!automation || !selectedVersionId) {
@@ -313,6 +351,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     return automation.versions.find((version) => version.id === selectedVersionId) ?? automation.versions[0] ?? null;
   }, [automation, selectedVersionId]);
 
+  const activeVersionId = selectedVersion?.id ?? null;
+
+  useEffect(() => {
+    void fetchCopilotAnalysis(activeVersionId);
+  }, [fetchCopilotAnalysis, activeVersionId]);
+
   useEffect(() => {
     if (selectedVersion) {
       setNotes(selectedVersion.intakeNotes ?? "");
@@ -320,9 +364,23 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setBlueprint(nextBlueprint);
       setBlueprintError(null);
       setBlueprintDirty(false);
-      setSelectedStepId(null);
-      setHasSelectedStep(false);
-      setShowStepHelper(false);
+
+      const shouldPreserveSelection = preserveSelectionRef.current;
+      if (shouldPreserveSelection) {
+        preserveSelectionRef.current = false;
+        if (selectedStepId) {
+          const exists = nextBlueprint.steps.some((step) => step.id === selectedStepId);
+          if (!exists) {
+            setSelectedStepId(null);
+            setHasSelectedStep(false);
+            setShowStepHelper(false);
+          }
+        }
+      } else {
+        setSelectedStepId(null);
+        setHasSelectedStep(false);
+        setShowStepHelper(false);
+      }
     }
   }, [selectedVersion?.id, selectedVersion?.blueprintJson?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -369,7 +427,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   };
 
   const handleSaveBlueprint = useCallback(
-    async (overrides?: Partial<Blueprint>) => {
+    async (overrides?: Partial<Blueprint>, options?: { preserveSelection?: boolean }) => {
       if (!selectedVersion || !blueprint) {
         setBlueprintError("Blueprint is not available yet.");
         return;
@@ -390,7 +448,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         const cloned = cloneBlueprint(payload);
         setBlueprint(cloned);
         setBlueprintDirty(false);
-        await fetchAutomation();
+        await fetchAutomation({ preserveSelection: options?.preserveSelection });
         toast({ title: "Blueprint saved", description: "Metadata updated successfully.", variant: "success" });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unable to save blueprint";
@@ -528,6 +586,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [applyBlueprintUpdate]
   );
 
+  const handleCopilotAnalysis = useCallback((analysis: CopilotAnalysisState) => {
+    setAnalysisError(null);
+    setAnalysisLoading(false);
+    setCopilotAnalysis(analysis);
+  }, []);
+
   const handleStepChange = useCallback(
     (stepId: string, patch: Partial<BlueprintStep>) => {
       applyBlueprintUpdate((current) => ({
@@ -654,7 +718,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     }
 
     const timeoutId = setTimeout(() => {
-      handleSaveBlueprint();
+      handleSaveBlueprint(undefined, { preserveSelection: true });
     }, 2000);
 
     return () => clearTimeout(timeoutId);
@@ -885,6 +949,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         </div>
       </div>
 
+      <div className="border-b border-gray-100 bg-white px-6 py-4">
+        <CopilotReadinessCard analysis={copilotAnalysis} loading={analysisLoading} />
+        {analysisError ? <p className="text-xs text-red-600 mt-2">{analysisError}</p> : null}
+      </div>
+
       {blueprintError ? (
         <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{blueprintError}</div>
       ) : null}
@@ -898,6 +967,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             isDrafting={draftingBlueprint}
             lastError={chatError}
             onBlueprintUpdates={handleBlueprintAIUpdates}
+            onCopilotAnalysis={handleCopilotAnalysis}
           />
         </div>
 

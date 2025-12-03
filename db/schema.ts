@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uuid, uniqueIndex, index } from "drizzle-orm/pg-core";
 import type { Blueprint } from "@/lib/blueprint/types";
+import type { CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
 
 const membershipRoleEnum = pgEnum("membership_role", [
   "client_admin",
@@ -272,6 +273,16 @@ export const copilotMessages = pgTable(
   })
 );
 
+export const copilotAnalyses = pgTable("copilot_analyses", {
+  automationVersionId: uuid("automation_version_id")
+    .primaryKey()
+    .references(() => automationVersions.id, { onDelete: "cascade" }),
+  analysisJson: jsonb("analysis_json").$type<CopilotAnalysisState>().notNull(),
+  version: text("version").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const messages = pgTable(
   "messages",
   {
@@ -349,6 +360,7 @@ export type AiJob = typeof aiJobs.$inferSelect;
 export type Project = typeof projects.$inferSelect;
 export type Quote = typeof quotes.$inferSelect;
 export type CopilotMessage = typeof copilotMessages.$inferSelect;
+export type CopilotAnalysis = typeof copilotAnalyses.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Task = typeof tasks.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;

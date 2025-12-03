@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { createEmptyCopilotAnalysisState, type CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
 
 const canMock = vi.fn();
 const listMessagesMock = vi.fn();
 const createMessageMock = vi.fn();
 const requireTenantSessionMock = vi.fn();
-const generateReplyMock = vi.fn();
+const runOrchestratorMock = vi.fn();
 const getVersionDetailMock = vi.fn();
+const getAnalysisMock = vi.fn();
+const upsertAnalysisMock = vi.fn();
 
 vi.mock("@/lib/api/context", () => ({
   requireTenantSession: requireTenantSessionMock,
@@ -30,15 +33,24 @@ vi.mock("@/lib/services/copilot-messages", () => ({
 }));
 
 vi.mock("@/lib/ai/openai-client", () => ({
-  generateCopilotReply: generateReplyMock,
   OpenAIError: class extends Error {},
+}));
+
+vi.mock("@/lib/ai/copilot-orchestrator", () => ({
+  runCopilotOrchestration: runOrchestratorMock,
 }));
 
 vi.mock("@/lib/services/automations", () => ({
   getAutomationVersionDetail: getVersionDetailMock,
 }));
 
+vi.mock("@/lib/services/copilot-analysis", () => ({
+  getCopilotAnalysis: getAnalysisMock,
+  upsertCopilotAnalysis: upsertAnalysisMock,
+}));
+
 describe("copilot reply route", () => {
+  let mockAnalysisState: CopilotAnalysisState;
   beforeEach(() => {
     vi.clearAllMocks();
     requireTenantSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: [] });
@@ -46,17 +58,17 @@ describe("copilot reply route", () => {
     listMessagesMock.mockResolvedValue([
       { id: "msg-1", role: "user", content: "Hello", createdAt: new Date().toISOString() },
     ]);
-    generateReplyMock.mockResolvedValue(
-      [
-        "- Summary of the automation idea.",
-        "",
-        "```json blueprint_updates",
-        '{"steps":[{"id":"step_1"}],"assumptions":["Example assumption"]}',
-        "```",
-        "",
-        "What volume do you see each week?",
-      ].join("\n")
-    );
+    mockAnalysisState = createEmptyCopilotAnalysisState();
+    getAnalysisMock.mockResolvedValue(null);
+    upsertAnalysisMock.mockResolvedValue(mockAnalysisState);
+    runOrchestratorMock.mockResolvedValue({
+      assistantDisplayText: "- Summary of the automation idea.\n\nWhat volume do you see each week?",
+      blueprintUpdates: {
+        steps: [{ id: "step_1" }],
+        assumptions: ["Example assumption"],
+      },
+      analysis: mockAnalysisState,
+    });
     createMessageMock.mockImplementation(async (payload) => ({
       id: "msg-2",
       role: payload.role,
@@ -71,7 +83,7 @@ describe("copilot reply route", () => {
     });
   });
 
-  it("calls OpenAI and persists assistant response", async () => {
+  it("calls orchestrator and persists assistant response", async () => {
     const { POST } = await import("@/app/api/automation-versions/[id]/copilot/reply/route");
     const response = await POST(new Request("http://localhost/api/automation-versions/version-1/copilot/reply"), {
       params: { id: "version-1" },
@@ -83,13 +95,19 @@ describe("copilot reply route", () => {
       tenantId: "tenant-1",
       automationVersionId: "version-1",
     });
-    expect(generateReplyMock).toHaveBeenCalledWith({
-      dbMessages: [
+    expect(getAnalysisMock).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+      automationVersionId: "version-1",
+    });
+    expect(runOrchestratorMock).toHaveBeenCalledWith({
+      blueprint: expect.any(Object),
+      messages: [
         expect.objectContaining({
           role: "user",
           content: "Hello",
         }),
       ],
+      previousAnalysis: null,
       automationName: "Lead Router",
       automationStatus: "Intake in Progress",
     });
@@ -101,12 +119,19 @@ describe("copilot reply route", () => {
       createdBy: null,
     });
 
+    expect(upsertAnalysisMock).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+      automationVersionId: "version-1",
+      analysis: mockAnalysisState,
+    });
+
     const payload = await response.json();
     expect(payload.message.content).toBe("- Summary of the automation idea.\n\nWhat volume do you see each week?");
     expect(payload.blueprintUpdates).toEqual({
       steps: [{ id: "step_1" }],
       assumptions: ["Example assumption"],
     });
+    expect(payload.analysis).toEqual(mockAnalysisState);
   });
 
   it("short circuits when the user message is too long", async () => {
@@ -127,7 +152,9 @@ describe("copilot reply route", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(generateReplyMock).not.toHaveBeenCalled();
+    expect(runOrchestratorMock).not.toHaveBeenCalled();
+    expect(getAnalysisMock).not.toHaveBeenCalled();
+    expect(upsertAnalysisMock).not.toHaveBeenCalled();
     expect(createMessageMock).toHaveBeenCalledWith({
       tenantId: "tenant-1",
       automationVersionId: "version-1",
@@ -141,12 +168,13 @@ describe("copilot reply route", () => {
       "This is a bit too long to handle in one go. Can you summarize the key steps of the workflow you want to automate?"
     );
     expect(payload.blueprintUpdates).toBeNull();
+    expect(payload.analysis).toBeNull();
   });
 
-  it("gracefully handles malformed blueprint blocks", async () => {
-    generateReplyMock.mockResolvedValueOnce(
-      ["- Draft", "", "```json blueprint_updates", "{not valid json", "```", "", "Next steps?"].join("\n")
-    );
+  it("reuses existing analysis between turns", async () => {
+    const previous = createEmptyCopilotAnalysisState();
+    previous.readiness.score = 42;
+    getAnalysisMock.mockResolvedValue(previous);
 
     const { POST } = await import("@/app/api/automation-versions/[id]/copilot/reply/route");
     const response = await POST(new Request("http://localhost/api/automation-versions/version-1/copilot/reply"), {
@@ -154,16 +182,12 @@ describe("copilot reply route", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(createMessageMock).toHaveBeenCalledWith({
-      tenantId: "tenant-1",
-      automationVersionId: "version-1",
-      role: "assistant",
-      content: "- Draft\n\nNext steps?",
-      createdBy: null,
-    });
-    const payload = await response.json();
-    expect(payload.message.content).toBe("- Draft\n\nNext steps?");
-    expect(payload.blueprintUpdates).toBeNull();
+    expect(runOrchestratorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousAnalysis: previous,
+      })
+    );
+    expect(upsertAnalysisMock).toHaveBeenCalled();
   });
 });
 

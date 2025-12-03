@@ -15,6 +15,13 @@
       "when": 1764700001000,
       "tag": "add_copilot_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "0002",
+      "when": 1764700002000,
+      "tag": "add_copilot_analysis_state",
+      "breakpoints": true
     }
   ]
 }
