@@ -1,28 +1,10 @@
 import { ReactNode } from "react";
-import { Sidebar } from "./Sidebar";
-import { UserProfileProvider } from "@/components/providers/user-profile-provider";
+import { AppShellClient } from "./AppShellClient";
 import { getSession } from "@/lib/auth/session";
 import { getTenantScopedProfile } from "@/lib/user/profile";
-import { UserProfile } from "@/lib/user/profile-shared";
 
 interface AppShellProps {
   children: ReactNode;
-}
-
-interface AppShellClientProps extends AppShellProps {
-  initialProfile: UserProfile | null;
-  initialLastUpdatedAt: string | null;
-}
-
-export function AppShellClient({ children, initialProfile, initialLastUpdatedAt }: AppShellClientProps) {
-  return (
-    <UserProfileProvider initialProfile={initialProfile} initialLastUpdatedAt={initialLastUpdatedAt}>
-      <div className="h-screen bg-[#F5F5F5] font-sans text-[#1A1A1A] flex overflow-hidden">
-        <Sidebar />
-        <main className="md:pl-64 flex-1 flex flex-col overflow-x-hidden overflow-y-auto">{children}</main>
-      </div>
-    </UserProfileProvider>
-  );
 }
 
 export async function AppShell({ children }: AppShellProps) {

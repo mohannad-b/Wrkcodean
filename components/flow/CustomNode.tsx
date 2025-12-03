@@ -30,9 +30,17 @@ const CustomNode = ({ data, selected }: NodeProps) => {
   const Icon = (data.icon && ICON_MAP[data.icon]) || data.icon || Zap;
   const isAI = data.status === "ai-suggested";
   const needsInfo = data.status === "warning";
+  const isNew = Boolean(data.isNew);
+  const isUpdated = Boolean(data.isUpdated);
 
   return (
-    <div className="relative group">
+    <div
+      className={cn(
+        "relative group transition-all",
+        isNew && "animate-in fade-in slide-in-from-bottom-4 duration-700",
+        !isNew && isUpdated && "animate-in fade-in zoom-in-50 duration-500"
+      )}
+    >
       {/* AI Hint / Tooltip (Above Node) */}
       {isAI && (
         <div className="absolute -top-8 left-0 right-0 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">

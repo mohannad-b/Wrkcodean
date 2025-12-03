@@ -3,6 +3,7 @@ import { z } from "zod";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { createCopilotMessage, listCopilotMessages } from "@/lib/services/copilot-messages";
+import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
 
 const MessageInputSchema = z.object({
   role: z.enum(["user", "assistant", "system"]).default("user"),
@@ -22,7 +23,18 @@ export async function GET(_request: Request, { params }: { params: { id: string 
       automationVersionId: params.id,
     });
 
-    return NextResponse.json({ messages });
+    const sanitizedMessages = messages.map((message) => {
+      if (message.role !== "assistant") {
+        return message;
+      }
+      const parsed = parseCopilotReply(message.content);
+      return {
+        ...message,
+        content: parsed.displayText,
+      };
+    });
+
+    return NextResponse.json({ messages: sanitizedMessages });
   } catch (error) {
     if (error instanceof Error && error.message === "Automation version not found") {
       return handleApiError(new ApiError(404, error.message));

@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { WrkLogo } from "@/components/brand/WrkLogo";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -65,10 +65,14 @@ function getInitials(name?: string | null, email?: string) {
     .join("");
 }
 
-export function Sidebar() {
+interface SidebarProps {
+  collapsed: boolean;
+  onToggle: (nextCollapsed: boolean) => void;
+}
+
+export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname() ?? "/";
   const router = useRouter();
-  const [collapsed, setCollapsed] = useState(false);
   const { profile, isHydrating } = useUserProfile();
   const userInitials = useMemo(() => getInitials(profile?.name, profile?.email), [profile]);
   
@@ -109,7 +113,7 @@ export function Sidebar() {
 
         {/* Expand/Collapse Button */}
         <button
-          onClick={() => setCollapsed(!collapsed)}
+          onClick={() => onToggle(!collapsed)}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           aria-expanded={!collapsed}
           className={cn(

@@ -1,13 +1,15 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Mic, Upload, AppWindow, MonitorPlay, Sparkles, AlertCircle, Paperclip, Loader2 } from "lucide-react";
+import { Send, Mic, Upload, Sparkles, AlertCircle, Paperclip, MonitorPlay, Loader2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { currentUser } from "@/lib/mock-automations";
 import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import type { BlueprintUpdates } from "@/lib/blueprint/ai-updates";
+import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
 
 type ChatRole = "user" | "assistant" | "system";
 
@@ -28,6 +30,7 @@ interface StudioChatProps {
   disabled?: boolean;
   lastError?: string | null;
   onConversationChange?: (messages: CopilotMessage[]) => void;
+  onBlueprintUpdates?: (updates: BlueprintUpdates) => void;
 }
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
@@ -45,6 +48,11 @@ type ApiCopilotMessage = {
   createdAt: string;
 };
 
+type CopilotReplyResponse = {
+  message: ApiCopilotMessage;
+  blueprintUpdates?: BlueprintUpdates | null;
+};
+
 const formatTimestamp = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 
@@ -56,6 +64,7 @@ export function StudioChat({
   disabled = false,
   lastError,
   onConversationChange,
+  onBlueprintUpdates,
 }: StudioChatProps) {
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
   const [input, setInput] = useState("");
@@ -74,12 +83,16 @@ export function StudioChat({
   );
 
   const mapApiMessage = useCallback(
-    (message: ApiCopilotMessage): CopilotMessage => ({
-      id: message.id,
-      role: message.role,
-      content: message.content,
-      createdAt: message.createdAt,
-    }),
+    (message: ApiCopilotMessage): CopilotMessage => {
+      const content =
+        message.role === "assistant" ? parseCopilotReply(message.content).displayText : message.content;
+      return {
+        id: message.id,
+        role: message.role,
+        content,
+        createdAt: message.createdAt,
+      };
+    },
     []
   );
 
@@ -168,7 +181,10 @@ export function StudioChat({
       if (!response.ok) {
         throw new Error("Failed to fetch assistant reply");
       }
-      const data: { message: ApiCopilotMessage } = await response.json();
+      const data: CopilotReplyResponse = await response.json();
+      if (data.blueprintUpdates && onBlueprintUpdates) {
+        onBlueprintUpdates(data.blueprintUpdates);
+      }
       setMessages((prev) => {
         const trimmed = dropTransientMessages(prev);
         const next = [...trimmed, mapApiMessage(data.message)];
@@ -179,7 +195,7 @@ export function StudioChat({
     } finally {
       setIsAwaitingReply(false);
     }
-  }, [automationVersionId, dropTransientMessages, mapApiMessage]);
+  }, [automationVersionId, dropTransientMessages, mapApiMessage, onBlueprintUpdates]);
 
   const handleSend = useCallback(async () => {
     const content = input.trim();
@@ -257,21 +273,8 @@ export function StudioChat({
         </div>
 
         {/* Quick Actions Row */}
-        <div className="grid grid-cols-4 gap-2 mt-1">
-          <QuickAction icon={Upload} label="Upload" />
-          <QuickAction icon={MonitorPlay} label="Record" />
-          <QuickAction icon={AppWindow} label="Connect" />
-          <QuickAction icon={Mic} label="Voice" />
-        </div>
-
         <div className="flex flex-col gap-2">
           <div className="text-[11px] text-gray-500">{helperMessage}</div>
-          {isAwaitingReply && (
-            <div className="text-[11px] text-gray-500 flex items-center gap-2">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              Copilot is thinking…
-            </div>
-          )}
           {blueprintEmpty && (
             <Button size="sm" onClick={handleDraft} disabled={!canDraft} className="justify-center text-xs font-semibold">
               {isDrafting ? "Drafting Blueprint…" : "Draft Blueprint with Copilot"}
@@ -331,16 +334,39 @@ export function StudioChat({
               </div>
             </motion.div>
           ))}
+          {isAwaitingReply && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex gap-3"
+            >
+              <div className="w-8 h-8 rounded-full bg-white border border-gray-200 flex items-center justify-center text-[#E43632] shadow-sm shrink-0 mt-0.5">
+                <Sparkles size={14} />
+              </div>
+              <div className="max-w-[85%] space-y-2">
+                <div className="p-4 text-sm shadow-sm relative leading-relaxed bg-[#F3F4F6] text-[#0A0A0A] rounded-2xl rounded-tl-sm border border-transparent flex items-center gap-2">
+                  <span>Copilot is thinking…</span>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                </div>
+              </div>
+            </motion.div>
+          )}
           <div ref={scrollEndRef} />
         </div>
       </ScrollArea>
 
       {/* Input Area */}
       <div className="p-4 bg-white border-t border-gray-200">
-        <div className="relative flex items-center">
-          <div className="absolute left-2 flex items-center gap-1">
+        <div className="relative flex items-center gap-2">
+          <div className="flex items-center gap-2">
             <button className="p-1.5 text-gray-400 hover:text-[#0A0A0A] hover:bg-gray-100 rounded-md transition-colors">
               <Paperclip size={16} />
+            </button>
+            <button className="p-1.5 text-gray-400 hover:text-[#0A0A0A] hover:bg-gray-100 rounded-md transition-colors">
+              <MonitorPlay size={16} />
+            </button>
+            <button className="p-1.5 text-gray-400 hover:text-[#0A0A0A] hover:bg-gray-100 rounded-md transition-colors">
+              <Mic size={16} />
             </button>
           </div>
           <input
@@ -367,19 +393,6 @@ export function StudioChat({
   );
 }
 
-function QuickAction({
-  icon: Icon,
-  label,
-}: {
-  icon: React.ComponentType<{ size?: number | string; className?: string }>;
-  label: string;
-}) {
-  return (
-    <button className="flex flex-col items-center justify-center gap-1.5 py-2.5 bg-white border border-gray-200 rounded-xl hover:border-[#E43632] hover:text-[#E43632] hover:bg-[#E43632]/5 transition-all group shadow-sm">
-      <Icon size={16} className="text-gray-500 group-hover:text-[#E43632] transition-colors" />
-      <span className="text-[10px] font-bold text-gray-600 group-hover:text-[#E43632] transition-colors">
-        {label}
-      </span>
-    </button>
-  );
+function QuickAction() {
+  return null;
 }

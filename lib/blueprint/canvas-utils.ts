@@ -6,8 +6,7 @@ import type { Blueprint, BlueprintStep } from "./types";
  */
 export const CANVAS_LAYOUT = {
   NODE_X_GAP: 360,
-  NODE_Y_GAP: 210,
-  COLUMNS: 2,
+  NODE_Y_GAP: 220,
 } as const;
 
 /**
@@ -18,6 +17,8 @@ export interface CanvasNodeData {
   description: string;
   type: BlueprintStep["type"];
   status: "ai-suggested" | "complete" | "draft";
+  isNew?: boolean;
+  isUpdated?: boolean;
 }
 
 /**
@@ -31,17 +32,24 @@ export function blueprintToNodes(blueprint: Blueprint | null): Node<CanvasNodeDa
     return [];
   }
 
-  return blueprint.steps.map((step, index) => ({
-    id: step.id,
-    type: "custom",
-    position: calculateNodePosition(index),
-    data: {
-      title: step.name,
-      description: step.summary || "Click to add a summary",
-      type: step.type,
-      status: blueprint.status === "Draft" ? "ai-suggested" : "complete",
-    },
-  }));
+  const positions = computeLayoutPositions(blueprint.steps);
+
+  return blueprint.steps.map((step, index) => {
+    const position =
+      positions.get(step.id) ?? { x: 0, y: index * CANVAS_LAYOUT.NODE_Y_GAP };
+
+    return {
+      id: step.id,
+      type: "custom",
+      position,
+      data: {
+        title: step.name,
+        description: step.summary || "Click to add a summary",
+        type: step.type,
+        status: blueprint.status === "Draft" ? "ai-suggested" : "complete",
+      },
+    };
+  });
 }
 
 /**
@@ -153,14 +161,72 @@ export function removeConnection(blueprint: Blueprint, edgeId: string): Blueprin
  * @param index - The step index
  * @returns Position object with x and y coordinates
  */
-function calculateNodePosition(index: number): { x: number; y: number } {
-  const column = index % CANVAS_LAYOUT.COLUMNS;
-  const row = Math.floor(index / CANVAS_LAYOUT.COLUMNS);
+function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number; y: number }> {
+  const adjacency = new Map<string, Set<string>>();
+  const indegree = new Map<string, number>();
 
-  return {
-    x: column * CANVAS_LAYOUT.NODE_X_GAP,
-    y: row * CANVAS_LAYOUT.NODE_Y_GAP,
-  };
+  for (const step of steps) {
+    adjacency.set(step.id, new Set(step.nextStepIds));
+    indegree.set(step.id, 0);
+  }
+
+  for (const step of steps) {
+    for (const target of step.nextStepIds) {
+      if (indegree.has(target)) {
+        indegree.set(target, (indegree.get(target) ?? 0) + 1);
+      }
+    }
+  }
+
+  const queue: string[] = [];
+  const levels = new Map<string, number>();
+
+  indegree.forEach((count, id) => {
+    if (count === 0) {
+      queue.push(id);
+      levels.set(id, 0);
+    }
+  });
+
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    const level = levels.get(current) ?? 0;
+    const targets = adjacency.get(current);
+    if (!targets) {
+      continue;
+    }
+    for (const target of targets) {
+      const nextLevel = Math.max(level + 1, levels.get(target) ?? 0);
+      levels.set(target, nextLevel);
+      const currentIndegree = (indegree.get(target) ?? 0) - 1;
+      indegree.set(target, currentIndegree);
+      if (currentIndegree <= 0) {
+        queue.push(target);
+      }
+    }
+  }
+
+  const levelGroups = new Map<number, string[]>();
+  for (const step of steps) {
+    const level = levels.get(step.id) ?? 0;
+    if (!levelGroups.has(level)) {
+      levelGroups.set(level, []);
+    }
+    levelGroups.get(level)?.push(step.id);
+  }
+
+  const positions = new Map<string, { x: number; y: number }>();
+  levelGroups.forEach((ids, level) => {
+    const width = ids.length;
+    const offset = (width - 1) / 2;
+    ids.forEach((id, index) => {
+      const x = (index - offset) * CANVAS_LAYOUT.NODE_X_GAP;
+      const y = level * CANVAS_LAYOUT.NODE_Y_GAP;
+      positions.set(id, { x, y });
+    });
+  });
+
+  return positions;
 }
 
 /**

@@ -2,6 +2,18 @@
 
 Newest updates appear first. Each entry includes the timestamp (Pacific Time) when the work was logged.
 
+## 2025-12-03 · 06:45 PT
+
+### Phase 1 – Copilot Blueprint Sync
+- ⚠️ Tried swapping the blueprint merge strategy (replace steps wholesale, auto-generate UUIDs) and memoizing `nodeTypes`/`edgeTypes`; Copilot responses still render duplicate/branched flows after the split step.
+- ⚠️ React Flow continues logging the “new nodeTypes” warning in the browser despite memoization, implying something upstream (likely dynamic imports/props) re-creates the objects every render.
+- ⚠️ Blueprint application still loses track of which branch to extend after a conditional node; the server stores the AI draft, but the canvas shows multiple versions.
+
+### Next Steps
+- [ ] Revisit the blueprint apply logic (maybe keep server IDs + introduce per-branch “unique_id” scaffolding) and inspect the React Flow props chain to find the source of the repeated nodeTypes object.
+
+---
+
 ## 2025-12-03 · 06:20 PT
 
 ### Phase 1 – Studio Shell & Data Plumbing

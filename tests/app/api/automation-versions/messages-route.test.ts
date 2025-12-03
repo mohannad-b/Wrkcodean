@@ -71,5 +71,23 @@ describe("automation-version messages route", () => {
     const payload = await response.json();
     expect(payload.message.id).toBe("msg-2");
   });
+
+  it("strips blueprint JSON blocks from assistant messages on GET", async () => {
+    listMessagesMock.mockResolvedValueOnce([
+      {
+        id: "msg-legacy",
+        role: "assistant",
+        content: "- Summary\n```json blueprint_updates\n{\"steps\":[{\"id\":\"legacy\"}]}\n```\nMore text.",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+
+    const { GET } = await import("@/app/api/automation-versions/[id]/messages/route");
+    const response = await GET(new Request("http://localhost/api/automation-versions/version-legacy/messages"), {
+      params: { id: "version-legacy" },
+    });
+    const payload = await response.json();
+    expect(payload.messages[0].content).toBe("- Summary\n\nMore text.");
+  });
 });
 

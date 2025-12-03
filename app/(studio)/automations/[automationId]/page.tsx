@@ -24,6 +24,7 @@ import { BLUEPRINT_SECTION_TITLES } from "@/lib/blueprint/types";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
 import { isBlueprintEffectivelyEmpty } from "@/lib/blueprint/utils";
 import { blueprintToNodes, blueprintToEdges, addConnection, removeConnection } from "@/lib/blueprint/canvas-utils";
+import { applyBlueprintUpdates, type BlueprintUpdates as CopilotBlueprintUpdates } from "@/lib/blueprint/ai-updates";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
@@ -506,8 +507,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           return current;
         }
         const next = updater(current);
-        didUpdate = true;
-        return next;
+        if (next !== current) {
+          didUpdate = true;
+          return next;
+        }
+        return current;
       });
       if (didUpdate) {
         setBlueprintDirty(true);
@@ -515,6 +519,13 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       }
     },
     [setBlueprintDirty, setBlueprintError]
+  );
+
+  const handleBlueprintAIUpdates = useCallback(
+    (updates: CopilotBlueprintUpdates) => {
+      applyBlueprintUpdate((current) => applyBlueprintUpdates(current, updates));
+    },
+    [applyBlueprintUpdate]
   );
 
   const handleStepChange = useCallback(
@@ -886,6 +897,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             onDraftBlueprint={handleDraftBlueprint}
             isDrafting={draftingBlueprint}
             lastError={chatError}
+            onBlueprintUpdates={handleBlueprintAIUpdates}
           />
         </div>
 

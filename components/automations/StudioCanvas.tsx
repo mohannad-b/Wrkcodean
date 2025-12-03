@@ -1,7 +1,7 @@
 "use client";
 
 import "reactflow/dist/style.css";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -14,6 +14,8 @@ import ReactFlow, {
   BackgroundVariant,
   ReactFlowInstance,
   ReactFlowProvider,
+  applyNodeChanges,
+  type NodeChange,
 } from "reactflow";
 import CustomNode from "@/components/flow/CustomNode";
 import ConditionEdge from "@/components/flow/ConditionEdge";
@@ -57,17 +59,60 @@ export function StudioCanvas({
   emptyState,
 }: StudioCanvasProps) {
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
+  const [renderNodes, setRenderNodes] = useState<Node[]>(nodes);
+  const previousNodeMap = useRef<Map<string, Node>>(new Map());
+  const nodeTypesMemo = useMemo(() => nodeTypes, []);
+  const edgeTypesMemo = useMemo(() => edgeTypes, []);
+  const edgeOptionsMemo = useMemo(() => defaultEdgeOptions, []);
 
   useEffect(() => {
-    if (rfInstance && nodes.length > 0) {
-      // Small delay to ensure nodes are rendered before fitting
-      const timeout = setTimeout(() => {
-        rfInstance.fitView({ duration: 800, padding: 0.2 });
-      }, 100);
-      return () => clearTimeout(timeout);
+    const prevMap = previousNodeMap.current;
+    const mappedNodes = nodes.map((node) => {
+      const prev = prevMap.get(node.id);
+      const isNew = !prev;
+      const hasChanged =
+        !!prev &&
+        JSON.stringify(prev.data) !== JSON.stringify(node.data);
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          isNew,
+          isUpdated: !isNew && hasChanged,
+        },
+      };
+    });
+    setRenderNodes(mappedNodes);
+    previousNodeMap.current = new Map(nodes.map((node) => [node.id, node]));
+  }, [nodes]);
+
+  useEffect(() => {
+    if (!rfInstance) {
+      return undefined;
     }
-    return undefined;
-  }, [rfInstance, nodes.length, isSynthesizing]);
+
+    if (renderNodes.length === 0) {
+      rfInstance.setCenter(0, 0, { zoom: 1 });
+      return undefined;
+    }
+
+    const timeout = setTimeout(() => {
+      rfInstance.fitView({ duration: 800, padding: 0.6 });
+      const zoomTarget = Math.min(1, Math.max(0.25, 1.2 - renderNodes.length * 0.05));
+      rfInstance.zoomTo(zoomTarget, { duration: 400 });
+    }, 100);
+    return () => clearTimeout(timeout);
+  }, [rfInstance, renderNodes.length, isSynthesizing]);
+
+  const handleNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      setRenderNodes((current) => applyNodeChanges(changes, current));
+      onNodesChange?.(changes);
+    },
+    [onNodesChange]
+  );
+
+  const isInteractive = renderNodes.length > 0;
 
   return (
     <ReactFlowProvider>
@@ -84,22 +129,22 @@ export function StudioCanvas({
         )}
 
         <ReactFlow
-          nodes={nodes}
+          nodes={renderNodes}
           edges={edges}
-          onNodesChange={onNodesChange}
+          onNodesChange={handleNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onNodeClick={onNodeClick}
           onInit={setRfInstance}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
+          nodeTypes={nodeTypesMemo}
+          edgeTypes={edgeTypesMemo}
           fitView
           className="bg-[#F9FAFB]"
-          defaultEdgeOptions={defaultEdgeOptions}
+          defaultEdgeOptions={edgeOptionsMemo}
           minZoom={0.1}
           maxZoom={2}
-          nodesDraggable={Boolean(onNodesChange)}
-          nodesConnectable={Boolean(onConnect)}
+          nodesDraggable={isInteractive}
+          nodesConnectable={isInteractive && Boolean(onConnect)}
           nodesFocusable
           elementsSelectable
           proOptions={{ hideAttribution: true }}

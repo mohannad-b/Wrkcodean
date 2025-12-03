@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { Trash2, Clock, AlertTriangle, Bell, Settings, NotebookPen } from "lucide-react";
+import { Trash2, Clock, Bell, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,7 +12,6 @@ import type { BlueprintStep } from "@/lib/blueprint/types";
 
 const STEP_TYPES: BlueprintStep["type"][] = ["Trigger", "Action", "Logic", "Human"];
 const RESPONSIBILITIES: BlueprintStep["responsibility"][] = ["Automated", "HumanReview", "Approval"];
-const RISK_LEVELS: NonNullable<BlueprintStep["riskLevel"]>[] = ["Low", "Medium", "High"];
 
 interface StudioInspectorProps {
   step: BlueprintStep | null;
@@ -149,38 +148,15 @@ export function StudioInspector({ step, onClose, onChange, onDelete }: StudioIns
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-2">
-              <Label className="text-xs font-semibold text-gray-600 flex items-center gap-1">
-                <Clock size={12} /> Timing / SLA
-              </Label>
-              <Input
-                value={step.timingSla ?? ""}
-                onChange={(event) => handleChange({ timingSla: event.target.value || undefined })}
-                placeholder="24 Hours"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label className="text-xs font-semibold text-gray-600 flex items-center gap-1">
-                <AlertTriangle size={12} /> Risk Level
-              </Label>
-              <Select
-                value={step.riskLevel ?? ""}
-                onValueChange={(value) => handleChange({ riskLevel: value === "" ? undefined : (value as BlueprintStep["riskLevel"]) })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Not set" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">Not set</SelectItem>
-                  {RISK_LEVELS.map((item) => (
-                    <SelectItem key={item} value={item}>
-                      {item}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold text-gray-600 flex items-center gap-1">
+              <Clock size={12} /> Timing / SLA
+            </Label>
+            <Input
+              value={step.timingSla ?? ""}
+              onChange={(event) => handleChange({ timingSla: event.target.value || undefined })}
+              placeholder="24 Hours"
+            />
           </div>
 
           <div className="space-y-2">
@@ -222,17 +198,6 @@ export function StudioInspector({ step, onClose, onChange, onDelete }: StudioIns
             />
           </div>
 
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold text-gray-600 flex items-center gap-1">
-              <NotebookPen size={12} /> Next step IDs
-            </Label>
-            <Textarea
-              rows={2}
-              value={step.nextStepIds.join(", ")}
-              onChange={(event) => handleCommaListChange("nextStepIds")(event.target.value)}
-              placeholder="step-2, step-5"
-            />
-          </div>
         </div>
       </div>
 
