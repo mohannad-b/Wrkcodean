@@ -19,6 +19,12 @@ export type CopilotTodoCategory =
   | "human_touchpoints"
   | "flow_validation"
   | "requirements"
+  | "business_objectives"
+  | "success_criteria"
+  | "business_requirements"
+  | "systems"
+  | "data_needs"
+  | "exceptions"
   | "other";
 
 export interface CopilotTodoItem {

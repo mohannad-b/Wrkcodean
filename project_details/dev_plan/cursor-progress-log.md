@@ -2,17 +2,18 @@
 
 Newest updates appear first. Each entry includes the timestamp (Pacific Time) when the work was logged.
 
-## 2025-12-03 · 08:55 PT
+## 2025-12-03 · 11:35 PT
 
-### Phase 1 – Studio Inspector Polish
-- ✅ Matched the inspect panel behavior from the legacy hash exactly, including the AI badge header, logic decision card, notes controls, and advanced drawer while keeping all live blueprint bindings.
-- ✅ Kept exception/system modals anchored to `document.body` so they float above the Studio shell and no longer get clipped inside the inspector column.
-- ✅ Preserved step selection across auto-saves and API refreshes by teaching the metadata fetcher/auto-save debounce to retain the current step whenever the ID still exists.
-- ✅ Persisted the Studio sidebar’s collapsed state via `localStorage` and documented the behavior with new Vitest coverage for `AppShellClient` (test run still hits the known jose EPERM sandbox issue).
+### Phase 1 – Copilot Blueprint Brain
+- ✅ Added persistent Copilot analysis state per automation version (new table + service) so every Copilot turn starts from the prior sections/todos/readiness snapshot.
+- ✅ Replaced the AI card banner with integrated section chips + Flow Complete CTA, wiring readiness + “Proceed to Build” gating into the Blueprint tab.
+- ✅ Upgraded the multi-pass orchestrator + StudioChat with thinking steps, human-touchpoint extraction, readiness scoring, and UI callbacks for analysis updates.
+- ✅ Hardened blueprint updates: normalized step types/names, auto-linked sequential steps, and kept React Flow edges in sync even when the AI omits dependsOnIds.
+- ✅ Added status enum migration for legacy rows (`Intake`, `Needs Pricing`, `Awaiting Approval` → camelCase) to stop insert failures on new automation versions.
 
 ### Next Steps
-- [ ] Layer contributor/builder affordances on top of the restored inspector once product finalizes those flows.
-- [ ] Address the lingering jose EPERM error so the Vitest suite can complete cleanly in CI.
+- [ ] Persist Copilot analysis between sessions in the DB (now that the table exists) and surface readiness/todos in a dedicated Studio panel.
+- [ ] Follow up on multi-branch flows by teaching the orchestrator to emit logic nodes + dependency maps when users describe conditional paths.
 
 ---
 

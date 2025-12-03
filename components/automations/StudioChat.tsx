@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import type { BlueprintUpdates } from "@/lib/blueprint/ai-updates";
 import type { CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
 import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
+import type { CopilotThinkingStep } from "@/types/copilot-thinking";
 
 type ChatRole = "user" | "assistant" | "system";
 
@@ -54,6 +55,7 @@ type CopilotReplyResponse = {
   message: ApiCopilotMessage;
   blueprintUpdates?: BlueprintUpdates | null;
   analysis?: CopilotAnalysisState | null;
+  thinkingSteps?: CopilotThinkingStep[] | null;
 };
 
 type AnalysisStepStatus = "pending" | "in_progress" | "done";
@@ -68,13 +70,11 @@ const ANALYSIS_STEP_DEFINITIONS: AnalysisStepDefinition[] = [
   { id: "readiness", label: "Compute readiness & todos" },
 ];
 
-const THINKING_INTERVAL_MS = 900;
+const STEP_COMPLETION_INTERVAL_MS = 220;
+const THINKING_COMPLETION_VISIBILITY_MS = 1800;
 
-const buildInitialStepState = (): AnalysisStepState[] =>
-  ANALYSIS_STEP_DEFINITIONS.map((step) => ({
-    ...step,
-    status: "pending",
-  }));
+const buildInitialStepState = (): AnalysisStepState[] => initializeStepState(ANALYSIS_STEP_DEFINITIONS);
+const buildActiveStepState = (definitions: AnalysisStepDefinition[]): AnalysisStepState[] => initializeStepState(definitions, true);
 
 const formatTimestamp = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
@@ -102,7 +102,8 @@ export function StudioChat({
   const [analysisSteps, setAnalysisSteps] = useState<AnalysisStepState[]>(() => buildInitialStepState());
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const prevBlueprintEmptyRef = useRef<boolean>(blueprintEmpty);
-  const thinkingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const thinkingAnimationTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const thinkingVisibilityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const dropTransientMessages = useCallback(
     (list: CopilotMessage[]) => list.filter((message) => !message.transient),
@@ -185,10 +186,12 @@ export function StudioChat({
 
   const durableMessages = useMemo(() => dropTransientMessages(messages), [messages, dropTransientMessages]);
 
-  const clearThinkingTimer = useCallback(() => {
-    if (thinkingTimerRef.current) {
-      clearInterval(thinkingTimerRef.current);
-      thinkingTimerRef.current = null;
+  const clearThinkingTimeouts = useCallback(() => {
+    thinkingAnimationTimeoutsRef.current.forEach((timeoutId) => clearTimeout(timeoutId));
+    thinkingAnimationTimeoutsRef.current = [];
+    if (thinkingVisibilityTimeoutRef.current) {
+      clearTimeout(thinkingVisibilityTimeoutRef.current);
+      thinkingVisibilityTimeoutRef.current = null;
     }
   }, []);
 
@@ -196,32 +199,71 @@ export function StudioChat({
     setAnalysisSteps(buildInitialStepState());
   }, []);
 
-  useEffect(() => {
-    if (!isThinking) {
-      clearThinkingTimer();
-      resetThinkingSteps();
-      return;
-    }
-    setAnalysisSteps(() => {
-      const steps = buildInitialStepState();
-      if (steps.length > 0) {
-        steps[0].status = "in_progress";
-      }
-      return steps;
-    });
-    thinkingTimerRef.current = window.setInterval(() => {
-      setAnalysisSteps((current) => advanceThinkingSteps(current));
-    }, THINKING_INTERVAL_MS);
-    return () => {
-      clearThinkingTimer();
-    };
-  }, [isThinking, clearThinkingTimer, resetThinkingSteps]);
+  const startThinkingPlaceholder = useCallback(() => {
+    clearThinkingTimeouts();
+    setAnalysisSteps(buildActiveStepState(ANALYSIS_STEP_DEFINITIONS));
+    setIsThinking(true);
+  }, [clearThinkingTimeouts]);
+
+  const animateThinkingCompletion = useCallback(
+    (definitions: AnalysisStepDefinition[]) => {
+      clearThinkingTimeouts();
+      setAnalysisSteps(buildActiveStepState(definitions));
+
+      definitions.forEach((_, index) => {
+        const timeoutId = window.setTimeout(() => {
+          setAnalysisSteps((current) =>
+            current.map((step, stepIndex) => {
+              if (stepIndex <= index) {
+                return step.status === "done" ? step : { ...step, status: "done" };
+              }
+              if (stepIndex === index + 1) {
+                return step.status === "in_progress" ? step : { ...step, status: "in_progress" };
+              }
+              return step.status === "pending" ? step : { ...step, status: "pending" };
+            })
+          );
+        }, index * STEP_COMPLETION_INTERVAL_MS);
+        thinkingAnimationTimeoutsRef.current.push(timeoutId);
+      });
+
+      const completionDuration = Math.max(definitions.length, 1) * STEP_COMPLETION_INTERVAL_MS + 200;
+      const finalizeTimeout = window.setTimeout(() => {
+        setAnalysisSteps((current) => current.map((step) => (step.status === "done" ? step : { ...step, status: "done" })));
+        thinkingVisibilityTimeoutRef.current = window.setTimeout(() => {
+          thinkingVisibilityTimeoutRef.current = null;
+          setIsThinking(false);
+        }, THINKING_COMPLETION_VISIBILITY_MS);
+      }, completionDuration);
+      thinkingAnimationTimeoutsRef.current.push(finalizeTimeout);
+    },
+    [clearThinkingTimeouts]
+  );
+
+  const completeThinking = useCallback(
+    (steps?: CopilotThinkingStep[] | null) => {
+      const definitions = normalizeThinkingStepDefinitions(steps);
+      animateThinkingCompletion(definitions);
+    },
+    [animateThinkingCompletion]
+  );
+
+  const stopThinking = useCallback(() => {
+    clearThinkingTimeouts();
+    setIsThinking(false);
+  }, [clearThinkingTimeouts]);
 
   useEffect(() => {
-    if (isThinking && analysisSteps.every((step) => step.status === "done")) {
-      clearThinkingTimer();
+    if (!isThinking) {
+      resetThinkingSteps();
     }
-  }, [analysisSteps, isThinking, clearThinkingTimer]);
+  }, [isThinking, resetThinkingSteps]);
+
+  useEffect(() => {
+    return () => {
+      clearThinkingTimeouts();
+    };
+  }, [clearThinkingTimeouts]);
 
   useEffect(() => {
     onConversationChange?.(durableMessages);
@@ -239,7 +281,7 @@ export function StudioChat({
     }
     setIsAwaitingReply(true);
     setAssistantError(null);
-    setIsThinking(true);
+    startThinkingPlaceholder();
     try {
       const response = await fetch(`/api/automation-versions/${automationVersionId}/copilot/reply`, {
         method: "POST",
@@ -259,13 +301,23 @@ export function StudioChat({
         const next = [...trimmed, mapApiMessage(data.message)];
         return next.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
       });
+      completeThinking(data.thinkingSteps);
     } catch {
       setAssistantError("Copilot reply failed. Try again.");
+      stopThinking();
     } finally {
       setIsAwaitingReply(false);
-      setIsThinking(false);
     }
-  }, [automationVersionId, dropTransientMessages, mapApiMessage, onBlueprintUpdates, onCopilotAnalysis]);
+  }, [
+    automationVersionId,
+    completeThinking,
+    dropTransientMessages,
+    mapApiMessage,
+    onBlueprintUpdates,
+    onCopilotAnalysis,
+    startThinkingPlaceholder,
+    stopThinking,
+  ]);
 
   const handleSend = useCallback(async () => {
     const content = input.trim();
@@ -477,22 +529,21 @@ function QuickAction() {
   return null;
 }
 
-function advanceThinkingSteps(current: AnalysisStepState[]): AnalysisStepState[] {
-  const next = current.map((step) => ({ ...step }));
-  const inProgressIndex = next.findIndex((step) => step.status === "in_progress");
-  if (inProgressIndex === -1) {
-    const pendingIndex = next.findIndex((step) => step.status === "pending");
-    if (pendingIndex !== -1) {
-      next[pendingIndex].status = "in_progress";
-    }
-    return next;
+function initializeStepState(definitions: AnalysisStepDefinition[], activateFirstStep = false): AnalysisStepState[] {
+  return definitions.map((definition, index) => ({
+    ...definition,
+    status: activateFirstStep && index === 0 ? "in_progress" : "pending",
+  }));
+}
+
+function normalizeThinkingStepDefinitions(steps?: CopilotThinkingStep[] | null): AnalysisStepDefinition[] {
+  if (!steps || steps.length === 0) {
+    return ANALYSIS_STEP_DEFINITIONS;
   }
-  next[inProgressIndex].status = "done";
-  const pendingIndex = next.findIndex((step) => step.status === "pending");
-  if (pendingIndex !== -1) {
-    next[pendingIndex].status = "in_progress";
-  }
-  return next;
+  return steps.map((step) => ({
+    id: step.id,
+    label: step.label,
+  }));
 }
 
 function renderStepStatusIcon(status: AnalysisStepStatus) {

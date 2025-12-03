@@ -52,6 +52,54 @@ describe("applyBlueprintUpdates", () => {
     expect(step?.systemsInvolved).toEqual(["System TBD"]);
   });
 
+  it("updates blueprint summary when provided", () => {
+    const blueprint = createEmptyBlueprint();
+    const updates: BlueprintUpdates = {
+      summary: "Automate Kayak pricing scrape for lead generation",
+    };
+
+    const result = applyBlueprintUpdates(blueprint, updates);
+    expect(result.summary).toBe("Automate Kayak pricing scrape for lead generation");
+  });
+
+  it("applies canonical step fields into the blueprint", () => {
+    const blueprint = createEmptyBlueprint();
+    const updates: BlueprintUpdates = {
+      steps: [
+        {
+          id: "step_kayak_scrape",
+          title: "Scrape Kayak pricing",
+          type: "Action",
+          summary: "Scrape daily Kayak car rental data",
+          goal: "Kayak pricing data captured for analysis",
+          systemsInvolved: ["Kayak", "Data Warehouse"],
+          dependsOnIds: [],
+        },
+      ],
+    };
+
+    const result = applyBlueprintUpdates(blueprint, updates);
+    const step = result.steps.find((item) => item.id === "step_kayak_scrape");
+    expect(step?.summary).toBe("Scrape daily Kayak car rental data");
+    expect(step?.goalOutcome).toBe("Kayak pricing data captured for analysis");
+    expect(step?.systemsInvolved).toEqual(["Kayak", "Data Warehouse"]);
+    expect(step?.type).toBe("Action");
+  });
+
+  it("is idempotent when applying the same updates twice", () => {
+    const blueprint = createEmptyBlueprint();
+    const updates: BlueprintUpdates = {
+      steps: [
+        { id: "step_a", title: "Step A" },
+        { id: "step_b", title: "Step B", dependsOnIds: ["step_a"] },
+      ],
+    };
+
+    const firstPass = applyBlueprintUpdates(blueprint, updates);
+    const secondPass = applyBlueprintUpdates(firstPass, updates);
+    expect(secondPass).toEqual(firstPass);
+  });
+
   it("links steps using dependsOnIds", () => {
     const blueprint = createEmptyBlueprint();
     const updates: BlueprintUpdates = {

@@ -45,7 +45,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
         createdBy: null,
       });
       copilotDebug("reply.long_input", { messageId: assistantMessage.id, content: assistantMessage.content });
-      return NextResponse.json({ message: assistantMessage, blueprintUpdates: null, analysis: null });
+      return NextResponse.json({ message: assistantMessage, blueprintUpdates: null, analysis: null, thinkingSteps: [] });
     }
 
     const blueprint = parseBlueprint(versionDetail.version.blueprintJson) ?? createEmptyBlueprint();
@@ -92,6 +92,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
       message: assistantMessage,
       blueprintUpdates: orchestrationResult.blueprintUpdates,
       analysis: orchestrationResult.analysis,
+      thinkingSteps: orchestrationResult.thinkingSteps,
     });
   } catch (error) {
     return handleApiError(error);

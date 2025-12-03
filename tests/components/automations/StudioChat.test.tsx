@@ -226,6 +226,64 @@ describe("StudioChat", () => {
     await waitFor(() => expect(onBlueprintUpdates).toHaveBeenCalledWith({ steps: [{ id: "step_ai", title: "AI Suggested" }] }));
   });
 
+  it("replaces placeholder thinking steps with contextual labels from the server", async () => {
+    fetchMock.mockImplementation((url, init) => {
+      const target = typeof url === "string" ? url : url.url;
+      const method = init?.method ?? "GET";
+      if (target === "/api/automation-versions/version-ctx/messages" && method === "GET") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+        );
+      }
+      if (target === "/api/automation-versions/version-ctx/messages" && method === "POST") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              message: { id: "user-msg", role: "user", content: "Need to scrape Kayak", createdAt: new Date().toISOString() },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+      if (target === "/api/automation-versions/version-ctx/copilot/reply" && method === "POST") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              message: {
+                id: "assistant-msg",
+                role: "assistant",
+                content: "Here is a summary.",
+                createdAt: new Date().toISOString(),
+              },
+              thinkingSteps: [
+                { id: "flow_requirements", label: "Mapped scraping flow and requirements for Kayak pricing" },
+                { id: "objectives_success", label: "Captured lead gen objectives" },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+      throw new Error(`Unexpected fetch: ${target} ${method}`);
+    });
+
+    render(
+      <StudioChat
+        automationVersionId="version-ctx"
+        blueprintEmpty={false}
+        onDraftBlueprint={async () => {}}
+        isDrafting={false}
+      />
+    );
+
+    const input = await screen.findByPlaceholderText("Capture refinements or clarifications...");
+    fireEvent.change(input, { target: { value: "Need to scrape Kayak" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => expect(screen.getByText("Mapped scraping flow and requirements for Kayak pricing")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Captured lead gen objectives")).toBeInTheDocument());
+  });
+
   it("invokes onCopilotAnalysis when analysis payload is returned", async () => {
     const analysis = createEmptyCopilotAnalysisState();
     fetchMock.mockImplementation((url, init) => {

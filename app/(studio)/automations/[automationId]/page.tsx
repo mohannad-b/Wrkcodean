@@ -20,7 +20,7 @@ import { SettingsTab } from "@/components/automations/SettingsTab";
 import { TestTab } from "@/components/automations/TestTab";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import type { Blueprint, BlueprintSectionKey, BlueprintStep } from "@/lib/blueprint/types";
-import { BLUEPRINT_SECTION_TITLES } from "@/lib/blueprint/types";
+import { BLUEPRINT_SECTION_TITLES, BLUEPRINT_SECTION_KEYS } from "@/lib/blueprint/types";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
 import { isBlueprintEffectivelyEmpty } from "@/lib/blueprint/utils";
 import { blueprintToNodes, blueprintToEdges, addConnection, removeConnection } from "@/lib/blueprint/canvas-utils";
@@ -31,7 +31,8 @@ import type { AutomationLifecycleStatus } from "@/lib/automations/status";
 import { VersionSelector, type VersionOption } from "@/components/ui/VersionSelector";
 import { Badge } from "@/components/ui/badge";
 import type { CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
-import { CopilotReadinessCard } from "@/components/automations/CopilotReadinessCard";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { BUILD_STATUS_ORDER, type BuildStatus } from "@/lib/build-status/types";
 
 const StudioCanvas = dynamic(
   () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
@@ -139,6 +140,18 @@ const computeSeed = (value: string) => {
     hash |= 0;
   }
   return Math.abs(hash);
+};
+
+const isAtOrBeyondBuild = (status: AutomationLifecycleStatus | null, target: BuildStatus): boolean => {
+  if (!status) {
+    return false;
+  }
+  const targetIndex = BUILD_STATUS_ORDER.indexOf(target);
+  const statusIndex = BUILD_STATUS_ORDER.indexOf(status as BuildStatus);
+  if (statusIndex === -1) {
+    return status === "Archived";
+  }
+  return statusIndex >= targetIndex;
 };
 
 const getKpiStats = (automationId: string): KpiStat[] => {
@@ -256,6 +269,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [copilotAnalysis, setCopilotAnalysis] = useState<CopilotAnalysisState | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [proceedingToBuild, setProceedingToBuild] = useState(false);
   const completionRef = useRef<ReturnType<typeof getBlueprintCompletionState> | null>(null);
   const preserveSelectionRef = useRef(false);
 
@@ -356,6 +370,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   useEffect(() => {
     void fetchCopilotAnalysis(activeVersionId);
   }, [fetchCopilotAnalysis, activeVersionId]);
+
 
   useEffect(() => {
     if (selectedVersion) {
@@ -663,10 +678,24 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [blueprint, selectedStepId]
   );
   const blueprintIsEmpty = useMemo(() => isBlueprintEffectivelyEmpty(blueprint), [blueprint]);
-  const completionBySection = useMemo(
-    () => new Map(completion.sections.map((section) => [section.key, section.complete])),
-    [completion]
-  );
+  const readinessScore = copilotAnalysis?.readiness?.score ?? 0;
+  const readinessStateItems = copilotAnalysis?.readiness?.stateItemsSatisfied ?? [];
+  const analysisSectionCompletion = useMemo(() => {
+    const result = new Map<BlueprintSectionKey, boolean>();
+    if (copilotAnalysis?.sections) {
+      for (const key of Object.keys(copilotAnalysis.sections) as BlueprintSectionKey[]) {
+        const snapshot = copilotAnalysis.sections[key];
+        result.set(
+          key,
+          Boolean(snapshot?.textSummary?.trim()) && snapshot?.confidence !== "low"
+        );
+      }
+    }
+    const flowCompleteSatisfied =
+      readinessScore >= 70 || readinessStateItems.includes("flow_complete");
+    result.set("flow_complete", flowCompleteSatisfied);
+    return result;
+  }, [copilotAnalysis, readinessScore, readinessStateItems]);
   const checklistItems = useMemo(
     () =>
       BASE_CHECKLIST.map((item) =>
@@ -674,15 +703,65 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           ? {
               id: item.id,
               label: item.label,
-              completed: completionBySection.get(item.sectionKey) ?? false,
+              sectionKey: item.sectionKey,
+              completed: analysisSectionCompletion.get(item.sectionKey) ?? false,
             }
           : {
               id: item.id,
               label: item.label,
+              sectionKey: item.sectionKey,
               completed: Boolean(blueprint?.summary?.trim()),
             }
       ),
-    [blueprint?.summary, completionBySection]
+    [blueprint?.summary, analysisSectionCompletion]
+  );
+  const readyForBuild = readinessScore >= 70;
+  const alreadyInBuild = isAtOrBeyondBuild(selectedVersion?.status ?? null, "BuildInProgress");
+  const proceedDisabledReason = analysisError
+    ? "Copilot readiness unavailable. Try again after the next update."
+    : !readyForBuild
+    ? "Reach a readiness score of 70 or higher to proceed."
+    : alreadyInBuild
+    ? "This version is already in a build phase."
+    : !selectedVersion?.id
+    ? "Select an automation version first."
+    : analysisLoading
+    ? "Syncing readiness…"
+    : null;
+  const proceedButtonDisabled = Boolean(proceedDisabledReason) || proceedingToBuild;
+
+  const handleProceedToBuild = useCallback(async () => {
+    if (!selectedVersion?.id || proceedButtonDisabled || alreadyInBuild) {
+      return;
+    }
+    setProceedingToBuild(true);
+    try {
+      const response = await fetch(`/api/automation-versions/${selectedVersion.id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "BuildInProgress" }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.error ?? "Unable to update status");
+      }
+      toast({
+        title: "Proceeding to build",
+        description: "Status updated to Build in Progress.",
+        variant: "success",
+      });
+      await fetchAutomation({ preserveSelection: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Proceed request failed";
+      toast({ title: "Unable to proceed", description: message, variant: "error" });
+    } finally {
+      setProceedingToBuild(false);
+    }
+  }, [selectedVersion?.id, proceedButtonDisabled, alreadyInBuild, fetchAutomation, toast]);
+  const totalBlueprintSections = BLUEPRINT_SECTION_KEYS.length;
+  const sectionsCoveredCount = useMemo(
+    () => checklistItems.filter((item) => item.sectionKey && item.completed).length,
+    [checklistItems]
   );
 
   useEffect(() => {
@@ -924,34 +1003,79 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     </div>
   ) : (
     <div className="flex flex-col h-full w-full relative bg-gray-50 min-h-0">
-      <div className="h-14 border-b border-gray-100 bg-white flex items-center px-6 overflow-x-auto no-scrollbar shrink-0 z-20 relative">
-        <div className="flex items-center gap-6 min-w-max">
-          {checklistItems.map((item) => (
-            <div key={item.id} className="flex items-center gap-2">
-              <div
+      <div className="border-b border-gray-100 bg-white px-6 py-3 z-20 relative">
+        <div className="flex items-center gap-6 min-w-max overflow-x-auto no-scrollbar">
+          {checklistItems.map((item) => {
+            const chipContent = (
+              <>
+                <div
+                  className={cn(
+                    "w-4 h-4 rounded-full border flex items-center justify-center transition-colors duration-300",
+                    item.completed ? "bg-emerald-500 border-emerald-500 text-white" : "border-gray-300 bg-white text-transparent"
+                  )}
+                >
+                  <CheckCircle2 size={10} />
+                </div>
+                <span
+                  className={cn(
+                    "text-xs font-medium transition-colors duration-300",
+                    item.completed ? "text-[#0A0A0A]" : "text-gray-400"
+                  )}
+                >
+                  {item.label}
+                </span>
+              </>
+            );
+            if (item.id !== "flow_complete") {
+              return (
+                <div key={item.id} className="flex items-center gap-2">
+                  {chipContent}
+                </div>
+              );
+            }
+            const proceedButton = (
+              <Button
+                key="proceed-button"
+                size="sm"
+                onClick={handleProceedToBuild}
+                disabled={proceedButtonDisabled}
                 className={cn(
-                  "w-4 h-4 rounded-full border flex items-center justify-center transition-colors duration-500",
-                  item.completed ? "bg-[#E43632] border-[#E43632] text-white" : "border-gray-300 bg-white"
+                  "ml-2 gap-2 rounded-full px-4 py-1 text-xs font-semibold",
+                  alreadyInBuild ? "bg-gray-200 text-gray-600" : "bg-gray-900 text-white hover:bg-gray-800"
                 )}
               >
-                {item.completed && <CheckCircle2 size={10} />}
+                {proceedingToBuild ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Updating…
+                  </>
+                ) : alreadyInBuild ? (
+                  "Build in progress"
+                ) : (
+                  <>
+                    Proceed to Build
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </Button>
+            );
+            const wrappedButton =
+              proceedDisabledReason && !alreadyInBuild && !proceedingToBuild ? (
+                <Tooltip key="tooltip-proceed">
+                  <TooltipTrigger asChild>{proceedButton}</TooltipTrigger>
+                  <TooltipContent className="text-xs">{proceedDisabledReason}</TooltipContent>
+                </Tooltip>
+              ) : (
+                proceedButton
+              );
+            return (
+              <div key={item.id} className="flex items-center gap-2">
+                {chipContent}
+                {wrappedButton}
               </div>
-              <span
-                className={cn(
-                  "text-xs font-medium transition-colors duration-500",
-                  item.completed ? "text-[#0A0A0A]" : "text-gray-400"
-                )}
-              >
-                {item.label}
-              </span>
-            </div>
-          ))}
+            );
+          })}
         </div>
-      </div>
-
-      <div className="border-b border-gray-100 bg-white px-6 py-4">
-        <CopilotReadinessCard analysis={copilotAnalysis} loading={analysisLoading} />
-        {analysisError ? <p className="text-xs text-red-600 mt-2">{analysisError}</p> : null}
       </div>
 
       {blueprintError ? (

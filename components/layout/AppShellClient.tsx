@@ -17,6 +17,7 @@ interface AppShellClientProps {
 export function AppShellClient({ children, initialProfile, initialLastUpdatedAt }: AppShellClientProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const contentPaddingClass = sidebarCollapsed ? "md:pl-12" : "md:pl-64";
+
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -30,7 +31,6 @@ export function AppShellClient({ children, initialProfile, initialLastUpdatedAt 
       // Ignore read errors
     }
   }, []);
-
   useEffect(() => {
     try {
       localStorage.setItem(SIDEBAR_STORAGE_KEY, sidebarCollapsed ? "true" : "false");
