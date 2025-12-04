@@ -124,11 +124,14 @@ describe("applyBlueprintUpdates", () => {
         type: "Trigger",
         name: "Old",
         summary: "Old summary",
+      description: "Old summary",
         goalOutcome: "Old outcome",
         responsibility: "Automated",
         systemsInvolved: ["Old System"],
         notifications: [],
         nextStepIds: [],
+        stepNumber: "",
+        taskIds: [],
       },
     ];
 

@@ -989,7 +989,7 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
                 <TasksTab />
               </TabsContent>
               <TabsContent value="activity" className="h-full m-0 data-[state=inactive]:hidden">
-                <ActivityTab />
+                <ActivityTab automationVersionId={project.version?.id ?? ""} />
               </TabsContent>
               <TabsContent value="chat" className="h-full m-0 data-[state=inactive]:hidden">
                 <ConversationThread messages={messages} />

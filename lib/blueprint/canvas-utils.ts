@@ -1,12 +1,13 @@
 import type { Node, Edge, Connection } from "reactflow";
 import type { Blueprint, BlueprintStep } from "./types";
+import { generateStepNumbers } from "./step-numbering";
 
 /**
  * Configuration for canvas layout
  */
 export const CANVAS_LAYOUT = {
-  NODE_X_GAP: 360,
-  NODE_Y_GAP: 220,
+  NODE_X_GAP: 400,
+  NODE_Y_GAP: 240,
 } as const;
 
 /**
@@ -19,6 +20,11 @@ export interface CanvasNodeData {
   status: "ai-suggested" | "complete" | "draft";
   isNew?: boolean;
   isUpdated?: boolean;
+  stepNumber?: string;
+  displayLabel?: string;
+  branchCondition?: string;
+  pendingTaskCount?: number;
+  totalTaskCount?: number;
 }
 
 /**
@@ -27,26 +33,64 @@ export interface CanvasNodeData {
  * @param blueprint - The Blueprint object containing steps
  * @returns Array of React Flow nodes
  */
-export function blueprintToNodes(blueprint: Blueprint | null): Node<CanvasNodeData>[] {
+export function blueprintToNodes(
+  blueprint: Blueprint | null,
+  taskLookup?: Map<string, { status?: string | null }>
+): Node<CanvasNodeData>[] {
   if (!blueprint || !blueprint.steps) {
     return [];
   }
 
+  // Generate step numbers for all steps
+  const numbering = generateStepNumbers(blueprint);
+
+  // Calculate positions
   const positions = computeLayoutPositions(blueprint.steps);
 
   return blueprint.steps.map((step, index) => {
-    const position =
-      positions.get(step.id) ?? { x: 0, y: index * CANVAS_LAYOUT.NODE_Y_GAP };
+    const position = positions.get(step.id) ?? { x: 0, y: index * CANVAS_LAYOUT.NODE_Y_GAP };
+
+    // Get numbering info for this step
+    const stepNumbering = numbering.get(step.id);
+
+    let totalTaskCount = step.taskIds?.length ?? 0;
+    let pendingTaskCount = totalTaskCount;
+    if (taskLookup && Array.isArray(step.taskIds) && step.taskIds.length > 0) {
+      let resolvedTotal = 0;
+      let pending = 0;
+      step.taskIds.forEach((taskId) => {
+        const task = taskLookup.get(taskId);
+        if (!task) {
+          return;
+        }
+        resolvedTotal += 1;
+        if (!isTaskComplete(task.status)) {
+          pending += 1;
+        }
+      });
+      if (resolvedTotal > 0) {
+        totalTaskCount = resolvedTotal;
+        pendingTaskCount = pending;
+      }
+    }
 
     return {
       id: step.id,
       type: "custom",
       position,
       data: {
+        // Existing fields
         title: step.name,
-        description: step.summary || "Click to add a summary",
+        description: step.description || step.summary || "Click to add details",
         type: step.type,
         status: blueprint.status === "Draft" ? "ai-suggested" : "complete",
+
+        // New fields
+        stepNumber: stepNumbering?.stepNumber,
+        displayLabel: stepNumbering?.displayLabel,
+        branchCondition: step.branchCondition,
+        pendingTaskCount,
+        totalTaskCount,
       },
     };
   });
@@ -65,17 +109,25 @@ export function blueprintToEdges(blueprint: Blueprint | null): Edge[] {
 
   // Create a set of valid step IDs for validation
   const validStepIds = new Set(blueprint.steps.map((step) => step.id));
+  const stepById = new Map(blueprint.steps.map((step) => [step.id, step]));
 
   // Flatten all step connections into edges
   return blueprint.steps.flatMap((step) =>
     step.nextStepIds
       .filter((targetId) => validStepIds.has(targetId)) // Only include edges to existing steps
-      .map((targetId) => ({
-        id: `edge-${step.id}-${targetId}`,
-        source: step.id,
-        target: targetId,
-        type: "default",
-      }))
+      .map((targetId) => {
+        const targetStep = stepById.get(targetId);
+        const label = targetStep?.branchLabel?.trim();
+        const isConditionalEdge = Boolean(label);
+
+        return {
+          id: `edge-${step.id}-${targetId}`,
+          source: step.id,
+          target: targetId,
+          type: isConditionalEdge ? "condition" : "default",
+          data: isConditionalEdge ? { label } : undefined,
+        };
+      })
   );
 }
 
@@ -216,17 +268,61 @@ function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number
   }
 
   const positions = new Map<string, { x: number; y: number }>();
-  levelGroups.forEach((ids, level) => {
-    const width = ids.length;
-    const offset = (width - 1) / 2;
-    ids.forEach((id, index) => {
-      const x = (index - offset) * CANVAS_LAYOUT.NODE_X_GAP;
-      const y = level * CANVAS_LAYOUT.NODE_Y_GAP;
-      positions.set(id, { x, y });
+  const stepById = new Map(steps.map((step) => [step.id, step]));
+  const sortedLevels = Array.from(levelGroups.entries()).sort((a, b) => a[0] - b[0]);
+
+  sortedLevels.forEach(([level, ids]) => {
+    if (ids.length === 0) {
+      return;
+    }
+
+    type LevelGroup = { parentId?: string; ids: string[] };
+    const groups: LevelGroup[] = [];
+    const groupIndex = new Map<string, number>();
+
+    ids.forEach((id) => {
+      const parentId = stepById.get(id)?.parentStepId;
+      const key = parentId ?? `root-${id}`;
+      if (!groupIndex.has(key)) {
+        groupIndex.set(key, groups.length);
+        groups.push({ parentId: parentId ?? undefined, ids: [] });
+      }
+      groups[groupIndex.get(key)!].ids.push(id);
+    });
+
+    const totalWidth = ids.length;
+    const levelOffset = (totalWidth - 1) / 2;
+    let cursor = 0;
+    const y = level * CANVAS_LAYOUT.NODE_Y_GAP;
+
+    groups.forEach((group) => {
+      const { parentId, ids: childIds } = group;
+      const groupSize = childIds.length;
+      const parentPosition = parentId ? positions.get(parentId) : undefined;
+
+      if (!parentPosition) {
+        childIds.forEach((childId) => {
+          const x = (cursor - levelOffset) * CANVAS_LAYOUT.NODE_X_GAP;
+          positions.set(childId, { x, y });
+          cursor += 1;
+        });
+        return;
+      }
+
+      const branchOffset = (groupSize - 1) / 2;
+      childIds.forEach((childId, index) => {
+        const x = parentPosition.x + (index - branchOffset) * CANVAS_LAYOUT.NODE_X_GAP;
+        positions.set(childId, { x, y });
+      });
+      cursor += groupSize;
     });
   });
 
   return positions;
+}
+
+function isTaskComplete(status?: string | null): boolean {
+  return (status ?? "").toLowerCase() === "complete";
 }
 
 /**

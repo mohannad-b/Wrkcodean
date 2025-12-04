@@ -41,7 +41,7 @@ CREATE TYPE file_status AS ENUM ('pending','uploaded','failed');
 CREATE TYPE ai_job_status AS ENUM ('pending','processing','succeeded','failed');
 CREATE TYPE message_type AS ENUM ('client','ops');
 CREATE TYPE task_status AS ENUM ('pending','in_progress','complete');
-CREATE TYPE task_priority AS ENUM ('low','medium','high','critical');
+CREATE TYPE task_priority AS ENUM ('blocker','important','optional');
 CREATE TYPE notification_preference AS ENUM ('all','mentions','none');
 
 -- Tenants
@@ -214,17 +214,20 @@ CREATE TABLE tasks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   project_id uuid REFERENCES projects(id) ON DELETE CASCADE,
+  automation_version_id uuid REFERENCES automation_versions(id) ON DELETE CASCADE,
   title text NOT NULL,
   description text,
   status task_status NOT NULL DEFAULT 'pending',
-  priority task_priority DEFAULT 'medium',
+  priority task_priority DEFAULT 'important',
   assignee_id uuid REFERENCES users(id) ON DELETE SET NULL,
   due_date timestamptz,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX tasks_tenant_idx ON tasks(tenant_id);
 CREATE INDEX tasks_project_idx ON tasks(project_id);
+CREATE INDEX tasks_version_idx ON tasks(automation_version_id);
 
 -- Audit Logs
 CREATE TABLE audit_logs (

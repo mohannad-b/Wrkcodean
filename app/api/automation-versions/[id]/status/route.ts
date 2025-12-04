@@ -36,7 +36,7 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
       throw new ApiError(400, "Invalid status");
     }
 
-    const updated = await updateAutomationVersionStatus({
+    const { version: updated, previousStatus } = await updateAutomationVersionStatus({
       tenantId: session.tenantId,
       automationVersionId: params.id,
       nextStatus,
@@ -55,10 +55,10 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
     await logAudit({
       tenantId: session.tenantId,
       userId: session.userId,
-      action: "automation.version.transition",
+      action: "automation.version.status.changed",
       resourceType: "automation_version",
       resourceId: params.id,
-      metadata: { status: nextStatus },
+      metadata: { from: previousStatus, to: nextStatus },
     });
 
     return NextResponse.json({

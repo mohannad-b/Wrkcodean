@@ -7,6 +7,8 @@ import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
 import { BlueprintSchema, parseBlueprint } from "@/lib/blueprint/schema";
 import type { Blueprint } from "@/lib/blueprint/types";
+import { diffBlueprint } from "@/lib/blueprint/diff";
+import type { Task } from "@/db/schema";
 
 type RouteParams = {
   params: {
@@ -82,6 +84,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
         summary: detail.version.summary,
         createdAt: detail.version.createdAt,
         updatedAt: detail.version.updatedAt,
+        tasks: (detail.tasks ?? []).map(presentTask),
       },
       automation: detail.automation
         ? {
@@ -129,6 +132,12 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       throw new ApiError(400, "No valid fields provided.");
     }
 
+    const existingDetail = await getAutomationVersionDetail(session.tenantId, params.id);
+    if (!existingDetail) {
+      throw new ApiError(404, "Automation version not found");
+    }
+    const previousBlueprint = parseBlueprint(existingDetail.version.blueprintJson);
+
     const updated = await updateAutomationVersionMetadata({
       tenantId: session.tenantId,
       automationVersionId: params.id,
@@ -136,18 +145,27 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       blueprintJson,
     });
 
+    const metadata: Record<string, unknown> = {
+      updatedFields: {
+        intakeNotes: intakeNotes !== undefined,
+        blueprintJson: blueprintJson !== undefined,
+      },
+    };
+
+    if (blueprintJson !== undefined) {
+      const nextBlueprint = parseBlueprint(updated.blueprintJson);
+      const blueprintDiff = diffBlueprint(previousBlueprint, nextBlueprint);
+      metadata.blueprintSummary = blueprintDiff.summary;
+      metadata.blueprintDiff = blueprintDiff;
+    }
+
     await logAudit({
       tenantId: session.tenantId,
       userId: session.userId,
       action: "automation.version.update",
       resourceType: "automation_version",
       resourceId: params.id,
-      metadata: {
-        updatedFields: {
-          intakeNotes: intakeNotes !== undefined,
-          blueprintJson: blueprintJson !== undefined,
-        },
-      },
+      metadata,
     });
 
     return NextResponse.json({
@@ -161,5 +179,17 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   } catch (error) {
     return handleApiError(error);
   }
+}
+
+function presentTask(task: Task) {
+  return {
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    priority: task.priority,
+    metadata: task.metadata,
+    updatedAt: task.updatedAt,
+  };
 }
 

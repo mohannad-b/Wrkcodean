@@ -5,6 +5,7 @@ import { getAutomationDetail } from "@/lib/services/automations";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
 import { parseBlueprint } from "@/lib/blueprint/schema";
+import type { Task } from "@/db/schema";
 
 type RouteParams = {
   params: {
@@ -51,12 +52,25 @@ export async function GET(_request: Request, { params }: RouteParams) {
                 updatedAt: version.latestQuote.updatedAt,
               }
             : null,
+          tasks: (version.tasks ?? []).map(presentTask),
         })),
       },
     });
   } catch (error) {
     return handleApiError(error);
   }
+}
+
+function presentTask(task: Task) {
+  return {
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    priority: task.priority,
+    metadata: task.metadata,
+    updatedAt: task.updatedAt,
+  };
 }
 
 

@@ -8,7 +8,7 @@ const isoDateString = z
 
 export const BlueprintStatusSchema = z.enum(["Draft", "ReadyForQuote", "ReadyToBuild"]);
 
-export const BlueprintStepTypeSchema = z.enum(["Trigger", "Action", "Logic", "Human"]);
+export const BlueprintStepTypeSchema = z.enum(["Trigger", "Action", "Decision", "Exception", "Human"]);
 
 export const BlueprintResponsibilitySchema = z.enum(["Automated", "HumanReview", "Approval"]);
 
@@ -28,6 +28,11 @@ export const BlueprintStepSchema = z.object({
   type: BlueprintStepTypeSchema,
   name: z.string().min(1).max(200),
   summary: z.string().min(1).max(4000),
+  description: z
+    .string()
+    .min(0)
+    .max(4000)
+    .default(""),
   goalOutcome: z.string().min(1).max(2000),
   responsibility: BlueprintResponsibilitySchema,
   notesExceptions: z.string().max(4000).optional(),
@@ -38,6 +43,23 @@ export const BlueprintStepSchema = z.object({
   notesForOps: z.string().max(4000).optional(),
   exceptionIds: z.array(z.string().min(1)).max(20).optional(),
   nextStepIds: z.array(z.string().min(1)).max(20),
+  stepNumber: z
+    .string()
+    .max(16)
+    .default(""),
+  branchType: z.enum(["conditional", "exception", "parallel"]).optional(),
+  branchCondition: z.string().max(2000).optional(),
+  branchLabel: z.string().max(120).optional(),
+  parentStepId: z.string().min(1).optional(),
+  taskIds: z.array(z.string().min(1)).max(100).default([]),
+});
+
+export const BlueprintBranchSchema = z.object({
+  id: z.string().min(1),
+  parentStepId: z.string().min(1),
+  condition: z.string().min(1).max(4000),
+  label: z.string().min(1).max(120),
+  targetStepId: z.string().min(1),
 });
 
 export const BlueprintSchema = z
@@ -47,6 +69,7 @@ export const BlueprintSchema = z
     summary: z.string().max(4000),
     sections: z.array(BlueprintSectionSchema),
     steps: z.array(BlueprintStepSchema),
+    branches: z.array(BlueprintBranchSchema).default([]),
     createdAt: isoDateString,
     updatedAt: isoDateString,
   })

@@ -12,13 +12,14 @@ import {
   Edit3,
   Sparkles,
   Calendar,
-  History,
   ArrowUpRight,
   ArrowRight,
 } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { ActivityTimeline } from "@/components/automations/ActivityTimeline";
 
 interface OverviewTabProps {
   onEditBlueprint?: () => void;
@@ -28,6 +29,8 @@ interface OverviewTabProps {
   automationDescription?: string;
   status?: string;
   version?: string;
+  automationId?: string;
+  automationVersionId?: string;
 }
 
 export function OverviewTab({
@@ -38,6 +41,8 @@ export function OverviewTab({
   automationDescription,
   status = "Live",
   version = "v2.4",
+  automationId,
+  automationVersionId,
 }: OverviewTabProps) {
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-8 overflow-y-auto h-full pb-20">
@@ -139,51 +144,23 @@ export function OverviewTab({
         {/* LEFT COLUMN (Timeline) */}
         <div className="lg:col-span-2 space-y-6">
           {/* Timeline Card */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-bold text-[#0A0A0A]">
-                <History size={16} className="text-gray-400" />
-                Recent Activity
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-auto p-0 text-xs text-gray-400 hover:text-[#E43632]"
-              >
-                View All
-              </Button>
+          <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-[#0A0A0A]">Recent Activity</h3>
+              {automationId ? (
+                <Link href={`/automations/${automationId}?tab=activity`}>
+                  <Button variant="ghost" size="sm" className="text-xs text-gray-500">
+                    View All
+                  </Button>
+                </Link>
+              ) : null}
             </div>
-            <div className="p-6">
-              <div className="space-y-8 relative before:absolute before:left-2.5 before:top-2 before:h-full before:w-px before:bg-gray-100">
-                <TimelineItem
-                  icon={Edit3}
-                  iconColor="text-blue-500"
-                  iconBg="bg-blue-50"
-                  title="Logic Updated"
-                  user="Mo"
-                  time="2 hours ago"
-                  desc="Changed approval threshold from $5k to $10k."
-                />
-                <TimelineItem
-                  icon={AlertTriangle}
-                  iconColor="text-amber-500"
-                  iconBg="bg-amber-50"
-                  title="Execution Warning"
-                  user="System"
-                  time="5 hours ago"
-                  desc="PDF extraction confidence was low (45%) for Invoice #9921."
-                />
-                <TimelineItem
-                  icon={Play}
-                  iconColor="text-emerald-500"
-                  iconBg="bg-emerald-50"
-                  title="Manual Run"
-                  user="Sarah (Finance)"
-                  time="1 day ago"
-                  desc="Triggered manual reconciliation for Q3 expenses."
-                />
-              </div>
-            </div>
+            <ActivityTimeline
+              automationVersionId={automationVersionId ?? ""}
+              limit={5}
+              showExport={false}
+              showHeader={false}
+            />
           </div>
         </div>
 
@@ -289,49 +266,6 @@ function KpiCard({
         <h3 className="text-2xl font-bold text-[#0A0A0A] mb-1 tracking-tight">{value}</h3>
         <p className="text-xs text-gray-500 font-medium">{label}</p>
         <p className="text-[10px] text-gray-400 mt-0.5">{subtext}</p>
-      </div>
-    </div>
-  );
-}
-
-function TimelineItem({
-  icon: Icon,
-  iconColor,
-  iconBg,
-  title,
-  user,
-  time,
-  desc,
-}: {
-  icon: React.ComponentType<{ size?: number | string; className?: string }>;
-  iconColor: string;
-  iconBg: string;
-  title: string;
-  user: string;
-  time: string;
-  desc: string;
-}) {
-  return (
-    <div className="relative pl-8">
-      <div
-        className={cn(
-          "absolute left-0 top-0 w-5 h-5 rounded-full flex items-center justify-center border-2 border-white ring-1 ring-gray-100 shadow-sm z-10",
-          iconBg,
-          iconColor
-        )}
-      >
-        <Icon size={10} />
-      </div>
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 mb-1">
-        <p className="text-sm font-bold text-gray-900">{title}</p>
-        <span className="text-[10px] text-gray-400">{time}</span>
-      </div>
-      <p className="text-xs text-gray-600 leading-relaxed">{desc}</p>
-      <div className="flex items-center gap-1.5 mt-2">
-        <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-[8px] font-bold text-gray-500">
-          {user.charAt(0)}
-        </div>
-        <span className="text-[10px] text-gray-500 font-medium">{user}</span>
       </div>
     </div>
   );

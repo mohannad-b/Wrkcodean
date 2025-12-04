@@ -4,6 +4,7 @@ const canMock = vi.fn();
 const listMessagesMock = vi.fn();
 const createMessageMock = vi.fn();
 const requireTenantSessionMock = vi.fn();
+const logAuditMock = vi.fn();
 
 vi.mock("@/lib/api/context", () => ({
   requireTenantSession: requireTenantSessionMock,
@@ -27,6 +28,10 @@ vi.mock("@/lib/services/copilot-messages", () => ({
   createCopilotMessage: createMessageMock,
 }));
 
+vi.mock("@/lib/audit/log", () => ({
+  logAudit: logAuditMock,
+}));
+
 describe("automation-version messages route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -39,6 +44,7 @@ describe("automation-version messages route", () => {
       content: "hello",
       createdAt: new Date().toISOString(),
     });
+    logAuditMock.mockResolvedValue(undefined);
   });
 
   it("returns persisted messages for GET", async () => {
@@ -70,6 +76,12 @@ describe("automation-version messages route", () => {
     });
     const payload = await response.json();
     expect(payload.message.id).toBe("msg-2");
+    expect(logAuditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "automation.message.sent",
+        resourceId: "version-1",
+      })
+    );
   });
 
   it("strips blueprint JSON blocks from assistant messages on GET", async () => {

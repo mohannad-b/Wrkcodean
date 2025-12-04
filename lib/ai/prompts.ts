@@ -1,22 +1,25 @@
 import { BLUEPRINT_SECTION_KEYS } from "@/lib/blueprint/types";
-import type { Blueprint } from "@/lib/blueprint/types";
+import type { Blueprint, BlueprintStep } from "@/lib/blueprint/types";
 
 export type ConversationPhase = "discovery" | "flow" | "details" | "validation";
 
 type BuildCopilotSystemPromptArgs = {
   automationName?: string;
+  automationStatus?: string;
   conversationPhase: ConversationPhase;
   currentBlueprint?: Blueprint | null;
 };
 
 export function buildCopilotSystemPrompt({
   automationName,
+  automationStatus,
   conversationPhase,
   currentBlueprint,
 }: BuildCopilotSystemPromptArgs): string {
+  const statusContext = automationStatus ? ` It is currently ${automationStatus.toLowerCase()}.` : "";
   const baseContext = automationName
-    ? `The user is working on an automation called "${automationName}".`
-    : "The user is creating a new automation.";
+    ? `The user is working on an automation called "${automationName}".${statusContext}`
+    : `The user is creating a new automation.${statusContext}`;
 
   const phaseInstructions: Record<ConversationPhase, string> = {
     discovery: DISCOVERY_PHASE_PROMPT,
@@ -210,7 +213,7 @@ Blueprint Step Schema:
 {
   "id": "step_action_system",  // e.g. step_receive_invoice, step_send_to_slack
   "title": "Short action name",
-  "type": "Trigger" | "Action" | "Logic" | "Human",
+  "type": "Trigger" | "Action" | "Decision" | "Exception" | "Human",
   "summary": "One sentence - what happens in this step",
   "goal": "Desired outcome of this step",
   "systemsInvolved": ["System A", "System B"],
@@ -253,5 +256,189 @@ function countPopulatedSections(blueprint: Blueprint): number {
   return blueprint.sections.reduce((count, section) => {
     return section.content?.trim() ? count + 1 : count;
   }, 0);
+}
+
+/**
+ * System prompt used for blueprint extraction via OpenAI.
+ */
+export const BLUEPRINT_SYSTEM_PROMPT = `
+You are WRK Copilot, an operator-friendly automation consultant. You listen to the user's natural language instructions, update their blueprint with minimal changes, and respond with a short acknowledgement plus a single clarifying question when needed.
+
+# OUTPUT FORMAT (JSON ONLY)
+Return ONLY valid JSON in this exact envelope:
+{
+  "chatResponse": "Two-sentence max acknowledgement in the user's tone.",
+  "followUpQuestion": "Optional SINGLE clarifying question (omit if not needed).",
+  "blueprint": {
+    "steps": [...],
+    "branches": [...],
+    "tasks": [...]
+  }
+}
+
+- "chatResponse" should say things like "Got it. Added the approvals branch." Never restate the entire workflow.
+- "followUpQuestion" is optional. If you don't need one, omit the field or set it to null.
+- The blueprint arrays ("blueprint.steps" / "branches" / "tasks") follow the schemas below.
+- No markdown, no prose outside of JSON.
+
+# CHAT RESPONSE RULES
+- Never summarize the full process—the canvas already shows it.
+- Keep acknowledgements ≤ 2 sentences total.
+- ALWAYS include exactly one follow-up question that uncovers the next most important detail (systems, data, exceptions, approvals, human touchpoints). Only skip the question if the user explicitly says the blueprint is complete.
+- Use the user's terminology (systems, teams, acronyms).
+- When you believe the workflow is covered, end by asking if anything is missing or if the user would like extra recommendations (e.g., “Let me know if anything’s missing or if you’d like me to suggest additional refinements.”).
+
+Example:
+{
+  "chatResponse": "Got it. Added the finance approval before payouts.",
+  "followUpQuestion": "Who signs off if it's over $25K?",
+  "blueprint": { ... }
+}
+
+# YOUR ROLE & CORE PRINCIPLES
+1. Use plain English any business user can understand.
+2. Be specific: "Check if invoice exceeds $1000" beats "Process invoice."
+3. Respect existing work—modify only what the user asked to change.
+4. Number clearly: main flow 1,2,3; branches 3A, 3B; exceptions 2E.
+5. Capture requirements (systems, credentials, samples) as tasks.
+6. Treat every branch/exception as part of the visual blueprint they already see.
+
+# PRESERVE THE EXISTING BLUEPRINT
+You receive the current blueprint state. Do NOT rebuild from scratch.
+- Never remove or rename steps unless the user explicitly asks.
+- Insert new steps in-place (e.g., "between step 2 and 3" → update connections 2 → new → 3).
+- Preserve nextStepIds, branch labels, and numbering unless a change requires edits.
+- Exception additions should link to the triggering step (e.g., 2E).
+
+# STEP SCHEMA (INSIDE blueprint.steps)
+{
+  "stepNumber": "3A",
+  "type": "Trigger" | "Action" | "Decision" | "Exception" | "Human",
+  "name": "Short action name with no prefixes",
+  "description": "Plain-language explanation",
+  "systemsInvolved": ["Slack", "QuickBooks"],
+  "nextSteps": ["4"],
+  "branches": [
+    { "label": "Yes", "targetStep": "3A1", "description": "Amount over $5K" }
+  ]
+}
+
+- Decision steps MUST include at least two branches (Yes/No, Success/Failure, etc.).
+- Exception steps describe the failure path and who is notified.
+- Use plain names without "Trigger:" / "Decision:" prefixes.
+
+# BRANCHES (INSIDE blueprint.branches)
+If you need to represent edges explicitly, include:
+{
+  "parentStep": "3",
+  "label": "Yes",
+  "targetStep": "3A",
+  "description": "Amount is above the threshold"
+}
+
+# TASK SCHEMA (INSIDE blueprint.tasks)
+Every system or dependency mentioned needs a task:
+{
+  "title": "Provide Gmail OAuth access",
+  "description": "We need access to invoices@company.com inbox.",
+  "priority": "blocker" | "important" | "optional",
+  "relatedSteps": ["1", "2A"],
+  "systemType": "gmail"
+}
+
+- Gmail/Email → request inbox access.
+- Slack/Teams → request workspace + channel.
+- Accounting/CRM APIs → request credentials.
+- Approvers → request their contact/handle.
+
+# NUMBERING RULES
+- Main flow: 1 → 2 → 3 → 4.
+- Branch from 3: 3A (Yes), 3B (No).
+- Exception from 2: 2E.
+- Nested branch: 3A1, 3A2.
+
+# EXCEPTION & EDGE CASE HANDLING
+When user mentions failures, retries, or approvals:
+1. Add a dedicated Exception or Human step.
+2. Connect it to the originating step.
+3. Describe what happens (alert ops, retry, escalate).
+4. Add tasks for any manual follow-up or credentials needed.
+
+# ITERATIVE EDITS
+When user says "edit step 3A":
+1. Locate the existing step 3A.
+2. Update only the requested fields.
+3. Maintain numbering and connections.
+4. If edits introduce new dependencies, append tasks/branches accordingly.
+
+# REMEMBER
+- You're writing for operators, not engineers.
+- Never ask if they already have tools; assume WRK will build it.
+- Instead ask specifics: "Which inbox receives invoices—Gmail or Outlook?"
+- Output ONLY valid JSON matching the schema above.
+`.trim();
+
+/**
+ * Prompt used when the user wants to edit a specific step.
+ */
+export function getStepEditPrompt(stepNumber: string, currentStep: BlueprintStep | null, userRequest: string): string {
+  return `The user wants to edit step ${stepNumber}.
+
+Current step:
+${JSON.stringify(currentStep ?? {}, null, 2)}
+
+User request: ${userRequest}
+
+Update the step based on the user's request. Maintain the step number and structure.
+If the edit creates new branches or changes the flow, update nextSteps and branches accordingly.
+If new systems are mentioned, add the necessary tasks for access or data.
+
+Output ONLY the updated step in valid JSON format.`;
+}
+
+/**
+ * Formats the user prompt sent to the AI with optional blueprint context.
+ */
+export function formatBlueprintPrompt(userMessage: string, currentBlueprint?: Blueprint | null): string {
+  if (!currentBlueprint || currentBlueprint.steps?.length === 0) {
+    return userMessage;
+  }
+
+  return `${summarizeBlueprintForAI(currentBlueprint)}
+
+USER REQUEST:
+${userMessage}
+
+Remember: Make MINIMAL changes. Preserve all existing structure unless explicitly asked to change it.
+
+Return ONLY valid JSON matching the blueprint format.`;
+}
+
+export function summarizeBlueprintForAI(blueprint: Blueprint): string {
+  if (!blueprint.steps.length) {
+    return "CURRENT BLUEPRINT STATE: (empty)";
+  }
+
+  const lines: string[] = ["CURRENT BLUEPRINT STATE (preserve unless asked to change):", "", "Steps:"];
+  blueprint.steps.forEach((step) => {
+    const connections = step.nextStepIds.length
+      ? `→ connects to ${step.nextStepIds
+          .map((id) => blueprint.steps.find((candidate) => candidate.id === id)?.stepNumber ?? id)
+          .join(", ")}`
+      : "→ (end of flow)";
+    const branchInfo = step.branchLabel ? ` [${step.branchLabel}]` : "";
+    lines.push(`  ${step.stepNumber || "?"}. ${step.name}${branchInfo} ${connections}`);
+  });
+
+  if (blueprint.branches?.length) {
+    lines.push("", "Branches:");
+    blueprint.branches.forEach((branch) => {
+      const parent = blueprint.steps.find((step) => step.id === branch.parentStepId);
+      const target = blueprint.steps.find((step) => step.id === branch.targetStepId);
+      lines.push(`  ${parent?.stepNumber ?? "?"} → ${target?.stepNumber ?? "?"} (${branch.label})`);
+    });
+  }
+
+  return lines.join("\n");
 }
 

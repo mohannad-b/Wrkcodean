@@ -1,15 +1,26 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { and, eq } from "drizzle-orm";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
 import { buildRateLimitKey, ensureRateLimit } from "@/lib/rate-limit";
-import { getAutomationVersionDetail, updateAutomationVersionMetadata } from "@/lib/services/automations";
+import { getAutomationVersionDetail } from "@/lib/services/automations";
 import { logAudit } from "@/lib/audit/log";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
-import type { Blueprint, BlueprintSectionKey } from "@/lib/blueprint/types";
-import { BlueprintSchema } from "@/lib/blueprint/schema";
+import type { Blueprint } from "@/lib/blueprint/types";
+import { BlueprintSchema, parseBlueprint } from "@/lib/blueprint/schema";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
+import { buildBlueprintFromChat, type AITask } from "@/lib/blueprint/ai-builder";
+import { applyStepNumbers } from "@/lib/blueprint/step-numbering";
+import { parseCommand, isDirectCommand } from "@/lib/blueprint/command-parser";
+import { executeCommand } from "@/lib/blueprint/command-executor";
+import { db } from "@/db";
+import { automationVersions, tasks, type Task, type TaskMetadata } from "@/db/schema";
+import { createCopilotMessage } from "@/lib/services/copilot-messages";
+import { determineConversationPhase, generateThinkingSteps } from "@/lib/ai/copilot-orchestrator";
+import { copilotDebug } from "@/lib/ai/copilot-debug";
+import { diffBlueprint } from "@/lib/blueprint/diff";
 
 const DraftRequestSchema = z.object({
   messages: z
@@ -81,46 +92,161 @@ export async function POST(request: Request, { params }: { params: { id: string 
       );
     }
 
-    const contextSummary = buildRequirementsSummary(normalizedMessages, payload.intakeNotes ?? detail.version.intakeNotes);
-    const draft = await generateDraftBlueprint({
-      automationName: detail.automation?.name ?? "Untitled Automation",
-      conversation: normalizedMessages,
-      summary: contextSummary,
-      intakeNotes: payload.intakeNotes ?? detail.version.intakeNotes ?? "",
-      snippets: payload.snippets ?? [],
-    });
+    const contextSummary = buildConversationSummary(normalizedMessages, payload.intakeNotes ?? detail.version.intakeNotes);
+    const currentBlueprint = parseBlueprint(detail.version.blueprintJson) ?? createEmptyBlueprint();
+    const userMessageContent =
+      latestUserMessage?.content ??
+      normalizedMessages.find((message) => message.role === "user")?.content ??
+      "Help me describe this workflow.";
+
+    const directCommand = Boolean(latestUserMessage?.content && isDirectCommand(latestUserMessage.content));
+    let responseMessage = "";
+    let commandExecuted = false;
+    let blueprintWithTasks: Blueprint;
+    let aiTasks: AITask[] = [];
+
+    if (directCommand && latestUserMessage) {
+      commandExecuted = true;
+      const command = parseCommand(latestUserMessage.content);
+      const commandResult = executeCommand(currentBlueprint, command);
+      if (!commandResult.success) {
+        throw new ApiError(400, commandResult.error ?? "Command failed");
+      }
+      blueprintWithTasks = commandResult.blueprint;
+      responseMessage = commandResult.message ? `Done. ${commandResult.message}` : "Done.";
+
+      if (commandResult.auditEvents.length) {
+        await Promise.all(
+          commandResult.auditEvents.map((event) =>
+            logAudit({
+              tenantId: session.tenantId,
+              userId: session.userId,
+              action: event.action,
+              resourceType: "automation_version",
+              resourceId: params.id,
+              metadata: event.metadata,
+            })
+          )
+        );
+      }
+
+      copilotDebug("draft_blueprint.command_executed", {
+        automationVersionId: params.id,
+        command: command.type,
+        message: responseMessage,
+      });
+    } else {
+      const {
+        blueprint: aiGeneratedBlueprint,
+        tasks: generatedTasks,
+        chatResponse,
+        followUpQuestion,
+      } = await buildBlueprintFromChat({
+        userMessage: userMessageContent,
+        currentBlueprint,
+        conversationHistory: normalizedMessages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      });
+
+      const numberedBlueprint = applyStepNumbers(aiGeneratedBlueprint);
+      aiTasks = generatedTasks;
+      const taskAssignments = await syncAutomationTasks({
+        tenantId: session.tenantId,
+        automationVersionId: params.id,
+        aiTasks,
+        blueprint: numberedBlueprint,
+      });
+
+      blueprintWithTasks = {
+        ...numberedBlueprint,
+        steps: numberedBlueprint.steps.map((step) => ({
+          ...step,
+          taskIds: Array.from(new Set(taskAssignments[step.id] ?? step.taskIds ?? [])),
+        })),
+      };
+      const trimmedFollowUp = followUpQuestion?.trim();
+      responseMessage = trimmedFollowUp ? `${chatResponse} ${trimmedFollowUp}`.trim() : chatResponse;
+
+      copilotDebug("draft_blueprint.llm_response", {
+        automationVersionId: params.id,
+        chatResponse,
+        followUpQuestion: trimmedFollowUp,
+        stepCount: blueprintWithTasks.steps.length,
+        taskCount: aiTasks.length,
+      });
+    }
 
     const validatedBlueprint = BlueprintSchema.parse({
-      ...draft,
+      ...blueprintWithTasks,
       status: "Draft",
       updatedAt: new Date().toISOString(),
     });
 
-    await updateAutomationVersionMetadata({
+    const [savedVersion] = await db
+      .update(automationVersions)
+      .set({
+        blueprintJson: validatedBlueprint,
+        updatedAt: new Date(),
+      })
+      .where(eq(automationVersions.id, params.id))
+      .returning();
+
+    if (!savedVersion) {
+      throw new ApiError(500, "Failed to save blueprint.");
+    }
+
+    revalidatePath(`/automations/${detail.automation?.id ?? savedVersion.automationId}`);
+
+    const assistantMessage = await createCopilotMessage({
       tenantId: session.tenantId,
       automationVersionId: params.id,
-      blueprintJson: validatedBlueprint,
+      role: "assistant",
+      content: responseMessage,
+      createdBy: null,
     });
 
-    await logAudit({
-      tenantId: session.tenantId,
-      userId: session.userId,
-      action: "automation.blueprint.drafted",
-      resourceType: "automation_version",
-      resourceId: params.id,
-      metadata: {
-        source: "copilot",
-      },
+    copilotDebug("draft_blueprint.persisted_message", {
+      automationVersionId: params.id,
+      messageId: assistantMessage.id,
+      commandExecuted,
     });
+
+    const augmentedMessages = [...normalizedMessages, { role: "assistant" as const, content: responseMessage }];
+    const conversationPhase = determineConversationPhase(validatedBlueprint, augmentedMessages);
+    const thinkingSteps = generateThinkingSteps(conversationPhase, latestUserMessage?.content, validatedBlueprint);
+
+    if (!commandExecuted) {
+      const diff = diffBlueprint(currentBlueprint, validatedBlueprint);
+      await logAudit({
+        tenantId: session.tenantId,
+        userId: session.userId,
+        action: "automation.blueprint.drafted",
+        resourceType: "automation_version",
+        resourceId: params.id,
+        metadata: {
+          source: "copilot",
+          summary: diff.summary,
+          diff,
+        },
+      });
+    }
 
     return NextResponse.json({
       blueprint: validatedBlueprint,
       completion: getBlueprintCompletionState(validatedBlueprint),
-      prompt: {
-        system: SYSTEM_PROMPT,
-        contextSummary,
-        messageCount: normalizedMessages.length,
-      },
+      prompt: commandExecuted
+        ? null
+        : {
+            system: SYSTEM_PROMPT,
+            contextSummary,
+            messageCount: normalizedMessages.length,
+          },
+      commandExecuted,
+      message: assistantMessage,
+      thinkingSteps,
+      conversationPhase,
     });
   } catch (error) {
     return handleApiError(error);
@@ -162,7 +288,7 @@ function isOffTopic(content: string) {
   return !mentionsAutomation && clearlyOffTopic;
 }
 
-function buildRequirementsSummary(messages: CopilotMessage[], intakeNotes?: string | null) {
+function buildConversationSummary(messages: CopilotMessage[], intakeNotes?: string | null) {
   const summaryParts: string[] = [];
   const userMessages = messages.filter((message) => message.role === "user");
   const clipped = userMessages.slice(-3);
@@ -180,139 +306,150 @@ function buildRequirementsSummary(messages: CopilotMessage[], intakeNotes?: stri
   return summaryParts.join("\n");
 }
 
-type DraftContext = {
-  automationName: string;
-  conversation: CopilotMessage[];
-  summary: string;
-  intakeNotes: string;
-  snippets: string[];
-};
+type TaskAssignmentMap = Record<string, string[]>;
 
-async function generateDraftBlueprint(context: DraftContext): Promise<Blueprint> {
-  // TODO: Replace this deterministic stub with an OpenAI call once providers are wired up.
-  const base = createEmptyBlueprint();
-  const description = derivePrimaryDescription(context);
-  const systems = inferSystems(description);
-  const now = new Date().toISOString();
+async function syncAutomationTasks({
+  tenantId,
+  automationVersionId,
+  aiTasks,
+  blueprint,
+}: {
+  tenantId: string;
+  automationVersionId: string;
+  aiTasks: AITask[];
+  blueprint: Blueprint;
+}): Promise<TaskAssignmentMap> {
+  const assignments: TaskAssignmentMap = {};
+  blueprint.steps.forEach((step) => {
+    if (step.taskIds?.length) {
+      assignments[step.id] = [...step.taskIds];
+    }
+  });
 
-  const enrichedSections = base.sections.map((section) => ({
-    ...section,
-    content: buildSectionCopy(section.key, description, context.intakeNotes, systems, context.summary),
-  }));
-
-  const steps = buildDefaultSteps(description, systems);
-
-  return {
-    ...base,
-    summary: `Automation draft for ${context.automationName}: ${description}`,
-    sections: enrichedSections,
-    steps,
-    updatedAt: now,
-  };
-}
-
-function derivePrimaryDescription(context: DraftContext) {
-  const lastUser = [...context.conversation].reverse().find((message) => message.role === "user");
-  if (lastUser) {
-    return lastUser.content.slice(0, 600);
-  }
-  return context.summary.slice(0, 600) || "Automate the described workflow end-to-end.";
-}
-
-function inferSystems(description: string) {
-  const lower = description.toLowerCase();
-  const systems = new Set<string>();
-
-  if (lower.includes("slack")) systems.add("Slack");
-  if (lower.includes("gmail") || lower.includes("email")) systems.add("Gmail");
-  if (lower.includes("hubspot")) systems.add("HubSpot");
-  if (lower.includes("salesforce")) systems.add("Salesforce");
-  if (lower.includes("xero")) systems.add("Xero");
-  if (lower.includes("zendesk")) systems.add("Zendesk");
-
-  if (systems.size === 0) {
-    systems.add("Primary System");
+  if (aiTasks.length === 0) {
+    return assignments;
   }
 
-  return Array.from(systems);
-}
+  const existingTasks: Task[] = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.tenantId, tenantId), eq(tasks.automationVersionId, automationVersionId)));
 
-function buildSectionCopy(
-  key: BlueprintSectionKey,
-  description: string,
-  intakeNotes: string,
-  systems: string[],
-  summary: string
-) {
-  const intro = `${description}\n\nSystems involved: ${systems.join(", ")}.`;
-  const notes = intakeNotes ? `\n\nAdditional intake context:\n${intakeNotes}` : "";
+  const stepIdByNumber = new Map<string, string>();
+  blueprint.steps.forEach((step) => {
+    if (step.stepNumber) {
+      stepIdByNumber.set(step.stepNumber, step.id);
+    }
+  });
 
-  switch (key) {
-    case "business_requirements":
-      return `${intro}\n\nThe business requires this automation to reduce manual effort and improve SLAs.${notes}`;
-    case "business_objectives":
-      return `Objectives:\n- Increase throughput of the workflow\n- Improve visibility for stakeholders\n- Maintain data consistency${notes}`;
-    case "success_criteria":
-      return `Success criteria:\n- SLA under 24h\n- Human review only on high-risk items\n- Accurate notifications`;
-    case "systems":
-      return `Primary systems and connectors: ${systems.join(", ")}. The automation should integrate via secure credentials and provide audit logging.`;
-    case "data_needs":
-      return `Data inputs include records captured in the workflow description. Ensure fields are validated before execution.${notes}`;
-    case "exceptions":
-      return `Handle exceptions when data is incomplete or downstream systems are unavailable. Escalate to humans if retry attempts fail.`;
-    case "human_touchpoints":
-      return `Human steps occur when approvals or reviews are required. Assign accountability to the owning team and notify via Slack.`;
-    case "flow_complete":
-      return `The flow completes once the downstream system is updated and confirmations are sent to stakeholders.`;
-    default:
-      return summary;
+  for (const aiTask of aiTasks) {
+    const title = aiTask.title?.trim();
+    if (!title) {
+      continue;
+    }
+    const normalizedTitle = title.toLowerCase();
+    const normalizedSystemType = aiTask.systemType?.trim().toLowerCase();
+    const relatedStepNumbers = Array.isArray(aiTask.relatedSteps)
+      ? aiTask.relatedSteps
+          .map((step) => step?.trim())
+          .filter((value): value is string => Boolean(value))
+      : [];
+    const relatedStepIds = relatedStepNumbers
+      .map((stepNumber) => stepIdByNumber.get(stepNumber))
+      .filter((value): value is string => Boolean(value));
+
+    const metadata: TaskMetadata = {
+      systemType: normalizedSystemType,
+      relatedSteps: relatedStepNumbers,
+      isBlocker: mapTaskPriority(aiTask.priority) === "blocker",
+    };
+
+    const match = existingTasks.find((task) => {
+      const taskSystem = task.metadata?.systemType?.toLowerCase();
+      return task.title.toLowerCase() === normalizedTitle && taskSystem === normalizedSystemType;
+    });
+
+    let taskId: string;
+    if (match) {
+      const mergedRelatedSteps = Array.from(
+        new Set([...(match.metadata?.relatedSteps ?? []), ...relatedStepNumbers])
+      );
+      const shouldUpdate =
+        match.description !== (aiTask.description ?? match.description) ||
+        match.priority !== mapTaskPriority(aiTask.priority) ||
+        (match.metadata?.systemType ?? undefined) !== normalizedSystemType ||
+        (match.metadata?.isBlocker ?? false) !== metadata.isBlocker ||
+        mergedRelatedSteps.length !== (match.metadata?.relatedSteps ?? []).length;
+
+      if (shouldUpdate) {
+        await db
+          .update(tasks)
+          .set({
+            description: aiTask.description ?? match.description,
+            priority: mapTaskPriority(aiTask.priority),
+            metadata: {
+              ...match.metadata,
+              systemType: normalizedSystemType,
+              relatedSteps: mergedRelatedSteps,
+              isBlocker: metadata.isBlocker,
+            },
+            updatedAt: new Date(),
+          })
+          .where(eq(tasks.id, match.id));
+
+        match.description = aiTask.description ?? match.description;
+        match.priority = mapTaskPriority(aiTask.priority);
+        match.metadata = {
+          ...match.metadata,
+          systemType: normalizedSystemType,
+          relatedSteps: mergedRelatedSteps,
+          isBlocker: metadata.isBlocker,
+        };
+      }
+      taskId = match.id;
+    } else {
+      const [inserted] = await db
+        .insert(tasks)
+        .values({
+          tenantId,
+          automationVersionId,
+          title,
+          description: aiTask.description ?? "",
+          status: "pending",
+          priority: mapTaskPriority(aiTask.priority),
+          metadata,
+        })
+        .returning();
+
+      if (!inserted) {
+        continue;
+      }
+
+      taskId = inserted.id;
+      existingTasks.push(inserted);
+    }
+
+    relatedStepIds.forEach((stepId) => {
+      if (!assignments[stepId]) {
+        assignments[stepId] = [];
+      }
+      if (!assignments[stepId].includes(taskId)) {
+        assignments[stepId].push(taskId);
+      }
+    });
   }
+
+  return assignments;
 }
 
-function buildDefaultSteps(description: string, systems: string[]): Blueprint["steps"] {
-  const triggerId = randomUUID();
-  const actionOneId = randomUUID();
-  const actionTwoId = randomUUID();
-
-  return [
-    {
-      id: triggerId,
-      type: "Trigger",
-      name: "Capture new request",
-      summary: "Monitor the upstream channel (form, inbox, or webhook) for new submissions.",
-      goalOutcome: "Kick off the automation when a qualifying record is received.",
-      responsibility: "Automated",
-      systemsInvolved: [systems[0]],
-      notifications: ["Slack"],
-      nextStepIds: [actionOneId],
-    },
-    {
-      id: actionOneId,
-      type: "Action",
-      name: "Enrich context",
-      summary: "Extract the required fields, validate data, and enrich with lookup tables.",
-      goalOutcome: "Prepare the record so downstream systems receive clean, structured data.",
-      responsibility: "Automated",
-      systemsInvolved: systems.slice(0, 2),
-      notifications: ["Slack"],
-      timingSla: "Real-time",
-      riskLevel: "Low",
-      notesForOps: description.slice(0, 240),
-      nextStepIds: [actionTwoId],
-    },
-    {
-      id: actionTwoId,
-      type: "Action",
-      name: "Update downstream system",
-      summary: "Push formatted data into the target system and confirm success.",
-      goalOutcome: "Ensure the business system reflects the latest workflow state.",
-      responsibility: "Automated",
-      systemsInvolved: systems,
-      notifications: ["Slack"],
-      timingSla: "Real-time",
-      riskLevel: "Medium",
-      nextStepIds: [],
-    },
-  ];
+function mapTaskPriority(priority?: string): "blocker" | "important" | "optional" {
+  const normalized = priority?.toLowerCase();
+  if (normalized === "blocker" || normalized === "blocking" || normalized === "critical") {
+    return "blocker";
+  }
+  if (normalized === "optional" || normalized === "nice_to_have") {
+    return "optional";
+  }
+  return "important";
 }
 

@@ -29,6 +29,34 @@
       "when": 1764700003000,
       "tag": "rename_automation_status_enum",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "0004",
+      "when": 1764700004000,
+      "tag": "add_tasks_automation_version_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "0005",
+      "when": 1764700005000,
+      "tag": "add_tasks_metadata",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "0006",
+      "when": 1764700006000,
+      "tag": "update_tasks_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "0007",
+      "when": 1764884713816,
+      "tag": "add_audit_logs_resource_index",
+      "breakpoints": true
     }
   ]
 }

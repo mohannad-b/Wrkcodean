@@ -2,6 +2,41 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { StudioChat } from "@/components/automations/StudioChat";
 
+function mockWindowReload() {
+  const originalLocation = window.location;
+  const reloadSpy = vi.fn();
+  const clonedLocation = {
+    assign: originalLocation.assign.bind(originalLocation),
+    replace: originalLocation.replace.bind(originalLocation),
+    reload: reloadSpy,
+    toString: originalLocation.toString.bind(originalLocation),
+    ancestorOrigins: originalLocation.ancestorOrigins,
+    hash: originalLocation.hash,
+    host: originalLocation.host,
+    hostname: originalLocation.hostname,
+    href: originalLocation.href,
+    origin: originalLocation.origin,
+    pathname: originalLocation.pathname,
+    port: originalLocation.port,
+    protocol: originalLocation.protocol,
+    search: originalLocation.search,
+  } as Location;
+
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    value: clonedLocation,
+  });
+
+  return {
+    reloadSpy,
+    restore: () =>
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation,
+      }),
+  };
+}
+
 describe("StudioChat", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -80,18 +115,57 @@ describe("StudioChat", () => {
     );
   });
 
-  it("appends assistant reply after sending a user message", async () => {
+  it("calls the draft blueprint endpoint with conversation history and reloads the page", async () => {
+    const { reloadSpy, restore } = mockWindowReload();
+    const blueprintResponse = {
+      blueprint: {
+        version: 1,
+        status: "Draft",
+        summary: "Auto drafted workflow",
+        sections: [
+          { id: "sec-1", key: "business_requirements", title: "Business Requirements", content: "Need automation" },
+        ],
+        steps: [
+          {
+            id: "step-1",
+            type: "Action",
+            name: "Do something",
+            summary: "Summary",
+            description: "Description",
+            goalOutcome: "Outcome",
+            responsibility: "Automated",
+            systemsInvolved: ["System"],
+            notifications: [],
+            nextStepIds: [],
+            stepNumber: "1",
+            taskIds: [],
+          },
+        ],
+        branches: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      message: {
+        id: "assistant-msg",
+        role: "assistant",
+        content: "Got it.",
+        createdAt: new Date().toISOString(),
+      },
+      thinkingSteps: [
+        {
+          id: "thinking-1",
+          label: "Mapping each step in the automation",
+        },
+      ],
+      conversationPhase: "flow",
+    };
+
     fetchMock.mockImplementation((url, init) => {
       const target = typeof url === "string" ? url : url.url;
       const method = init?.method ?? "GET";
       if (target === "/api/automation-versions/version-abc/messages" && method === "GET") {
         return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              messages: [],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          )
+          new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
         );
       }
       if (target === "/api/automation-versions/version-abc/messages" && method === "POST") {
@@ -109,29 +183,11 @@ describe("StudioChat", () => {
           )
         );
       }
-      if (target === "/api/automation-versions/version-abc/copilot/reply" && method === "POST") {
+      if (target === "/api/automation-versions/version-abc/copilot/draft-blueprint" && method === "POST") {
         return new Promise((resolve) =>
           setTimeout(() => {
-            resolve(
-              new Response(
-                JSON.stringify({
-                  message: {
-                    id: "assistant-msg",
-                    role: "assistant",
-                    content: "Hello! Let’s build this automation.",
-                    createdAt: new Date().toISOString(),
-                  },
-                  blueprintUpdates: {
-                    steps: [],
-                    sections: {},
-                    assumptions: [],
-                  },
-                  conversationPhase: "flow",
-                }),
-                { status: 200, headers: { "Content-Type": "application/json" } }
-              )
-            );
-          }, 100)
+            resolve(new Response(JSON.stringify(blueprintResponse), { status: 200, headers: { "Content-Type": "application/json" } }));
+          }, 50)
         );
       }
       throw new Error(`Unexpected fetch: ${target} ${method}`);
@@ -141,6 +197,7 @@ describe("StudioChat", () => {
       <StudioChat
         automationVersionId="version-abc"
         blueprintEmpty={false}
+        onBlueprintRefresh={() => window.location.reload()}
       />
     );
 
@@ -148,62 +205,24 @@ describe("StudioChat", () => {
     fireEvent.change(input, { target: { value: "Hi Copilot" } });
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 
-    await waitFor(() => expect(screen.getByText(/WrkCoPilot is thinking/i)).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("Digesting what you're trying to accomplish")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("Hello! Let’s build this automation.")).toBeInTheDocument());
-  });
+    await waitFor(() => expect(screen.getByTestId("thinking-bubble")).toBeInTheDocument());
+    await waitFor(() => expect(reloadSpy).toHaveBeenCalled());
 
-  it("does not render a conversation phase banner even when the server provides one", async () => {
-    fetchMock.mockImplementation((url, init) => {
-      const target = typeof url === "string" ? url : url.url;
-      const method = init?.method ?? "GET";
-      if (target === "/api/automation-versions/version-phase/messages" && method === "GET") {
-        return Promise.resolve(
-          new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
-        );
-      }
-      if (target === "/api/automation-versions/version-phase/messages" && method === "POST") {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              message: { id: "user-msg", role: "user", content: "Need help", createdAt: new Date().toISOString() },
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          )
-        );
-      }
-      if (target === "/api/automation-versions/version-phase/copilot/reply" && method === "POST") {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              message: {
-                id: "assistant-msg",
-                role: "assistant",
-                content: "Here's the plan.",
-                createdAt: new Date().toISOString(),
-              },
-              conversationPhase: "details",
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          )
-        );
-      }
-      throw new Error(`Unexpected fetch: ${target} ${method}`);
+    const draftCall = fetchMock.mock.calls.find(
+      ([target]) => typeof target === "string" && target.includes("/copilot/draft-blueprint")
+    );
+    expect(draftCall).toBeDefined();
+    const draftBody = draftCall?.[1]?.body as string;
+    expect(JSON.parse(draftBody)).toEqual({
+      messages: [
+        {
+          role: "user",
+          content: "Hi Copilot",
+        },
+      ],
     });
 
-    render(
-      <StudioChat
-        automationVersionId="version-phase"
-        blueprintEmpty={false}
-      />
-    );
-
-    const input = await screen.findByPlaceholderText("Capture refinements or clarifications...");
-    fireEvent.change(input, { target: { value: "Need help" } });
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
-
-    await waitFor(() => expect(screen.getByText("Here's the plan.")).toBeInTheDocument());
-    expect(screen.queryByText(/Refining edge cases and handoffs/i)).toBeNull();
+    restore();
   });
 
   it("strips blueprint JSON from loaded assistant messages", async () => {
@@ -241,7 +260,57 @@ describe("StudioChat", () => {
     expect(screen.queryByText(/blueprint_updates/i)).toBeNull();
   });
 
-  it("invokes onBlueprintUpdates when AI returns updates", async () => {
+  it("invokes onBlueprintUpdates with the persisted blueprint data", async () => {
+    const { reloadSpy, restore } = mockWindowReload();
+    const blueprintResponse = {
+      blueprint: {
+        version: 1,
+        status: "Draft",
+        summary: "AI generated summary",
+        sections: [
+          {
+            id: "sec-1",
+            key: "business_requirements",
+            title: "Business Requirements",
+            content: "Need automation",
+          },
+        ],
+        steps: [
+          {
+            id: "step_ai",
+            type: "Action",
+            name: "AI Suggested Step",
+            summary: "Step summary",
+            description: "Step description",
+            goalOutcome: "Deliver result",
+            responsibility: "Automated",
+            systemsInvolved: ["System"],
+            notifications: [],
+            notesExceptions: "",
+            nextStepIds: [],
+            stepNumber: "1",
+            taskIds: [],
+          },
+        ],
+        branches: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      message: {
+        id: "assistant-msg",
+        role: "assistant",
+        content: "Done.",
+        createdAt: new Date().toISOString(),
+      },
+      thinkingSteps: [
+        {
+          id: "thinking-1",
+          label: "Mapping each step in the automation",
+        },
+      ],
+      conversationPhase: "flow",
+    };
+
     fetchMock.mockImplementation((url, init) => {
       const target = typeof url === "string" ? url : url.url;
       const method = init?.method ?? "GET";
@@ -260,22 +329,9 @@ describe("StudioChat", () => {
           )
         );
       }
-      if (target === "/api/automation-versions/version-abc/copilot/reply" && method === "POST") {
+      if (target === "/api/automation-versions/version-abc/copilot/draft-blueprint" && method === "POST") {
         return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              message: {
-                id: "assistant-msg",
-                role: "assistant",
-                content: "Here is a summary.",
-                createdAt: new Date().toISOString(),
-              },
-              blueprintUpdates: {
-                steps: [{ id: "step_ai", title: "AI Suggested" }],
-              },
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          )
+          new Response(JSON.stringify(blueprintResponse), { status: 200, headers: { "Content-Type": "application/json" } })
         );
       }
       throw new Error(`Unexpected fetch: ${target} ${method}`);
@@ -288,6 +344,7 @@ describe("StudioChat", () => {
         automationVersionId="version-abc"
         blueprintEmpty={false}
         onBlueprintUpdates={onBlueprintUpdates}
+        onBlueprintRefresh={() => window.location.reload()}
       />
     );
 
@@ -295,74 +352,57 @@ describe("StudioChat", () => {
     fireEvent.change(input, { target: { value: "Hi Copilot" } });
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 
-    await waitFor(() => expect(onBlueprintUpdates).toHaveBeenCalledWith({ steps: [{ id: "step_ai", title: "AI Suggested" }] }));
-  });
-
-  it("keeps the lightweight thinking bubble even when server sends contextual labels", async () => {
-    fetchMock.mockImplementation((url, init) => {
-      const target = typeof url === "string" ? url : url.url;
-      const method = init?.method ?? "GET";
-      if (target === "/api/automation-versions/version-ctx/messages" && method === "GET") {
-        return Promise.resolve(
-          new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
-        );
-      }
-      if (target === "/api/automation-versions/version-ctx/messages" && method === "POST") {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              message: {
-                id: "user-msg",
-                role: "user",
-                content: "Need to scrape a booking platform",
-                createdAt: new Date().toISOString(),
-              },
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          )
-        );
-      }
-      if (target === "/api/automation-versions/version-ctx/copilot/reply" && method === "POST") {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              message: {
-                id: "assistant-msg",
-                role: "assistant",
-                content: "Here is a summary.",
-                createdAt: new Date().toISOString(),
-              },
-              thinkingSteps: [
-                { id: "flow_requirements", label: "Mapped scraping flow and requirements for booking-platform pricing" },
-                { id: "objectives_success", label: "Captured lead gen objectives" },
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          )
-        );
-      }
-      throw new Error(`Unexpected fetch: ${target} ${method}`);
-    });
-
-    render(
-      <StudioChat
-        automationVersionId="version-ctx"
-        blueprintEmpty={false}
-      />
-    );
-
-    const input = await screen.findByPlaceholderText("Capture refinements or clarifications...");
-    fireEvent.change(input, { target: { value: "Need to scrape a booking platform" } });
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
-
-    await waitFor(() => expect(screen.getByText("Digesting what you're trying to accomplish")).toBeInTheDocument());
     await waitFor(() =>
-      expect(screen.getByText("Mapped scraping flow and requirements for booking-platform pricing")).toBeInTheDocument()
+      expect(onBlueprintUpdates).toHaveBeenCalledWith({
+        summary: "AI generated summary",
+        steps: [
+          {
+            id: "step_ai",
+            title: "AI Suggested Step",
+            type: "Action",
+            summary: "Step summary",
+            goal: "Deliver result",
+            systemsInvolved: ["System"],
+            dependsOnIds: [],
+          },
+        ],
+        sections: {
+          business_requirements: "Need automation",
+        },
+      })
     );
-    await waitFor(() => expect(screen.getByText("Captured lead gen objectives")).toBeInTheDocument());
+
+    restore();
   });
 
-  it("shows thinking bubble before assistant reply renders", async () => {
+  it("shows the default thinking steps while the draft blueprint request is in flight", async () => {
+    const { reloadSpy, restore } = mockWindowReload();
+    const blueprintResponse = {
+      blueprint: {
+        version: 1,
+        status: "Draft",
+        summary: "Summary",
+        sections: [],
+        steps: [],
+        branches: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      message: {
+        id: "assistant-msg",
+        role: "assistant",
+        content: "Noted.",
+        createdAt: new Date().toISOString(),
+      },
+      thinkingSteps: [
+        {
+          id: "thinking-1",
+          label: "Mapping each step in the automation",
+        },
+      ],
+      conversationPhase: "flow",
+    };
+
     fetchMock.mockImplementation((url, init) => {
       const target = typeof url === "string" ? url : url.url;
       const method = init?.method ?? "GET";
@@ -381,22 +421,14 @@ describe("StudioChat", () => {
           )
         );
       }
-      if (target === "/api/automation-versions/version-thinking/copilot/reply" && method === "POST") {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              message: {
-                id: "assistant-msg",
-                role: "assistant",
-                content: "Final reply for you.",
-                createdAt: new Date().toISOString(),
-              },
-              thinkingSteps: [
-                { id: "ts-1", label: "Analyzing your request for context" },
-                { id: "ts-2", label: "Connecting it to the right systems" },
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
+      if (target === "/api/automation-versions/version-thinking/copilot/draft-blueprint" && method === "POST") {
+        return new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve(
+                new Response(JSON.stringify(blueprintResponse), { status: 200, headers: { "Content-Type": "application/json" } })
+              ),
+            100
           )
         );
       }
@@ -407,69 +439,7 @@ describe("StudioChat", () => {
       <StudioChat
         automationVersionId="version-thinking"
         blueprintEmpty={false}
-      />
-    );
-
-    const input = await screen.findByPlaceholderText("Capture refinements or clarifications...");
-    fireEvent.change(input, { target: { value: "Need help" } });
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
-
-    await waitFor(() => expect(screen.getByTestId("thinking-bubble")).toBeInTheDocument());
-    const bubble = screen.getByTestId("thinking-bubble");
-    const bubbleBody = bubble.querySelector("div.p-4");
-    expect(screen.getAllByTestId("thinking-bubble")).toHaveLength(1);
-    await waitFor(() => expect(screen.getByText(/WrkCoPilot is thinking/i)).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("Analyzing your request for context")).toBeInTheDocument());
-    expect(screen.queryByText("Final reply for you.")).toBeNull();
-    expect(bubbleBody).not.toBeNull();
-    expect(bubbleBody).toHaveClass("bg-white");
-
-    await waitFor(() => expect(screen.getByText("Final reply for you.")).toBeInTheDocument());
-    await waitFor(() => expect(screen.queryByTestId("thinking-bubble")).toBeNull());
-  });
-
-  it("shows default bullets until server thinking steps arrive", async () => {
-    fetchMock.mockImplementation((url, init) => {
-      const target = typeof url === "string" ? url : url.url;
-      const method = init?.method ?? "GET";
-      if (target === "/api/automation-versions/version-default-thinking/messages" && method === "GET") {
-        return Promise.resolve(
-          new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
-        );
-      }
-      if (target === "/api/automation-versions/version-default-thinking/messages" && method === "POST") {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              message: { id: "user-msg", role: "user", content: "Need help", createdAt: new Date().toISOString() },
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          )
-        );
-      }
-      if (target === "/api/automation-versions/version-default-thinking/copilot/reply" && method === "POST") {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              message: {
-                id: "assistant-msg",
-                role: "assistant",
-                content: "Here you go.",
-                createdAt: new Date().toISOString(),
-              },
-              thinkingSteps: [],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          )
-        );
-      }
-      throw new Error(`Unexpected fetch: ${target} ${method}`);
-    });
-
-    render(
-      <StudioChat
-        automationVersionId="version-default-thinking"
-        blueprintEmpty={false}
+        onBlueprintRefresh={() => window.location.reload()}
       />
     );
 
@@ -479,11 +449,9 @@ describe("StudioChat", () => {
 
     await waitFor(() => expect(screen.getByTestId("thinking-bubble")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText("Digesting what you're trying to accomplish")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("Mapping how the systems should connect")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("Drafting the next blueprint updates")).toBeInTheDocument());
+    await waitFor(() => expect(reloadSpy).toHaveBeenCalled());
 
-    await waitFor(() => expect(screen.getByText("Here you go.")).toBeInTheDocument());
-    await waitFor(() => expect(screen.queryByTestId("thinking-bubble")).toBeNull());
+    restore();
   });
 });
 

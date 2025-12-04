@@ -38,7 +38,10 @@ describe("PATCH /api/admin/automation-versions/[id]/status", () => {
       automation: null,
       latestQuote: null,
     });
-    updateVersionStatusMock.mockResolvedValue({ id: "ver-1", status: "Live", updatedAt: new Date().toISOString() });
+    updateVersionStatusMock.mockResolvedValue({
+      version: { id: "ver-1", status: "Live", updatedAt: new Date().toISOString() },
+      previousStatus: "BuildInProgress",
+    });
 
     const { PATCH } = await import("@/app/api/admin/automation-versions/[id]/status/route");
     const response = await PATCH(
@@ -59,7 +62,7 @@ describe("PATCH /api/admin/automation-versions/[id]/status", () => {
     );
     expect(logAuditMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: "automation_mark_live",
+        action: "automation.version.status.changed",
         resourceId: "ver-1",
       })
     );

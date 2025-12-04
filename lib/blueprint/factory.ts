@@ -21,6 +21,7 @@ export function createEmptyBlueprint(): Blueprint {
       content: "",
     })),
     steps: [],
+    branches: [],
     createdAt: timestamp,
     updatedAt: timestamp,
   };

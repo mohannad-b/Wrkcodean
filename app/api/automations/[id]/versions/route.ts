@@ -45,10 +45,14 @@ export async function POST(request: Request, { params }: RouteParams) {
     await logAudit({
       tenantId: session.tenantId,
       userId: session.userId,
-      action: "automation.version.create",
+      action: "automation.version.created",
       resourceType: "automation_version",
       resourceId: version.id,
-      metadata: { automationId: params.id },
+      metadata: {
+        automationId: params.id,
+        versionLabel: version.versionLabel,
+        summary: [`Created version ${version.versionLabel}`],
+      },
     });
 
     return NextResponse.json({

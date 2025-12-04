@@ -26,7 +26,7 @@ const aiJobStatusEnum = pgEnum("ai_job_status", ["pending", "processing", "succe
 const messageTypeEnum = pgEnum("message_type", ["client", "ops"]);
 const copilotMessageRoleEnum = pgEnum("copilot_message_role", ["user", "assistant", "system"]);
 const taskStatusEnum = pgEnum("task_status", ["pending", "in_progress", "complete"]);
-const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high", "critical"]);
+const taskPriorityEnum = pgEnum("task_priority", ["blocker", "important", "optional"]);
 const notificationPreferenceEnum = pgEnum("notification_preference", ["all", "mentions", "none"]);
 
 export const tenants = pgTable(
@@ -307,6 +307,12 @@ export const messages = pgTable(
   })
 );
 
+export type TaskMetadata = {
+  systemType?: string;
+  relatedSteps?: string[];
+  isBlocker?: boolean;
+};
+
 export const tasks = pgTable(
   "tasks",
   {
@@ -315,18 +321,24 @@ export const tasks = pgTable(
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
     projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    automationVersionId: uuid("automation_version_id").references(() => automationVersions.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     description: text("description"),
     status: taskStatusEnum("status").notNull().default("pending"),
-    priority: taskPriorityEnum("priority").default("medium"),
+    priority: taskPriorityEnum("priority").default("important"),
     assigneeId: uuid("assignee_id").references(() => users.id, { onDelete: "set null" }),
     dueDate: timestamp("due_date", { withTimezone: true }),
+    metadata: jsonb("metadata")
+      .$type<TaskMetadata>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     tenantIdx: index("tasks_tenant_idx").on(table.tenantId),
     projectIdx: index("tasks_project_idx").on(table.projectId),
+    versionIdx: index("tasks_version_idx").on(table.automationVersionId),
   })
 );
 

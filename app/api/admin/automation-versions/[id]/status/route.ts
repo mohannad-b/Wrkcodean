@@ -44,7 +44,7 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
 
     const previousStatus = fromDbAutomationStatus(detail.version.status);
 
-    const updated = await updateAutomationVersionStatus({
+    const { version: updated, previousStatus: persistedStatus } = await updateAutomationVersionStatus({
       tenantId: session.tenantId,
       automationVersionId: params.id,
       nextStatus,
@@ -63,11 +63,12 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
     await logAudit({
       tenantId: session.tenantId,
       userId: session.userId,
-      action: "automation_mark_live",
+      action: "automation.version.status.changed",
       resourceType: "automation_version",
       resourceId: params.id,
       metadata: {
-        status: { from: previousStatus, to: "Live" },
+        from: persistedStatus ?? previousStatus,
+        to: nextStatus,
         projectId: detail.project?.id ?? null,
       },
     });

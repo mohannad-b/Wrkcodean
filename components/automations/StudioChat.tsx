@@ -8,6 +8,7 @@ import { currentUser } from "@/lib/mock-automations";
 import { motion, AnimatePresence } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import type { BlueprintUpdates } from "@/lib/blueprint/ai-updates";
+import type { Blueprint } from "@/lib/blueprint/types";
 import type { CopilotThinkingStep } from "@/types/copilot-thinking";
 
 type ChatRole = "user" | "assistant" | "system";
@@ -21,14 +22,13 @@ export interface CopilotMessage {
   transient?: boolean;
 }
 
-type ConversationPhase = "discovery" | "flow" | "details" | "validation";
-
 interface StudioChatProps {
   automationVersionId: string | null;
   blueprintEmpty: boolean;
   disabled?: boolean;
   onConversationChange?: (messages: CopilotMessage[]) => void;
   onBlueprintUpdates?: (updates: BlueprintUpdates) => void;
+  onBlueprintRefresh?: () => Promise<void> | void;
 }
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
@@ -47,17 +47,7 @@ type ApiCopilotMessage = {
   createdAt: string;
 };
 
-type CopilotReplyResponse = {
-  message: ApiCopilotMessage;
-  blueprintUpdates?: BlueprintUpdates | null;
-  thinkingSteps?: CopilotThinkingStep[] | null;
-  conversationPhase?: ConversationPhase;
-};
-
-const THINKING_BUBBLE_DISPLAY_MS = process.env.NODE_ENV === "test" ? 600 : 950;
-const MIN_THINKING_VISIBLE_MS = 250;
 const THINKING_STEP_INTERVAL_MS = process.env.NODE_ENV === "test" ? 150 : 600;
-type TimeoutHandle = number;
 const DEFAULT_USER_FACING_THINKING_STEPS: CopilotThinkingStep[] = [
   { id: "thinking-default-1", label: "Digesting what you're trying to accomplish" },
   { id: "thinking-default-2", label: "Mapping how the systems should connect" },
@@ -80,6 +70,7 @@ export function StudioChat({
   disabled = false,
   onConversationChange,
   onBlueprintUpdates,
+  onBlueprintRefresh,
 }: StudioChatProps) {
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
   const [input, setInput] = useState("");
@@ -93,10 +84,8 @@ export function StudioChat({
   const [thinkingSteps, setThinkingSteps] = useState<CopilotThinkingStep[]>([]);
   const [showThinkingBubble, setShowThinkingBubble] = useState(false);
   const [currentThinkingIndex, setCurrentThinkingIndex] = useState(0);
-  const [thinkingStartTime, setThinkingStartTime] = useState<number | null>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const prevBlueprintEmptyRef = useRef<boolean>(blueprintEmpty);
-  const thinkingBubbleTimeoutRef = useRef<TimeoutHandle | null>(null);
 
   const dropTransientMessages = useCallback(
     (list: CopilotMessage[]) => list.filter((message) => !message.transient),
@@ -181,15 +170,6 @@ export function StudioChat({
     setCurrentThinkingIndex(0);
   }, [automationVersionId]);
 
-  useEffect(() => {
-    return () => {
-      if (thinkingBubbleTimeoutRef.current !== null) {
-        window.clearTimeout(thinkingBubbleTimeoutRef.current);
-        thinkingBubbleTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
 useEffect(() => {
   if (!showThinkingBubble || thinkingSteps.length === 0) {
     setCurrentThinkingIndex(0);
@@ -226,82 +206,6 @@ useEffect(() => {
   );
   const activeThinkingIndex = visibleThinkingSteps.length > 0 ? visibleThinkingSteps.length - 1 : -1;
 
-  const requestAssistantReply = useCallback(async () => {
-    if (!automationVersionId) {
-      return;
-    }
-    setIsAwaitingReply(true);
-    setAssistantError(null);
-    setShowThinkingBubble(true);
-    setThinkingSteps(DEFAULT_USER_FACING_THINKING_STEPS);
-    setCurrentThinkingIndex(0);
-    setThinkingStartTime(Date.now());
-    try {
-      const response = await fetch(`/api/automation-versions/${automationVersionId}/copilot/reply`, {
-        method: "POST",
-      });
-      if (!response.ok) {
-        throw new Error("Failed to fetch assistant reply");
-      }
-      const data: CopilotReplyResponse = await response.json();
-      if (data.blueprintUpdates && onBlueprintUpdates) {
-        onBlueprintUpdates(data.blueprintUpdates);
-      }
-      const assistantMessage = mapApiMessage(data.message);
-      const incomingThinkingSteps =
-        data.thinkingSteps && data.thinkingSteps.length > 0 ? data.thinkingSteps : DEFAULT_USER_FACING_THINKING_STEPS;
-      setThinkingSteps(incomingThinkingSteps);
-      setCurrentThinkingIndex(0);
-      const shouldShowBubble = incomingThinkingSteps.length > 0;
-      const minimumVisibleDelay = (() => {
-        if (!thinkingStartTime) return 0;
-        const elapsed = Date.now() - thinkingStartTime;
-        return Math.max(0, MIN_THINKING_VISIBLE_MS - elapsed);
-      })();
-      if (shouldShowBubble) {
-        setMessages((prev) => dropTransientMessages(prev));
-        if (thinkingBubbleTimeoutRef.current) {
-          window.clearTimeout(thinkingBubbleTimeoutRef.current);
-        }
-        thinkingBubbleTimeoutRef.current = window.setTimeout(() => {
-          setMessages((prev) => {
-            const trimmed = dropTransientMessages(prev);
-            const next = assistantMessage ? [...trimmed, assistantMessage] : trimmed;
-            return next.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-          });
-          setThinkingSteps([]);
-          setShowThinkingBubble(false);
-          setCurrentThinkingIndex(0);
-          setIsAwaitingReply(false);
-          setThinkingStartTime(null);
-        }, THINKING_BUBBLE_DISPLAY_MS + minimumVisibleDelay);
-      } else {
-        setTimeout(() => {
-          setMessages((prev) => {
-            const trimmed = dropTransientMessages(prev);
-            const next = assistantMessage ? [...trimmed, assistantMessage] : trimmed;
-            return next.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-          });
-          setThinkingSteps([]);
-          setShowThinkingBubble(false);
-          setCurrentThinkingIndex(0);
-          setIsAwaitingReply(false);
-          setThinkingStartTime(null);
-        }, minimumVisibleDelay);
-      }
-    } catch {
-      setAssistantError("Copilot reply failed. Try again.");
-      if (thinkingBubbleTimeoutRef.current) {
-        window.clearTimeout(thinkingBubbleTimeoutRef.current);
-      }
-      setThinkingSteps([]);
-      setShowThinkingBubble(false);
-      setCurrentThinkingIndex(0);
-      setIsAwaitingReply(false);
-      setThinkingStartTime(null);
-    }
-  }, [automationVersionId, dropTransientMessages, mapApiMessage, onBlueprintUpdates, THINKING_BUBBLE_DISPLAY_MS]);
-
   const handleSend = useCallback(async () => {
     const content = input.trim();
     if (!content) return;
@@ -324,32 +228,125 @@ useEffect(() => {
     setMessages((prev) => [...dropTransientMessages(prev), optimisticMessage]);
     setInput("");
     setLocalError(null);
+    setAssistantError(null);
     setIsSending(true);
 
+    let conversationAfterUser: CopilotMessage[] | null = null;
+
     try {
-      const response = await fetch(`/api/automation-versions/${automationVersionId}/messages`, {
+      const messageResponse = await fetch(`/api/automation-versions/${automationVersionId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content, role: "user" }),
       });
-      if (!response.ok) {
+      if (!messageResponse.ok) {
         throw new Error("Failed to send message");
       }
-      const data: { message: ApiCopilotMessage } = await response.json();
-      setMessages((prev) => {
-        const withoutOptimistic = dropTransientMessages(prev).filter((msg) => msg.id !== optimisticMessage.id);
-        return [...withoutOptimistic, mapApiMessage(data.message)].sort(
-          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-        );
-      });
-      void requestAssistantReply();
-    } catch {
-      setMessages((prev) => prev.filter((msg) => msg.id !== optimisticMessage.id));
-      setLocalError("Failed to send message. Try again.");
+
+      const data: { message: ApiCopilotMessage } = await messageResponse.json();
+      const serverMessage = mapApiMessage(data.message);
+      conversationAfterUser = [...durableMessages, serverMessage].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      setMessages(conversationAfterUser);
+
+      const draftMessages = conversationAfterUser
+        .filter(
+          (message) =>
+            (message.role === "user" || message.role === "assistant") && message.content.trim().length > 0
+        )
+        .map((message) => ({
+          role: message.role,
+          content: message.content,
+        }));
+
+      if (draftMessages.length === 0) {
+        setAssistantError("Describe the workflow so Copilot can draft a blueprint.");
+        setShowThinkingBubble(false);
+        setThinkingSteps([]);
+        setCurrentThinkingIndex(0);
+        setIsAwaitingReply(false);
+        return;
+      }
+
+      setIsAwaitingReply(true);
+      setShowThinkingBubble(true);
+      setThinkingSteps(DEFAULT_USER_FACING_THINKING_STEPS);
+      setCurrentThinkingIndex(0);
+
+      const draftResponse = await fetch(
+        `/api/automation-versions/${automationVersionId}/copilot/draft-blueprint`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: draftMessages }),
+        }
+      );
+
+      if (!draftResponse.ok) {
+        throw new Error("Failed to update blueprint");
+      }
+
+      const draftData: {
+        blueprint?: Blueprint | null;
+        message?: ApiCopilotMessage;
+        thinkingSteps?: CopilotThinkingStep[];
+      } = await draftResponse.json();
+
+      if (draftData.message) {
+        const assistantMessage = mapApiMessage(draftData.message);
+        setMessages((prev) => {
+          const durable = dropTransientMessages(prev);
+          const merged = [...durable, assistantMessage].sort(
+            (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+          );
+          return merged;
+        });
+      }
+
+      if (draftData.blueprint && onBlueprintUpdates) {
+        onBlueprintUpdates(mapBlueprintToUpdates(draftData.blueprint));
+      }
+
+      if (draftData.thinkingSteps && draftData.thinkingSteps.length > 0) {
+        setThinkingSteps(draftData.thinkingSteps);
+      } else {
+        setThinkingSteps([]);
+      }
+
+      setShowThinkingBubble(false);
+      setCurrentThinkingIndex(0);
+      setIsAwaitingReply(false);
+      setAssistantError(null);
+
+      await onBlueprintRefresh?.();
+    } catch (error) {
+      console.error("[STUDIO-CHAT] Failed to process message:", error);
+      if (!conversationAfterUser) {
+        setMessages((prev) => prev.filter((msg) => msg.id !== optimisticMessage.id));
+        setLocalError("Failed to send message. Try again.");
+      } else {
+        setAssistantError("Failed to update blueprint. Try again.");
+      }
+      setThinkingSteps([]);
+      setShowThinkingBubble(false);
+      setCurrentThinkingIndex(0);
+      setIsAwaitingReply(false);
     } finally {
       setIsSending(false);
     }
-  }, [automationVersionId, disabled, dropTransientMessages, input, isAwaitingReply, isSending, mapApiMessage, requestAssistantReply]);
+  }, [
+    automationVersionId,
+    disabled,
+    dropTransientMessages,
+    durableMessages,
+    input,
+    isAwaitingReply,
+    isSending,
+    mapApiMessage,
+    onBlueprintRefresh,
+    onBlueprintUpdates,
+  ]);
 
 
   return (
@@ -551,5 +548,34 @@ function stripBlueprintBlocks(content: string): string {
     .replace(BLUEPRINT_BLOCK_REGEX, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function mapBlueprintToUpdates(blueprint: Blueprint): BlueprintUpdates {
+  const sections: NonNullable<BlueprintUpdates["sections"]> = {};
+  blueprint.sections.forEach((section) => {
+    const content = section.content?.trim();
+    if (content) {
+      sections[section.key] = content;
+    }
+  });
+
+  const updates: BlueprintUpdates = {
+    summary: blueprint.summary,
+    steps: blueprint.steps.map((step) => ({
+      id: step.id,
+      title: step.name,
+      type: step.type,
+      summary: step.summary,
+      goal: step.goalOutcome,
+      systemsInvolved: step.systemsInvolved,
+      dependsOnIds: step.nextStepIds,
+    })),
+  };
+
+  if (Object.keys(sections).length > 0) {
+    updates.sections = sections;
+  }
+
+  return updates;
 }
 

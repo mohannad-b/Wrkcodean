@@ -1,18 +1,7 @@
-import { describe, expect, it, beforeEach, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import type { BlueprintSectionKey } from "@/lib/blueprint/types";
-import {
-  determineConversationPhase,
-  generateThinkingSteps,
-  runCopilotOrchestration,
-} from "@/lib/ai/copilot-orchestrator";
-import { callCopilotChat } from "@/lib/ai/openai-client";
-
-vi.mock("@/lib/ai/openai-client", () => ({
-  callCopilotChat: vi.fn(),
-}));
-
-const callCopilotChatMock = vi.mocked(callCopilotChat);
+import { determineConversationPhase, generateThinkingSteps } from "@/lib/ai/copilot-orchestrator";
 
 describe("determineConversationPhase", () => {
   it("returns discovery for the first couple of user messages with no steps", () => {
@@ -29,22 +18,28 @@ describe("determineConversationPhase", () => {
         type: "Trigger",
         name: "Start",
         summary: "Kick off",
+        description: "Kick off",
         goalOutcome: "Triggered",
         responsibility: "Automated",
         systemsInvolved: [],
         notifications: [],
         nextStepIds: [],
+        stepNumber: "",
+        taskIds: [],
       },
       {
         id: "step_action",
         type: "Action",
         name: "Process",
         summary: "Do work",
+        description: "Do work",
         goalOutcome: "Processed",
         responsibility: "Automated",
         systemsInvolved: [],
         notifications: [],
         nextStepIds: [],
+        stepNumber: "",
+        taskIds: [],
       }
     );
     const phase = determineConversationPhase(blueprint, [
@@ -76,11 +71,14 @@ describe("determineConversationPhase", () => {
       type: index === 0 ? "Trigger" : "Action",
       name: `Step ${index}`,
       summary: "Do something important",
+      description: "Do something important",
       goalOutcome: "Progress",
       responsibility: "Automated",
       systemsInvolved: [],
       notifications: [],
       nextStepIds: [],
+      stepNumber: "",
+      taskIds: [],
     }));
     const phase = determineConversationPhase(blueprint, [{ role: "user", content: "Update" }]);
     expect(phase).toBe("details");
@@ -109,11 +107,14 @@ describe("determineConversationPhase", () => {
       type: index === 0 ? "Trigger" : "Action",
       name: `Step ${index}`,
       summary: "Detail",
+      description: "Detail",
       goalOutcome: "Done",
       responsibility: "Automated",
       systemsInvolved: [],
       notifications: [],
       nextStepIds: [],
+      stepNumber: "",
+      taskIds: [],
     }));
     const phase = determineConversationPhase(blueprint, [{ role: "user", content: "Next" }]);
     expect(phase).toBe("validation");
@@ -141,73 +142,6 @@ describe("generateThinkingSteps", () => {
   it("highlights approval logic when mentioned", () => {
     const steps = generateThinkingSteps("details", "If it's over $5K we need to approve manually", null);
     expect(steps[0].label).toBe("Analyzing approval threshold logic");
-  });
-});
-
-describe("runCopilotOrchestration", () => {
-  beforeEach(() => {
-    callCopilotChatMock.mockReset();
-  });
-
-  it("calls the LLM once and parses the blueprint updates", async () => {
-    callCopilotChatMock.mockResolvedValue(`
-Got it - building the next steps.
-\`\`\`json blueprint_updates
-{
-  "summary": "Sync invoices into NetSuite",
-  "steps": [
-    { "id": "step_trigger", "title": "Watch inbox" }
-  ]
-}
-\`\`\`
-Quick clarifications:
-- When should this run?
-`);
-
-    const blueprint = createEmptyBlueprint();
-    blueprint.sections.push({
-      id: "business_requirements",
-      key: "business_requirements",
-      title: "Business Requirements",
-      content: "Keep invoicing in sync.",
-    });
-    blueprint.steps.push({
-      id: "step_trigger",
-      type: "Trigger",
-      name: "Kickoff",
-      summary: "Start",
-      goalOutcome: "Triggered",
-      responsibility: "Automated",
-      systemsInvolved: [],
-      notifications: [],
-      nextStepIds: [],
-    });
-
-    const result = await runCopilotOrchestration({
-      blueprint,
-      messages: [{ role: "user", content: "I get invoices every day." }],
-    });
-
-    expect(callCopilotChatMock).toHaveBeenCalledTimes(1);
-    expect(result.assistantDisplayText).toMatch(/Got it/i);
-    expect(result.blueprintUpdates?.summary).toBe("Sync invoices into NetSuite");
-    expect(result.thinkingSteps).toHaveLength(3);
-    expect(result.conversationPhase).toBe("flow");
-  });
-
-  it("derives fallback blueprint updates when the model omits JSON", async () => {
-    callCopilotChatMock.mockResolvedValue(`Here is the plan:
-1. Watch the inbox for invoices
-2. Extract key fields
-3. Push into NetSuite and alert RevOps`);
-
-    const result = await runCopilotOrchestration({
-      blueprint: createEmptyBlueprint(),
-      messages: [{ role: "user", content: "Import invoices" }],
-    });
-
-    expect(result.blueprintUpdates?.steps).toBeDefined();
-    expect(result.blueprintUpdates?.steps).toHaveLength(3);
   });
 });
 

@@ -151,12 +151,19 @@ function normalizeIncomingStep(
       : ["System TBD"];
 
   const stepType = normalizeStepType(incoming.type, fallback?.type);
+  const description =
+    incoming.summary?.trim() ??
+    (incoming as { description?: string }).description?.trim() ??
+    fallback?.description ??
+    fallback?.summary ??
+    "Description pending";
 
   return {
     id,
     name: incoming.title ?? (incoming as { name?: string }).name ?? fallback?.name ?? id,
     type: stepType,
     summary: incoming.summary?.trim() || fallback?.summary || "Summary pending",
+    description,
     goalOutcome: resolveGoalOutcome(incoming.goal, incoming.outputs, fallback?.goalOutcome),
     responsibility:
       stepType === "Human" ? "HumanReview" : fallback?.responsibility ?? "Automated",
@@ -168,6 +175,12 @@ function normalizeIncomingStep(
     notesForOps: fallback?.notesForOps,
     exceptionIds: fallback?.exceptionIds ?? [],
     nextStepIds: [],
+    stepNumber: fallback?.stepNumber ?? "",
+    branchType: fallback?.branchType,
+    branchCondition: fallback?.branchCondition,
+    branchLabel: fallback?.branchLabel,
+    parentStepId: fallback?.parentStepId,
+    taskIds: fallback?.taskIds ?? [],
   };
 }
 
@@ -197,7 +210,10 @@ function normalizeStepType(type?: string | null, fallback?: BlueprintStepType): 
     return "Trigger";
   }
   if (normalized.includes("logic") || normalized.includes("decision") || normalized.includes("branch")) {
-    return "Logic";
+    return "Decision";
+  }
+  if (normalized.includes("exception") || normalized.includes("error") || normalized.includes("fail")) {
+    return "Exception";
   }
   if (normalized.includes("human") || normalized.includes("review") || normalized.includes("approval")) {
     return "Human";
@@ -205,7 +221,7 @@ function normalizeStepType(type?: string | null, fallback?: BlueprintStepType): 
   if (normalized.includes("action") || normalized.includes("task") || normalized.includes("step")) {
     return "Action";
   }
-  if ((["Trigger", "Action", "Logic", "Human"] as BlueprintStepType[]).includes(type as BlueprintStepType)) {
+  if ((["Trigger", "Action", "Decision", "Exception", "Human"] as BlueprintStepType[]).includes(type as BlueprintStepType)) {
     return type as BlueprintStepType;
   }
   return fallback ?? "Action";

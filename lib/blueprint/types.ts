@@ -31,7 +31,7 @@ export const BLUEPRINT_SECTION_DEFINITIONS: { key: BlueprintSectionKey; title: s
 
 export type BlueprintStatus = "Draft" | "ReadyForQuote" | "ReadyToBuild";
 
-export type BlueprintStepType = "Trigger" | "Action" | "Logic" | "Human";
+export type BlueprintStepType = "Trigger" | "Action" | "Decision" | "Exception" | "Human";
 
 export type BlueprintResponsibility = "Automated" | "HumanReview" | "Approval";
 
@@ -49,6 +49,7 @@ export interface BlueprintStep {
   type: BlueprintStepType;
   name: string;
   summary: string;
+  description: string;
   goalOutcome: string;
   responsibility: BlueprintResponsibility;
   notesExceptions?: string;
@@ -59,6 +60,20 @@ export interface BlueprintStep {
   notesForOps?: string;
   exceptionIds?: string[];
   nextStepIds: string[];
+  stepNumber: string;
+  branchType?: "conditional" | "exception" | "parallel";
+  branchCondition?: string;
+  branchLabel?: string;
+  parentStepId?: string;
+  taskIds: string[];
+}
+
+export interface BlueprintBranch {
+  id: string;
+  parentStepId: string;
+  condition: string;
+  label: string;
+  targetStepId: string;
 }
 
 export interface Blueprint {
@@ -67,6 +82,7 @@ export interface Blueprint {
   summary: string;
   sections: BlueprintSection[];
   steps: BlueprintStep[];
+  branches: BlueprintBranch[];
   createdAt: string;
   updatedAt: string;
 }

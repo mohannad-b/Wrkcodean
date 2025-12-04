@@ -19,7 +19,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:seed": "tsx --env-file=.env.local scripts/seed.ts"
+    "db:seed": "tsx --env-file=.env.local scripts/seed.ts",
+    "seed:blueprint": "tsx scripts/seed-blueprint-test.ts"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.13.1",
@@ -52,6 +53,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "date-fns": "^3.6.0",
     "drizzle-orm": "^0.44.7",
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
@@ -59,6 +61,7 @@
     "motion": "^12.0.0",
     "next": "^14.2.18",
     "next-themes": "^0.4.6",
+    "openai": "^6.9.1",
     "pg": "^8.16.3",
     "react": "^18.3.1",
     "react-day-picker": "^8.10.1",

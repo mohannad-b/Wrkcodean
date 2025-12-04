@@ -4,6 +4,7 @@ import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { createCopilotMessage, listCopilotMessages } from "@/lib/services/copilot-messages";
 import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
+import { logAudit } from "@/lib/audit/log";
 
 const MessageInputSchema = z.object({
   role: z.enum(["user", "assistant", "system"]).default("user"),
@@ -58,12 +59,26 @@ export async function POST(request: Request, { params }: { params: { id: string 
       throw new ApiError(400, "Invalid request body.");
     }
 
+    const trimmedContent = payload.content.trim();
     const message = await createCopilotMessage({
       tenantId: session.tenantId,
       automationVersionId: params.id,
       role: payload.role,
-      content: payload.content.trim(),
+      content: trimmedContent,
       createdBy: session.userId,
+    });
+
+    await logAudit({
+      tenantId: session.tenantId,
+      userId: session.userId,
+      action: "automation.message.sent",
+      resourceType: "automation_version",
+      resourceId: params.id,
+      metadata: {
+        role: payload.role,
+        preview: trimmedContent.slice(0, 240),
+        source: payload.role === "system" && trimmedContent.startsWith("[Admin Note]") ? "admin_note" : "copilot_message",
+      },
     });
 
     return NextResponse.json({ message });

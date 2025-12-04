@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const canMock = vi.fn();
+const getDetailMock = vi.fn();
 const updateMetadataMock = vi.fn();
 const logAuditMock = vi.fn();
 const requireTenantSessionMock = vi.fn();
@@ -23,6 +24,7 @@ vi.mock("@/lib/auth/rbac", () => ({
 }));
 
 vi.mock("@/lib/services/automations", () => ({
+  getAutomationVersionDetail: getDetailMock,
   updateAutomationVersionMetadata: updateMetadataMock,
 }));
 
@@ -52,13 +54,17 @@ const validBlueprint = {
       type: "Trigger",
       name: "Lead submitted",
       summary: "Capture inbound leads from the public form.",
+      description: "Capture inbound leads from the public form.",
       goalOutcome: "Kick off the workflow when a new submission arrives.",
       responsibility: "Automated",
       systemsInvolved: ["HubSpot"],
       notifications: ["Slack"],
       nextStepIds: [],
+      stepNumber: "",
+      taskIds: [],
     },
   ],
+  branches: [],
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };
@@ -69,6 +75,18 @@ describe("PATCH /api/automation-versions/[id]", () => {
     requireTenantSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: [] });
     canMock.mockReturnValue(true);
     updateMetadataMock.mockResolvedValue({ id: "version-1", intakeNotes: "notes", blueprintJson: validBlueprint });
+    getDetailMock.mockResolvedValue({
+      version: {
+        id: "version-1",
+        versionLabel: "v1.0",
+        status: "IntakeInProgress",
+        intakeNotes: "notes",
+        summary: "Summary",
+        blueprintJson: validBlueprint,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    });
   });
 
   it("rejects invalid blueprint payloads with 400", async () => {
@@ -95,6 +113,7 @@ describe("PATCH /api/automation-versions/[id]", () => {
     expect(updateMetadataMock).toHaveBeenCalledWith(
       expect.objectContaining({ blueprintJson: validBlueprint, automationVersionId: "version-1" })
     );
+    expect(getDetailMock).toHaveBeenCalled();
   });
 
   it("persists inspector step edits", async () => {
@@ -121,6 +140,9 @@ describe("PATCH /api/automation-versions/[id]", () => {
     expect(updateMetadataMock).toHaveBeenCalledWith(
       expect.objectContaining({ blueprintJson: updatedBlueprint, automationVersionId: "version-1" })
     );
+    const auditCall = logAuditMock.mock.calls.at(-1)?.[0];
+    expect(auditCall?.metadata?.blueprintSummary).toBeDefined();
+    expect(Array.isArray(auditCall?.metadata?.blueprintSummary)).toBe(true);
   });
 });
 

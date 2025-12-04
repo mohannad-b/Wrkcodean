@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { Loader2, RefreshCw, Send, StickyNote, Plus, Users, Play, Edit3, Sparkles, AlertTriangle, Calendar, Clock, DollarSign, Zap, CheckCircle2, ArrowUpRight, ArrowRight, History } from "lucide-react";
+import { Loader2, RefreshCw, Send, StickyNote, Plus, Users, Play, Edit3, Sparkles, AlertTriangle, Calendar, Clock, DollarSign, Zap, CheckCircle2, ArrowUpRight, ArrowRight, History, ListChecks } from "lucide-react";
 import type { Connection, Node, Edge, EdgeChange } from "reactflow";
 import { StudioChat } from "@/components/automations/StudioChat";
 import { StudioInspector } from "@/components/automations/StudioInspector";
@@ -64,6 +64,7 @@ type AutomationVersion = {
   latestQuote: QuoteSummary | null;
   createdAt: string;
   updatedAt: string;
+  tasks?: VersionTask[];
 };
 
 type AutomationDetail = {
@@ -71,6 +72,19 @@ type AutomationDetail = {
   name: string;
   description: string | null;
   versions: AutomationVersion[];
+};
+
+type VersionTask = {
+  id: string;
+  title: string;
+  description: string | null;
+  status: "pending" | "in_progress" | "complete";
+  priority: "blocker" | "important" | "optional";
+  metadata?: {
+    systemType?: string;
+    relatedSteps?: string[];
+    isBlocker?: boolean;
+  } | null;
 };
 
 interface AutomationDetailPageProps {
@@ -100,7 +114,7 @@ const formatDateTime = (value?: string | null) => {
   }
 };
 
-const AUTOMATION_TABS = ["Overview", "Build Status", "Blueprint", "Test", "Activity", "Contributors", "Settings"] as const;
+const AUTOMATION_TABS = ["Overview", "Build Status", "Tasks", "Blueprint", "Test", "Activity", "Contributors", "Settings"] as const;
 
 const BASE_CHECKLIST = [
   { id: "overview", label: "Overview", sectionKey: null as BlueprintSectionKey | null },
@@ -250,6 +264,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [blueprint, setBlueprint] = useState<Blueprint | null>(null);
+  const [versionTasks, setVersionTasks] = useState<VersionTask[]>([]);
   const [blueprintError, setBlueprintError] = useState<string | null>(null);
   const [isBlueprintDirty, setBlueprintDirty] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -335,8 +350,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     return automation.versions.find((version) => version.id === selectedVersionId) ?? automation.versions[0] ?? null;
   }, [automation, selectedVersionId]);
 
-  const activeVersionId = selectedVersion?.id ?? null;
-
   useEffect(() => {
     if (selectedVersion) {
       setNotes(selectedVersion.intakeNotes ?? "");
@@ -364,6 +377,29 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       }
     }
   }, [selectedVersion?.id, selectedVersion?.blueprintJson?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setVersionTasks(selectedVersion?.tasks ?? []);
+  }, [selectedVersion?.id, selectedVersion?.tasks]);
+
+  const taskGroups = useMemo(() => {
+    const groups: Record<"blocker" | "important" | "optional", VersionTask[]> = {
+      blocker: [],
+      important: [],
+      optional: [],
+    };
+    versionTasks.forEach((task) => {
+      const priority = task.priority ?? "important";
+      groups[priority].push(task);
+    });
+    return groups;
+  }, [versionTasks]);
+
+  const blockersRemaining = useMemo(
+    () => taskGroups.blocker.filter((task) => task.status !== "complete").length,
+    [taskGroups.blocker]
+  );
+
 
   const handleVersionChange = (versionId: string) => {
     if (!confirmDiscardBlueprintChanges()) {
@@ -468,6 +504,10 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setTransitioning(false);
     }
   };
+
+  const refreshAutomationPreservingSelection = useCallback(async () => {
+    await fetchAutomation({ preserveSelection: true });
+  }, [fetchAutomation]);
 
   const handleCreateVersion = async () => {
     setCreatingVersion(true);
@@ -603,8 +643,32 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     setShowStepHelper(false);
   }, []);
 
+  const handleViewTaskStep = useCallback(
+    (stepNumber: string) => {
+      if (!blueprint || !stepNumber) {
+        return;
+      }
+      const normalized = stepNumber.trim();
+      const target = blueprint.steps.find((stepEntry) => stepEntry.stepNumber === normalized);
+      if (!target) {
+        return;
+      }
+      setActiveTab("Blueprint");
+      setSelectedStepId(target.id);
+      setHasSelectedStep(true);
+      setShowStepHelper(false);
+    },
+    [blueprint]
+  );
+
   const completion = useMemo(() => getBlueprintCompletionState(blueprint), [blueprint]);
-  const flowNodes = useMemo<Node[]>(() => blueprintToNodes(blueprint), [blueprint]);
+  const taskLookup = useMemo(() => {
+    const map = new Map<string, VersionTask>();
+    versionTasks.forEach((task) => map.set(task.id, task));
+    return map;
+  }, [versionTasks]);
+
+  const flowNodes = useMemo<Node[]>(() => blueprintToNodes(blueprint, taskLookup), [blueprint, taskLookup]);
   const flowEdges = useMemo<Edge[]>(() => blueprintToEdges(blueprint), [blueprint]);
 
   useEffect(() => {
@@ -660,7 +724,13 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     (blueprint?.steps?.length ?? 0) >= 3 &&
     Array.from(sectionCompletionMap.values()).every(Boolean);
   const alreadyInBuild = isAtOrBeyondBuild(selectedVersion?.status ?? null, "BuildInProgress");
-  const proceedDisabledReason = !readyForBuild
+  const pendingBlockerCopy =
+    blockersRemaining === 1
+      ? "Cannot start build - 1 setup task remaining"
+      : `Cannot start build - ${blockersRemaining} setup tasks remaining`;
+  const proceedDisabledReason = blockersRemaining > 0
+    ? pendingBlockerCopy
+    : !readyForBuild
     ? "Complete the blueprint summary, sections, and at least three steps to proceed."
     : alreadyInBuild
     ? "This version is already in a build phase."
@@ -890,7 +960,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       <Card className="shadow-sm border-gray-100">
         <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <CardTitle>Requirements / Intake</CardTitle>
+            <CardTitle>Tasks / Intake</CardTitle>
             <CardDescription>Capture notes for this version.</CardDescription>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
@@ -1002,9 +1072,23 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 proceedButton
               );
             return (
-              <div key={item.id} className="flex items-center gap-2">
+              <div key={item.id} className="flex items-center gap-3 flex-wrap">
                 {chipContent}
-                {wrappedButton}
+                <div className="flex flex-col gap-1">
+                  {wrappedButton}
+                  {taskGroups.blocker.length > 0 ? (
+                    <span
+                      className={cn(
+                        "text-[10px] font-semibold",
+                        blockersRemaining > 0 ? "text-amber-600" : "text-emerald-600"
+                      )}
+                    >
+                      {blockersRemaining > 0
+                        ? `${blockersRemaining} blocker task${blockersRemaining === 1 ? "" : "s"} pending`
+                        : "All blocker tasks complete"}
+                    </span>
+                  ) : null}
+                </div>
               </div>
             );
           })}
@@ -1021,6 +1105,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             automationVersionId={selectedVersion?.id ?? null}
             blueprintEmpty={blueprintIsEmpty}
             onBlueprintUpdates={handleBlueprintAIUpdates}
+            onBlueprintRefresh={refreshAutomationPreservingSelection}
           />
         </div>
 
@@ -1076,6 +1161,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             }}
             onChange={handleStepChange}
             onDelete={handleDeleteStep}
+            tasks={versionTasks}
           />
         </div>
       </div>
@@ -1152,6 +1238,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             {errorBanner}
             {activeTab === "Overview" ? (
               overviewContent
+            ) : activeTab === "Tasks" ? (
+              <AutomationTasksTab
+                tasks={versionTasks}
+                blockersRemaining={blockersRemaining}
+                onViewStep={handleViewTaskStep}
+              />
             ) : activeTab === "Build Status" ? (
               <BuildStatusTab
                 status={selectedVersion?.status}
@@ -1162,7 +1254,10 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             ) : activeTab === "Test" ? (
               <TestTab />
             ) : activeTab === "Activity" ? (
-              <ActivityTab onNavigateToBlueprint={() => setActiveTab("Blueprint")} />
+              <ActivityTab
+                automationVersionId={selectedVersion?.id ?? ""}
+                onNavigateToBlueprint={() => setActiveTab("Blueprint")}
+              />
             ) : activeTab === "Contributors" ? (
               <ContributorsTab onInvite={() => toast({ title: "Invite teammates", description: "Coming soon." })} />
             ) : activeTab === "Settings" ? (
@@ -1493,5 +1588,287 @@ function CopilotSuggestions({ suggestions, onSelectSuggestion, onAskForMore }: C
       </div>
     </Card>
   );
+}
+
+interface AutomationTasksTabProps {
+  tasks: VersionTask[];
+  blockersRemaining?: number;
+  onViewStep?: (stepNumber: string) => void;
+}
+
+type TaskSectionKey = "blocker" | "important" | "optional";
+
+const TASK_SECTION_CONFIG: Array<{
+  key: TaskSectionKey;
+  title: string;
+  description: string;
+  emptyMessage: string;
+  accentClass: string;
+  icon: typeof AlertTriangle | typeof CheckCircle2 | typeof Clock;
+}> = [
+  {
+    key: "blocker",
+    title: "Setup blockers",
+    description: "Must be completed before build can start.",
+    emptyMessage: "All blocker tasks are complete.",
+    accentClass: "border-rose-100 bg-rose-50/40",
+    icon: AlertTriangle,
+  },
+  {
+    key: "important",
+    title: "Important tasks",
+    description: "Recommended before handoff to the build team.",
+    emptyMessage: "No open important tasks.",
+    accentClass: "border-amber-100 bg-amber-50/30",
+    icon: Clock,
+  },
+  {
+    key: "optional",
+    title: "Optional tasks",
+    description: "Nice-to-have context for the automation.",
+    emptyMessage: "No optional tasks yet.",
+    accentClass: "border-emerald-100 bg-emerald-50/40",
+    icon: CheckCircle2,
+  },
+];
+
+function AutomationTasksTab({ tasks, blockersRemaining, onViewStep }: AutomationTasksTabProps) {
+  const grouped = useMemo(() => {
+    const groups: Record<TaskSectionKey, VersionTask[]> = {
+      blocker: [],
+      important: [],
+      optional: [],
+    };
+    tasks.forEach((task) => {
+      const priority = task.priority ?? "important";
+      groups[priority].push(task);
+    });
+    return groups;
+  }, [tasks]);
+
+  const stats = useMemo(() => {
+    const pending = tasks.filter((task) => task.status !== "complete").length;
+    const blockersPending = grouped.blocker.filter((task) => task.status !== "complete").length;
+    return {
+      total: tasks.length,
+      pending,
+      completed: tasks.length - pending,
+      blockerTotal: grouped.blocker.length,
+      blockersPending,
+    };
+  }, [grouped.blocker, tasks]);
+
+  const effectiveBlockersPending = blockersRemaining ?? stats.blockersPending;
+
+  return (
+    <div className="space-y-6">
+      <TaskSummaryCard
+        stats={{
+          total: stats.total,
+          pending: stats.pending,
+          completed: stats.completed,
+          blockerTotal: stats.blockerTotal,
+          blockersPending: effectiveBlockersPending,
+        }}
+      />
+      {TASK_SECTION_CONFIG.map((section) => (
+        <TaskGroupCard
+          key={section.key}
+          title={section.title}
+          description={section.description}
+          emptyMessage={section.emptyMessage}
+          accentClass={section.accentClass}
+          icon={section.icon}
+          tasks={grouped[section.key]}
+          onViewStep={onViewStep}
+        />
+      ))}
+    </div>
+  );
+}
+
+interface TaskSummaryCardProps {
+  stats: {
+    total: number;
+    pending: number;
+    completed: number;
+    blockerTotal: number;
+    blockersPending: number;
+  };
+}
+
+function TaskSummaryCard({ stats }: TaskSummaryCardProps) {
+  const summary = [
+    {
+      label: "Total tasks",
+      value: stats.total,
+      caption: "Across this automation",
+      icon: ListChecks,
+      tone: "text-gray-900",
+      iconBg: "bg-gray-100 text-gray-600",
+    },
+    {
+      label: "Blockers remaining",
+      value: stats.blockersPending,
+      caption: `${stats.blockerTotal} blocker${stats.blockerTotal === 1 ? "" : "s"} total`,
+      icon: AlertTriangle,
+      tone: stats.blockersPending > 0 ? "text-amber-700" : "text-emerald-700",
+      iconBg: stats.blockersPending > 0 ? "bg-amber-50 text-amber-600" : "bg-emerald-50 text-emerald-600",
+    },
+    {
+      label: "In progress",
+      value: stats.pending,
+      caption: "Pending or in review",
+      icon: Clock,
+      tone: "text-blue-700",
+      iconBg: "bg-blue-50 text-blue-600",
+    },
+    {
+      label: "Completed",
+      value: stats.completed,
+      caption: "Ready for build",
+      icon: CheckCircle2,
+      tone: "text-emerald-700",
+      iconBg: "bg-emerald-50 text-emerald-600",
+    },
+  ];
+
+  return (
+    <div className="grid gap-4 md:grid-cols-4">
+      {summary.map((item) => (
+        <div key={item.label} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+          <div className="flex items-center gap-3 mb-3">
+            <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", item.iconBg)}>
+              <item.icon size={18} />
+            </div>
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{item.label}</span>
+          </div>
+          <div className={cn("text-2xl font-bold leading-tight", item.tone)}>{item.value}</div>
+          <p className="text-[11px] text-gray-400 mt-1">{item.caption}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+interface TaskGroupCardProps {
+  title: string;
+  description: string;
+  emptyMessage: string;
+  accentClass: string;
+  icon: typeof AlertTriangle | typeof CheckCircle2 | typeof Clock;
+  tasks: VersionTask[];
+  onViewStep?: (stepNumber: string) => void;
+}
+
+function TaskGroupCard({ title, description, emptyMessage, accentClass, icon: Icon, tasks, onViewStep }: TaskGroupCardProps) {
+  return (
+    <div className={cn("rounded-2xl border p-6 space-y-4", accentClass)}>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <Icon size={16} className="text-gray-500" />
+            <h3 className="text-sm font-bold text-[#0A0A0A] uppercase tracking-wide">{title}</h3>
+          </div>
+          <p className="text-xs text-gray-500 mt-1">{description}</p>
+        </div>
+        <Badge variant="secondary" className="text-[10px] bg-white text-gray-600 border-gray-200">
+          {tasks.length} task{tasks.length === 1 ? "" : "s"}
+        </Badge>
+      </div>
+      {tasks.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-200 bg-white/60 p-4 text-xs text-gray-500">
+          {emptyMessage}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {tasks.map((task) => (
+            <TaskListItem key={task.id} task={task} onViewStep={onViewStep} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface TaskListItemProps {
+  task: VersionTask;
+  onViewStep?: (stepNumber: string) => void;
+}
+
+function TaskListItem({ task, onViewStep }: TaskListItemProps) {
+  const statusLabel = formatTaskStatus(task.status);
+  const statusClasses = getStatusBadgeClasses(task.status);
+  const priorityClasses = getPriorityBadgeClasses(task.priority ?? "important");
+  const relatedSteps = Array.isArray(task.metadata?.relatedSteps) ? task.metadata?.relatedSteps ?? [] : [];
+
+  return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-[#0A0A0A] leading-tight">{task.title}</p>
+          {task.description ? <p className="text-xs text-gray-500 mt-1 leading-relaxed">{task.description}</p> : null}
+        </div>
+        <Badge className={cn("text-[10px] font-semibold", statusClasses)}>{statusLabel}</Badge>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Badge className={cn("text-[10px] font-semibold", priorityClasses)}>
+          {task.priority === "blocker" ? "Blocker" : task.priority === "optional" ? "Optional" : "Important"}
+        </Badge>
+        {task.metadata?.systemType ? (
+          <Badge variant="outline" className="text-[10px] font-semibold border-gray-200 text-gray-500 capitalize">
+            {task.metadata.systemType}
+          </Badge>
+        ) : null}
+      </div>
+      {relatedSteps.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {relatedSteps.map((stepNumber) => (
+            <button
+              key={`${task.id}-${stepNumber}`}
+              type="button"
+              onClick={() => onViewStep?.(stepNumber)}
+              className="px-2 py-1 text-[11px] font-semibold rounded-full border border-gray-200 text-gray-600 hover:border-[#E43632] hover:text-[#E43632]"
+            >
+              Step {stepNumber}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function formatTaskStatus(status: VersionTask["status"]) {
+  switch (status) {
+    case "complete":
+      return "Complete";
+    case "in_progress":
+      return "In Progress";
+    default:
+      return "Pending";
+  }
+}
+
+function getStatusBadgeClasses(status: VersionTask["status"]) {
+  switch (status) {
+    case "complete":
+      return "bg-emerald-50 text-emerald-700 border border-emerald-100";
+    case "in_progress":
+      return "bg-blue-50 text-blue-700 border border-blue-100";
+    default:
+      return "bg-amber-50 text-amber-700 border border-amber-100";
+  }
+}
+
+function getPriorityBadgeClasses(priority: NonNullable<VersionTask["priority"]>) {
+  switch (priority) {
+    case "blocker":
+      return "bg-red-50 text-red-700 border border-red-100";
+    case "optional":
+      return "bg-gray-50 text-gray-500 border border-gray-100";
+    default:
+      return "bg-slate-50 text-slate-700 border border-slate-100";
+  }
 }
 

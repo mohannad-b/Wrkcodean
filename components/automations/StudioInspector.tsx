@@ -15,6 +15,7 @@ import {
   Settings,
   GitBranch,
   ArrowRight,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,7 +36,21 @@ interface StudioInspectorProps {
   onClose: () => void;
   onChange: (stepId: string, patch: Partial<BlueprintStep>) => void;
   onDelete: (stepId: string) => void;
+  tasks?: StepTaskSummary[];
 }
+
+type StepTaskSummary = {
+  id: string;
+  title: string;
+  description: string | null;
+  status: "pending" | "in_progress" | "complete";
+  priority: "blocker" | "important" | "optional";
+  metadata?: {
+    systemType?: string;
+    relatedSteps?: string[];
+    isBlocker?: boolean;
+  } | null;
+};
 
 type ResponsibilityTab = "automated" | "human" | "approval";
 
@@ -85,7 +100,30 @@ function parseExceptions(notes?: string) {
     .filter(Boolean) as { condition: string; outcome: string }[];
 }
 
-export function StudioInspector({ step, onClose, onChange, onDelete }: StudioInspectorProps) {
+const STEP_TASK_STATUS_STYLES: Record<StepTaskSummary["status"], string> = {
+  pending: "bg-amber-50 text-amber-700 border border-amber-100",
+  in_progress: "bg-blue-50 text-blue-700 border border-blue-100",
+  complete: "bg-emerald-50 text-emerald-700 border border-emerald-100",
+};
+
+const STEP_TASK_PRIORITY_STYLES: Record<StepTaskSummary["priority"], string> = {
+  blocker: "bg-red-50 text-red-700 border border-red-100",
+  important: "bg-slate-50 text-slate-700 border border-slate-200",
+  optional: "bg-gray-50 text-gray-500 border border-gray-200",
+};
+
+function formatTaskStatus(status: StepTaskSummary["status"]) {
+  switch (status) {
+    case "complete":
+      return "Complete";
+    case "in_progress":
+      return "In Progress";
+    default:
+      return "Pending";
+  }
+}
+
+export function StudioInspector({ step, onClose, onChange, onDelete, tasks = [] }: StudioInspectorProps) {
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [responsibilityTab, setResponsibilityTab] = useState<ResponsibilityTab>("automated");
   const [exceptionModalOpen, setExceptionModalOpen] = useState(false);
@@ -106,6 +144,14 @@ export function StudioInspector({ step, onClose, onChange, onDelete }: StudioIns
 
   const badgeStatus = useMemo(() => (step ? deriveBadgeStatus(step) : "ai-suggested"), [step]);
   const parsedExceptions = useMemo(() => parseExceptions(step?.notesExceptions), [step?.notesExceptions]);
+  const stepTasks = useMemo(() => {
+    if (!step || !Array.isArray(step.taskIds) || step.taskIds.length === 0) {
+      return [];
+    }
+    return step.taskIds
+      .map((taskId) => tasks.find((task) => task.id === taskId))
+      .filter((task): task is StepTaskSummary => Boolean(task));
+  }, [tasks, step?.taskIds]);
 
   if (!step) {
     return (
@@ -202,7 +248,7 @@ export function StudioInspector({ step, onClose, onChange, onDelete }: StudioIns
 
         <div className="flex-1 w-full overflow-y-auto min-h-0">
           <div className="p-6 pb-20 space-y-8">
-            {step.type === "Logic" && (
+            {step.type === "Decision" && (
               <div className="space-y-3 animate-in slide-in-from-bottom-2 duration-300">
                 <Label className="text-xs font-bold text-[#0A0A0A] uppercase tracking-wider flex items-center gap-2">
                   Decision Rule
@@ -257,6 +303,41 @@ export function StudioInspector({ step, onClose, onChange, onDelete }: StudioIns
                       AI inferred this rule from your description. You can edit any part of it.
                     </p>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {stepTasks.length > 0 && (
+              <div className="space-y-3">
+                <Label className="text-xs font-bold text-[#0A0A0A] uppercase tracking-wider flex items-center gap-2">
+                  Setup tasks for this step
+                </Label>
+                <div className="space-y-3">
+                  {stepTasks.map((task) => (
+                    <div key={task.id} className="border border-gray-100 rounded-xl bg-gray-50/60 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-[#0A0A0A] leading-tight">{task.title}</p>
+                          {task.description ? (
+                            <p className="text-xs text-gray-500 mt-1 leading-relaxed">{task.description}</p>
+                          ) : null}
+                        </div>
+                        <Badge className={cn("text-[10px] font-semibold", STEP_TASK_STATUS_STYLES[task.status])}>
+                          {formatTaskStatus(task.status)}
+                        </Badge>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Badge className={cn("text-[10px] font-semibold", STEP_TASK_PRIORITY_STYLES[task.priority])}>
+                          {task.priority === "blocker" ? "Blocker" : task.priority === "optional" ? "Optional" : "Important"}
+                        </Badge>
+                        {task.metadata?.systemType ? (
+                          <Badge variant="outline" className="text-[10px] text-gray-500 border-gray-200 capitalize">
+                            {task.metadata.systemType}
+                          </Badge>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -442,7 +523,7 @@ export function StudioInspector({ step, onClose, onChange, onDelete }: StudioIns
                           <SelectValue placeholder={step.riskLevel || "Select risk"} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="" disabled>
+                          <SelectItem value="__placeholder" disabled>
                             Select risk
                           </SelectItem>
                           {RISK_OPTIONS.map((option) => (

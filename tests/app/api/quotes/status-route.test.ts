@@ -83,7 +83,7 @@ describe("PATCH /api/quotes/[id]/status", () => {
     expect(updateQuoteStatusMock).not.toHaveBeenCalled();
     expect(logAuditMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: "quote_signed",
+        action: "automation.quote.accepted",
         resourceId: "quote-1",
       })
     );

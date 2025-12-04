@@ -72,7 +72,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       await logAudit({
         tenantId: session.tenantId,
         userId: session.userId,
-        action: "quote_signed",
+        action: "automation.quote.accepted",
         resourceType: "quote",
         resourceId: params.id,
         metadata: {
@@ -127,7 +127,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     if (nextStatus === "SENT") {
       const versionId = quoteRows[0].automationVersionId;
       if (versionId) {
-        await updateAutomationVersionStatus({
+        const { previousStatus } = await updateAutomationVersionStatus({
           tenantId: session.tenantId,
           automationVersionId: versionId,
           nextStatus: "AwaitingClientApproval",
@@ -137,13 +137,28 @@ export async function PATCH(request: Request, { params }: RouteParams) {
           }
           throw error;
         });
+
+        await logAudit({
+          tenantId: session.tenantId,
+          userId: session.userId,
+          action: "automation.version.status.changed",
+          resourceType: "automation_version",
+          resourceId: versionId,
+          metadata: { from: previousStatus, to: "AwaitingClientApproval", source: "quote.sent" },
+        });
       }
     }
+    const statusAction =
+      nextStatus === "SENT"
+        ? "automation.quote.sent"
+        : nextStatus === "REJECTED"
+        ? "automation.quote.rejected"
+        : "automation.quote.generated";
 
     await logAudit({
       tenantId: session.tenantId,
       userId: session.userId,
-      action: "quote.update",
+      action: statusAction,
       resourceType: "quote",
       resourceId: params.id,
       metadata: { status: nextStatus },

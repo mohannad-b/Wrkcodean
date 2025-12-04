@@ -5,10 +5,12 @@ import {
   automationVersions,
   projects,
   quotes,
+  tasks,
   type Automation,
   type AutomationVersion,
   type Project,
   type Quote,
+  type Task,
 } from "@/db/schema";
 import {
   API_AUTOMATION_STATUSES,
@@ -110,11 +112,26 @@ export async function getAutomationDetail(tenantId: string, automationId: string
     }
   }
 
+  const taskRows = versionIds.length
+    ? await db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.tenantId, tenantId), inArray(tasks.automationVersionId, versionIds)))
+    : [];
+  const tasksByVersion = new Map<string, Task[]>();
+  for (const task of taskRows) {
+    if (!tasksByVersion.has(task.automationVersionId)) {
+      tasksByVersion.set(task.automationVersionId, []);
+    }
+    tasksByVersion.get(task.automationVersionId)!.push(task);
+  }
+
   return {
     automation: automationRow[0],
     versions: versionRows.map((version) => ({
       ...version,
       latestQuote: latestQuoteMap.get(version.id) ?? null,
+      tasks: tasksByVersion.get(version.id) ?? [],
     })),
   };
 }
@@ -297,11 +314,17 @@ export async function getAutomationVersionDetail(tenantId: string, automationVer
     .orderBy(desc(quotes.createdAt))
     .limit(1);
 
+  const taskRows = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.automationVersionId, version.id), eq(tasks.tenantId, tenantId)));
+
   return {
     version,
     automation: automationRow[0] ?? null,
     project: projectRows[0] ?? null,
     latestQuote: quoteRows[0] ?? null,
+    tasks: taskRows,
   };
 }
 
@@ -311,7 +334,12 @@ type UpdateStatusParams = {
   nextStatus: AutomationLifecycleStatus;
 };
 
-export async function updateAutomationVersionStatus(params: UpdateStatusParams) {
+type UpdateStatusResult = {
+  version: AutomationVersion;
+  previousStatus: AutomationLifecycleStatus;
+};
+
+export async function updateAutomationVersionStatus(params: UpdateStatusParams): Promise<UpdateStatusResult> {
   if (!API_AUTOMATION_STATUSES.includes(params.nextStatus)) {
     throw new Error("Invalid status");
   }
@@ -348,7 +376,7 @@ export async function updateAutomationVersionStatus(params: UpdateStatusParams) 
     await syncProjectStatus(updated, params.nextStatus);
   }
 
-  return updated;
+  return { version: updated, previousStatus: currentStatus };
 }
 
 export async function ensureProjectForVersion(version: AutomationVersion) {
