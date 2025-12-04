@@ -1,13 +1,12 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Mic, Sparkles, AlertCircle, Paperclip, MonitorPlay } from "lucide-react";
+import { Send, Mic, Sparkles, AlertCircle, Paperclip, MonitorPlay, CheckCircle2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { currentUser } from "@/lib/mock-automations";
 import { motion, AnimatePresence } from "motion/react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import type { BlueprintUpdates } from "@/lib/blueprint/ai-updates";
 import type { CopilotThinkingStep } from "@/types/copilot-thinking";
 
@@ -27,10 +26,7 @@ type ConversationPhase = "discovery" | "flow" | "details" | "validation";
 interface StudioChatProps {
   automationVersionId: string | null;
   blueprintEmpty: boolean;
-  onDraftBlueprint: (messages: CopilotMessage[]) => Promise<void>;
-  isDrafting: boolean;
   disabled?: boolean;
-  lastError?: string | null;
   onConversationChange?: (messages: CopilotMessage[]) => void;
   onBlueprintUpdates?: (updates: BlueprintUpdates) => void;
 }
@@ -58,8 +54,9 @@ type CopilotReplyResponse = {
   conversationPhase?: ConversationPhase;
 };
 
-const THINKING_BUBBLE_DISPLAY_MS = process.env.NODE_ENV === "test" ? 150 : 950;
+const THINKING_BUBBLE_DISPLAY_MS = process.env.NODE_ENV === "test" ? 600 : 950;
 const MIN_THINKING_VISIBLE_MS = 250;
+const THINKING_STEP_INTERVAL_MS = process.env.NODE_ENV === "test" ? 150 : 600;
 type TimeoutHandle = number;
 const DEFAULT_USER_FACING_THINKING_STEPS: CopilotThinkingStep[] = [
   { id: "thinking-default-1", label: "Digesting what you're trying to accomplish" },
@@ -80,10 +77,7 @@ const formatTimestamp = (iso: string) =>
 export function StudioChat({
   automationVersionId,
   blueprintEmpty,
-  onDraftBlueprint,
-  isDrafting,
   disabled = false,
-  lastError,
   onConversationChange,
   onBlueprintUpdates,
 }: StudioChatProps) {
@@ -98,9 +92,8 @@ export function StudioChat({
   const [isAwaitingReply, setIsAwaitingReply] = useState(false);
   const [thinkingSteps, setThinkingSteps] = useState<CopilotThinkingStep[]>([]);
   const [showThinkingBubble, setShowThinkingBubble] = useState(false);
-  const [typingDotsVisible, setTypingDotsVisible] = useState(false);
+  const [currentThinkingIndex, setCurrentThinkingIndex] = useState(0);
   const [thinkingStartTime, setThinkingStartTime] = useState<number | null>(null);
-  const [conversationPhase, setConversationPhase] = useState<ConversationPhase>("discovery");
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const prevBlueprintEmptyRef = useRef<boolean>(blueprintEmpty);
   const thinkingBubbleTimeoutRef = useRef<TimeoutHandle | null>(null);
@@ -185,8 +178,7 @@ export function StudioChat({
   useEffect(() => {
     setShowThinkingBubble(false);
     setThinkingSteps([]);
-    setTypingDotsVisible(false);
-    setConversationPhase("discovery");
+    setCurrentThinkingIndex(0);
   }, [automationVersionId]);
 
   useEffect(() => {
@@ -198,19 +190,41 @@ export function StudioChat({
     };
   }, []);
 
+useEffect(() => {
+  if (!showThinkingBubble || thinkingSteps.length === 0) {
+    setCurrentThinkingIndex(0);
+    return;
+  }
+
+  setCurrentThinkingIndex(0);
+  const interval = window.setInterval(() => {
+    setCurrentThinkingIndex((prev) => {
+      if (prev < thinkingSteps.length - 1) {
+        return prev + 1;
+      }
+      window.clearInterval(interval);
+      return prev;
+    });
+  }, THINKING_STEP_INTERVAL_MS);
+
+  return () => {
+    window.clearInterval(interval);
+  };
+}, [showThinkingBubble, thinkingSteps]);
+
   useEffect(() => {
     onConversationChange?.(durableMessages);
   }, [durableMessages, onConversationChange]);
 
-  const hasUserMessage = useMemo(() => durableMessages.some((message) => message.role === "user"), [durableMessages]);
-  const canDraft = blueprintEmpty && hasUserMessage && !isDrafting && !disabled && Boolean(automationVersionId);
-  const helperMessage = blueprintEmpty
-    ? "Share the workflow, systems, and exception cases so the draft is accurate."
-    : "Blueprint synced with Copilot. Keep refining via chat or the inspector.";
   const displayedThinkingSteps = useMemo(
     () => (thinkingSteps.length > 0 ? thinkingSteps : DEFAULT_USER_FACING_THINKING_STEPS).slice(0, 3),
     [thinkingSteps]
   );
+  const visibleThinkingSteps = displayedThinkingSteps.slice(
+    0,
+    Math.min(currentThinkingIndex + 1, displayedThinkingSteps.length)
+  );
+  const activeThinkingIndex = visibleThinkingSteps.length > 0 ? visibleThinkingSteps.length - 1 : -1;
 
   const requestAssistantReply = useCallback(async () => {
     if (!automationVersionId) {
@@ -220,7 +234,7 @@ export function StudioChat({
     setAssistantError(null);
     setShowThinkingBubble(true);
     setThinkingSteps(DEFAULT_USER_FACING_THINKING_STEPS);
-    setTypingDotsVisible(true);
+    setCurrentThinkingIndex(0);
     setThinkingStartTime(Date.now());
     try {
       const response = await fetch(`/api/automation-versions/${automationVersionId}/copilot/reply`, {
@@ -233,12 +247,11 @@ export function StudioChat({
       if (data.blueprintUpdates && onBlueprintUpdates) {
         onBlueprintUpdates(data.blueprintUpdates);
       }
-      if (data.conversationPhase) {
-        setConversationPhase(data.conversationPhase);
-      }
       const assistantMessage = mapApiMessage(data.message);
       const incomingThinkingSteps =
         data.thinkingSteps && data.thinkingSteps.length > 0 ? data.thinkingSteps : DEFAULT_USER_FACING_THINKING_STEPS;
+      setThinkingSteps(incomingThinkingSteps);
+      setCurrentThinkingIndex(0);
       const shouldShowBubble = incomingThinkingSteps.length > 0;
       const minimumVisibleDelay = (() => {
         if (!thinkingStartTime) return 0;
@@ -258,7 +271,7 @@ export function StudioChat({
           });
           setThinkingSteps([]);
           setShowThinkingBubble(false);
-          setTypingDotsVisible(false);
+          setCurrentThinkingIndex(0);
           setIsAwaitingReply(false);
           setThinkingStartTime(null);
         }, THINKING_BUBBLE_DISPLAY_MS + minimumVisibleDelay);
@@ -271,7 +284,7 @@ export function StudioChat({
           });
           setThinkingSteps([]);
           setShowThinkingBubble(false);
-          setTypingDotsVisible(false);
+          setCurrentThinkingIndex(0);
           setIsAwaitingReply(false);
           setThinkingStartTime(null);
         }, minimumVisibleDelay);
@@ -283,7 +296,7 @@ export function StudioChat({
       }
       setThinkingSteps([]);
       setShowThinkingBubble(false);
-      setTypingDotsVisible(false);
+      setCurrentThinkingIndex(0);
       setIsAwaitingReply(false);
       setThinkingStartTime(null);
     }
@@ -338,15 +351,6 @@ export function StudioChat({
     }
   }, [automationVersionId, disabled, dropTransientMessages, input, isAwaitingReply, isSending, mapApiMessage, requestAssistantReply]);
 
-  const handleDraft = async () => {
-    if (!hasUserMessage) {
-      setLocalError("Add at least one message before drafting.");
-      return;
-    }
-    setLocalError(null);
-    await onDraftBlueprint(durableMessages);
-  };
-
 
   return (
     <div className="flex flex-col h-full bg-[#F9FAFB] border-r border-gray-200 overflow-hidden" data-testid="copilot-pane">
@@ -365,46 +369,12 @@ export function StudioChat({
           </Badge>
         </div>
 
-        <div className="border border-dashed border-gray-200 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 flex items-center gap-2">
-          <Sparkles size={14} className="text-[#E43632]" />
-          <span>
-            {conversationPhase === "discovery" && "Understanding your workflow…"}
-            {conversationPhase === "flow" && "Building out the automation flow…"}
-            {conversationPhase === "details" && "Refining edge cases and handoffs…"}
-            {conversationPhase === "validation" && "Wrapping up the blueprint for review."}
-          </span>
-        </div>
-
         {/* Quick Actions Row */}
         <div className="flex flex-col gap-2">
-          <div className="text-[11px] text-gray-500">{helperMessage}</div>
-          {messages.length === 1 && (
-            <div className="space-y-2">
-              <p className="text-xs text-gray-500">Or try one of these examples:</p>
-              {STARTER_PROMPTS.map((prompt, index) => (
-                <button
-                  key={prompt}
-                  onClick={() => {
-                    setInput(prompt);
-                    inputRef.current?.focus();
-                  }}
-                  className="text-left text-sm text-gray-700 hover:text-gray-900 hover:bg-gray-50 p-3 rounded-lg border border-gray-200 w-full transition-colors"
-                  data-testid={`starter-prompt-${index}`}
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
-          )}
-          {blueprintEmpty && (
-            <Button size="sm" onClick={handleDraft} disabled={!canDraft} className="justify-center text-xs font-semibold">
-              {isDrafting ? "Drafting Blueprint…" : "Draft Blueprint with Copilot"}
-            </Button>
-          )}
-          {(localError || lastError || threadError || assistantError) && (
+          {(localError || threadError || assistantError) && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 flex items-center gap-1">
               <AlertCircle size={12} />
-              {localError || lastError || threadError || assistantError}
+              {localError || threadError || assistantError}
             </div>
           )}
           {isLoadingThread && (
@@ -448,6 +418,23 @@ export function StudioChat({
                 >
                   <p className="whitespace-pre-wrap">{msg.content}</p>
                 </div>
+              {msg.id === INITIAL_AI_MESSAGE.id && messages.length === 1 && (
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {STARTER_PROMPTS.map((prompt, index) => (
+                    <button
+                      key={prompt}
+                      onClick={() => {
+                        setInput(prompt);
+                        inputRef.current?.focus();
+                      }}
+                      className="text-left text-sm text-gray-700 bg-white border border-gray-200 rounded-xl px-3 py-2 hover:border-gray-300 hover:bg-gray-50 transition-colors shadow-sm"
+                      data-testid={`starter-prompt-${index}`}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              )}
 
                 <span className="text-[10px] text-gray-400 px-1 block">
                   {msg.optimistic ? "Sending…" : formatTimestamp(msg.createdAt)}
@@ -459,35 +446,53 @@ export function StudioChat({
             {showThinkingBubble ? (
               <motion.div
                 key="thinking-bubble"
-                initial={{ opacity: 0, y: 8 }}
+                initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 8 }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-                className="flex gap-3"
+                exit={{ opacity: 0, y: -10 }}
+                className="flex items-start gap-3 mb-4"
                 data-testid="thinking-bubble"
               >
-                <div className="w-8 h-8 rounded-full bg-white border border-gray-200 flex items-center justify-center text-[#E43632] shadow-sm shrink-0 mt-0.5">
-                  <Sparkles size={14} />
+                <div className="flex-shrink-0">
+                  <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center">
+                    <Sparkles className="w-4 h-4 text-[#E43632]" />
+                  </div>
                 </div>
-                <div className="max-w-[85%] space-y-2">
-                  <div className="p-4 text-sm shadow-sm relative leading-relaxed bg-[#F3F4F6] text-[#0A0A0A] rounded-2xl rounded-tl-sm border border-transparent">
-                    <div className="flex items-center gap-2 text-[11px] font-medium text-gray-500 mb-1">
-                      WrkCoPilot is thinking…
-                    </div>
-                    <ul className="space-y-1.5 text-xs text-gray-600">
-                      {displayedThinkingSteps.map((step) => (
-                        <li key={step.id} className="flex items-start gap-2">
-                          <span className="mt-1 h-1.5 w-1.5 rounded-full bg-gray-300 inline-block" />
-                          <span className="leading-relaxed">{step.label}</span>
-                        </li>
-                      ))}
-                    </ul>
-                    {typingDotsVisible ? (
-                      <div className="mt-3 flex items-center gap-2 text-[11px] text-gray-400" data-testid="typing-dots">
-                        <TypingDots />
-                        <span>Preparing your next question…</span>
-                      </div>
-                    ) : null}
+                <div className="flex-1 bg-white rounded-2xl rounded-tl-none shadow-sm border border-gray-100 p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-sm font-semibold text-gray-900">WrkCoPilot is thinking...</span>
+                  </div>
+                  <div className="space-y-2">
+                    {visibleThinkingSteps.map((step, index) => {
+                      const isActive = index === activeThinkingIndex;
+                      const isComplete = activeThinkingIndex > 0 && index < activeThinkingIndex;
+                      const textClass = isActive
+                        ? "text-sm leading-relaxed text-gray-900 font-medium"
+                        : isComplete
+                        ? "text-sm leading-relaxed text-gray-500"
+                        : "text-sm leading-relaxed text-gray-400";
+
+                      return (
+                        <motion.div
+                          key={step.id}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: index * 0.1 }}
+                          className="flex items-start gap-2"
+                        >
+                          {isComplete ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                          ) : isActive ? (
+                            <div className="relative w-4 h-4 flex-shrink-0 mt-0.5">
+                              <span className="absolute w-full h-full bg-[#E43632] rounded-full animate-ping opacity-60" />
+                              <span className="relative inline-flex rounded-full w-4 h-4 bg-[#E43632]" />
+                            </div>
+                          ) : (
+                            <div className="w-4 h-4 rounded-full border-2 border-gray-200 flex-shrink-0 mt-0.5" />
+                          )}
+                          <span className={textClass}>{step.label}</span>
+                        </motion.div>
+                      );
+                    })}
                   </div>
                 </div>
               </motion.div>
@@ -533,21 +538,6 @@ export function StudioChat({
         </div>
       </div>
     </div>
-  );
-}
-
-function TypingDots() {
-  return (
-    <span className="flex items-center gap-1">
-      {[0, 1, 2].map((dot) => (
-        <span
-          // biome-ignore lint/suspicious/noArrayIndexKey: static list
-          key={dot}
-          className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce"
-          style={{ animationDelay: `${dot * 0.12}s` }}
-        />
-      ))}
-    </span>
   );
 }
 

@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Loader2, RefreshCw, Send, StickyNote, Plus, Users, Play, Edit3, Sparkles, AlertTriangle, Calendar, Clock, DollarSign, Zap, CheckCircle2, ArrowUpRight, ArrowRight, History } from "lucide-react";
 import type { Connection, Node, Edge, EdgeChange } from "reactflow";
-import { StudioChat, type CopilotMessage } from "@/components/automations/StudioChat";
+import { StudioChat } from "@/components/automations/StudioChat";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 import { ActivityTab } from "@/components/automations/ActivityTab";
 import { BuildStatusTab } from "@/components/automations/BuildStatusTab";
@@ -259,14 +259,14 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AutomationTab>("Overview");
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  const [draftingBlueprint, setDraftingBlueprint] = useState(false);
-  const [chatError, setChatError] = useState<string | null>(null);
   const [hasSelectedStep, setHasSelectedStep] = useState(false);
   const [showStepHelper, setShowStepHelper] = useState(false);
   const [isContributorMode, setIsContributorMode] = useState(false);
   const [proceedingToBuild, setProceedingToBuild] = useState(false);
+  const [isSynthesizingBlueprint, setIsSynthesizingBlueprint] = useState(false);
   const completionRef = useRef<ReturnType<typeof getBlueprintCompletionState> | null>(null);
   const preserveSelectionRef = useRef(false);
+  const synthesisTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const confirmDiscardBlueprintChanges = useCallback(() => {
     if (!isBlueprintDirty) {
@@ -414,6 +414,10 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         return;
       }
       const payload = { ...blueprint, ...overrides, updatedAt: new Date().toISOString() };
+      console.log("💾 Saving blueprint:", {
+        versionId: selectedVersion.id,
+        stepCount: payload.steps.length,
+      });
       setBlueprintError(null);
       try {
         const response = await fetch(`/api/automation-versions/${selectedVersion.id}`, {
@@ -492,50 +496,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     }
   };
 
-  const handleDraftBlueprint = useCallback(
-    async (messages: CopilotMessage[]) => {
-      if (!selectedVersion) {
-        return;
-      }
-      setDraftingBlueprint(true);
-      setChatError(null);
-      try {
-        const response = await fetch(`/api/automation-versions/${selectedVersion.id}/copilot/draft-blueprint`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages,
-            intakeNotes: notes,
-          }),
-        });
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}));
-          throw new Error(data.error ?? "Failed to draft blueprint");
-        }
-        const data = (await response.json()) as { blueprint: Blueprint };
-        const nextBlueprint = cloneBlueprint(data.blueprint);
-        setBlueprint(nextBlueprint);
-        setBlueprintDirty(false);
-        setSelectedStepId(null);
-        setHasSelectedStep(false);
-        setShowStepHelper(true);
-        toast({
-          title: "Blueprint draft created",
-          description: "Click on any step in the canvas to refine details.",
-          variant: "success",
-        });
-        await fetchAutomation();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unable to draft blueprint";
-        setChatError(message);
-        toast({ title: "Unable to draft blueprint", description: message, variant: "error" });
-      } finally {
-        setDraftingBlueprint(false);
-      }
-    },
-    [selectedVersion, notes, fetchAutomation, toast]
-  );
-
   const applyBlueprintUpdate = useCallback(
     (updater: (current: Blueprint) => Blueprint) => {
       let didUpdate = false;
@@ -560,10 +520,25 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
 
   const handleBlueprintAIUpdates = useCallback(
     (updates: CopilotBlueprintUpdates) => {
+      setIsSynthesizingBlueprint(true);
+      if (synthesisTimeoutRef.current) {
+        clearTimeout(synthesisTimeoutRef.current);
+      }
+      synthesisTimeoutRef.current = setTimeout(() => {
+        setIsSynthesizingBlueprint(false);
+      }, 1500);
       applyBlueprintUpdate((current) => applyBlueprintUpdates(current, updates));
     },
     [applyBlueprintUpdate]
   );
+
+  useEffect(() => {
+    return () => {
+      if (synthesisTimeoutRef.current) {
+        clearTimeout(synthesisTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleStepChange = useCallback(
     (stepId: string, patch: Partial<BlueprintStep>) => {
@@ -631,6 +606,15 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const completion = useMemo(() => getBlueprintCompletionState(blueprint), [blueprint]);
   const flowNodes = useMemo<Node[]>(() => blueprintToNodes(blueprint), [blueprint]);
   const flowEdges = useMemo<Edge[]>(() => blueprintToEdges(blueprint), [blueprint]);
+
+  useEffect(() => {
+    console.log("🎨 Blueprint updated:", {
+      stepCount: blueprint?.steps?.length ?? 0,
+      steps: blueprint?.steps?.map((step) => step.name),
+      nodeCount: flowNodes.length,
+      edgeCount: flowEdges.length,
+    });
+  }, [blueprint, flowNodes, flowEdges]);
   const selectedStep = useMemo(
     () => (blueprint ? blueprint.steps.find((step) => step.id === selectedStepId) ?? null : null),
     [blueprint, selectedStepId]
@@ -1036,9 +1020,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           <StudioChat
             automationVersionId={selectedVersion?.id ?? null}
             blueprintEmpty={blueprintIsEmpty}
-            onDraftBlueprint={handleDraftBlueprint}
-            isDrafting={draftingBlueprint}
-            lastError={chatError}
             onBlueprintUpdates={handleBlueprintAIUpdates}
           />
         </div>
@@ -1050,11 +1031,17 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             onConnect={handleConnectNodes}
             onEdgesChange={handleEdgesChange}
             onNodeClick={handleNodeClick}
+            isSynthesizing={isSynthesizingBlueprint}
             emptyState={
-              <div className="max-w-xs text-center text-gray-500 text-sm leading-relaxed">
-                <p className="font-semibold text-[#0A0A0A] mb-1">No steps yet</p>
-                Start by telling Copilot about your workflow. I’ll map out the steps for you.
-              </div>
+              blueprintIsEmpty ? (
+                <div className="text-center max-w-md mx-auto space-y-2">
+                  <Sparkles className="w-12 h-12 text-gray-300 mx-auto mb-2" />
+                  <p className="text-sm font-semibold text-gray-600">Blueprint Canvas</p>
+                  <p className="text-xs text-gray-500 leading-relaxed">
+                    Chat with the copilot to build your automation. Steps will appear here as you describe your workflow.
+                  </p>
+                </div>
+              ) : null
             }
           />
 

@@ -1,7 +1,7 @@
 "use client";
 
 import "reactflow/dist/style.css";
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -61,10 +61,6 @@ export function StudioCanvas({
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
   const [renderNodes, setRenderNodes] = useState<Node[]>(nodes);
   const previousNodeMap = useRef<Map<string, Node>>(new Map());
-  const nodeTypesMemo = useMemo(() => nodeTypes, []);
-  const edgeTypesMemo = useMemo(() => edgeTypes, []);
-  const edgeOptionsMemo = useMemo(() => defaultEdgeOptions, []);
-
   useEffect(() => {
     const prevMap = previousNodeMap.current;
     const mappedNodes = nodes.map((node) => {
@@ -136,11 +132,11 @@ export function StudioCanvas({
           onConnect={onConnect}
           onNodeClick={onNodeClick}
           onInit={setRfInstance}
-          nodeTypes={nodeTypesMemo}
-          edgeTypes={edgeTypesMemo}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           fitView
           className="bg-[#F9FAFB]"
-          defaultEdgeOptions={edgeOptionsMemo}
+          defaultEdgeOptions={defaultEdgeOptions}
           minZoom={0.1}
           maxZoom={2}
           nodesDraggable={isInteractive}

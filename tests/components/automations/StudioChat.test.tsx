@@ -45,8 +45,6 @@ describe("StudioChat", () => {
       <StudioChat
         automationVersionId="version-123"
         blueprintEmpty={false}
-        onDraftBlueprint={async () => {}}
-        isDrafting={false}
       />
     );
 
@@ -70,12 +68,10 @@ describe("StudioChat", () => {
       <StudioChat
         automationVersionId="version-starter"
         blueprintEmpty
-        onDraftBlueprint={async () => {}}
-        isDrafting={false}
       />
     );
 
-    await waitFor(() => expect(screen.getByText(/Or try one of these examples/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("starter-prompt-0")).toBeInTheDocument());
     const promptButton = screen.getByTestId("starter-prompt-0");
     fireEvent.click(promptButton);
     const input = screen.getByPlaceholderText("Describe the workflow, systems, and exceptions...");
@@ -145,8 +141,6 @@ describe("StudioChat", () => {
       <StudioChat
         automationVersionId="version-abc"
         blueprintEmpty={false}
-        onDraftBlueprint={async () => {}}
-        isDrafting={false}
       />
     );
 
@@ -159,7 +153,7 @@ describe("StudioChat", () => {
     await waitFor(() => expect(screen.getByText("Hello! Let’s build this automation.")).toBeInTheDocument());
   });
 
-  it("updates the conversation phase indicator based on the server response", async () => {
+  it("does not render a conversation phase banner even when the server provides one", async () => {
     fetchMock.mockImplementation((url, init) => {
       const target = typeof url === "string" ? url : url.url;
       const method = init?.method ?? "GET";
@@ -201,8 +195,6 @@ describe("StudioChat", () => {
       <StudioChat
         automationVersionId="version-phase"
         blueprintEmpty={false}
-        onDraftBlueprint={async () => {}}
-        isDrafting={false}
       />
     );
 
@@ -210,7 +202,8 @@ describe("StudioChat", () => {
     fireEvent.change(input, { target: { value: "Need help" } });
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 
-    await waitFor(() => expect(screen.getByText("Refining edge cases and handoffs…")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Here's the plan.")).toBeInTheDocument());
+    expect(screen.queryByText(/Refining edge cases and handoffs/i)).toBeNull();
   });
 
   it("strips blueprint JSON from loaded assistant messages", async () => {
@@ -241,8 +234,6 @@ describe("StudioChat", () => {
       <StudioChat
         automationVersionId="version-legacy"
         blueprintEmpty={false}
-        onDraftBlueprint={async () => {}}
-        isDrafting={false}
       />
     );
 
@@ -296,8 +287,6 @@ describe("StudioChat", () => {
       <StudioChat
         automationVersionId="version-abc"
         blueprintEmpty={false}
-        onDraftBlueprint={async () => {}}
-        isDrafting={false}
         onBlueprintUpdates={onBlueprintUpdates}
       />
     );
@@ -359,8 +348,6 @@ describe("StudioChat", () => {
       <StudioChat
         automationVersionId="version-ctx"
         blueprintEmpty={false}
-        onDraftBlueprint={async () => {}}
-        isDrafting={false}
       />
     );
 
@@ -369,8 +356,10 @@ describe("StudioChat", () => {
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 
     await waitFor(() => expect(screen.getByText("Digesting what you're trying to accomplish")).toBeInTheDocument());
-    expect(screen.queryByText("Mapped scraping flow and requirements for booking-platform pricing")).toBeNull();
-    expect(screen.queryByText("Captured lead gen objectives")).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByText("Mapped scraping flow and requirements for booking-platform pricing")).toBeInTheDocument()
+    );
+    await waitFor(() => expect(screen.getByText("Captured lead gen objectives")).toBeInTheDocument());
   });
 
   it("shows thinking bubble before assistant reply renders", async () => {
@@ -418,8 +407,6 @@ describe("StudioChat", () => {
       <StudioChat
         automationVersionId="version-thinking"
         blueprintEmpty={false}
-        onDraftBlueprint={async () => {}}
-        isDrafting={false}
       />
     );
 
@@ -431,16 +418,14 @@ describe("StudioChat", () => {
     const bubble = screen.getByTestId("thinking-bubble");
     const bubbleBody = bubble.querySelector("div.p-4");
     expect(screen.getAllByTestId("thinking-bubble")).toHaveLength(1);
-    expect(screen.getByText(/WrkCoPilot is thinking/i)).toBeInTheDocument();
-    expect(screen.getByText("Digesting what you're trying to accomplish")).toBeInTheDocument();
-    expect(screen.getByTestId("typing-dots")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/WrkCoPilot is thinking/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Analyzing your request for context")).toBeInTheDocument());
     expect(screen.queryByText("Final reply for you.")).toBeNull();
     expect(bubbleBody).not.toBeNull();
-    expect(bubbleBody).toHaveClass("bg-[#F3F4F6]");
+    expect(bubbleBody).toHaveClass("bg-white");
 
     await waitFor(() => expect(screen.getByText("Final reply for you.")).toBeInTheDocument());
     await waitFor(() => expect(screen.queryByTestId("thinking-bubble")).toBeNull());
-    await waitFor(() => expect(screen.queryByTestId("typing-dots")).toBeNull());
   });
 
   it("shows default bullets until server thinking steps arrive", async () => {
@@ -485,8 +470,6 @@ describe("StudioChat", () => {
       <StudioChat
         automationVersionId="version-default-thinking"
         blueprintEmpty={false}
-        onDraftBlueprint={async () => {}}
-        isDrafting={false}
       />
     );
 
@@ -495,9 +478,9 @@ describe("StudioChat", () => {
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 
     await waitFor(() => expect(screen.getByTestId("thinking-bubble")).toBeInTheDocument());
-    expect(screen.getByText("Digesting what you're trying to accomplish")).toBeInTheDocument();
-    expect(screen.getByText("Mapping how the systems should connect")).toBeInTheDocument();
-    expect(screen.getByText("Drafting the next blueprint updates")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Digesting what you're trying to accomplish")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Mapping how the systems should connect")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Drafting the next blueprint updates")).toBeInTheDocument());
 
     await waitFor(() => expect(screen.getByText("Here you go.")).toBeInTheDocument());
     await waitFor(() => expect(screen.queryByTestId("thinking-bubble")).toBeNull());

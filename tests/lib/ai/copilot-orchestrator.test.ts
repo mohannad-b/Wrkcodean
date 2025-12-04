@@ -132,6 +132,16 @@ describe("generateThinkingSteps", () => {
     expect(steps).toHaveLength(2);
     expect(steps[0].label).toMatch(/validating/i);
   });
+
+  it("references systems from the latest user message", () => {
+    const steps = generateThinkingSteps("flow", "Route leads from Salesforce into HubSpot", null);
+    expect(steps[1].label).toBe("Connecting Salesforce and HubSpot");
+  });
+
+  it("highlights approval logic when mentioned", () => {
+    const steps = generateThinkingSteps("details", "If it's over $5K we need to approve manually", null);
+    expect(steps[0].label).toBe("Analyzing approval threshold logic");
+  });
 });
 
 describe("runCopilotOrchestration", () => {
@@ -183,6 +193,21 @@ Quick clarifications:
     expect(result.blueprintUpdates?.summary).toBe("Sync invoices into NetSuite");
     expect(result.thinkingSteps).toHaveLength(3);
     expect(result.conversationPhase).toBe("flow");
+  });
+
+  it("derives fallback blueprint updates when the model omits JSON", async () => {
+    callCopilotChatMock.mockResolvedValue(`Here is the plan:
+1. Watch the inbox for invoices
+2. Extract key fields
+3. Push into NetSuite and alert RevOps`);
+
+    const result = await runCopilotOrchestration({
+      blueprint: createEmptyBlueprint(),
+      messages: [{ role: "user", content: "Import invoices" }],
+    });
+
+    expect(result.blueprintUpdates?.steps).toBeDefined();
+    expect(result.blueprintUpdates?.steps).toHaveLength(3);
   });
 });
 

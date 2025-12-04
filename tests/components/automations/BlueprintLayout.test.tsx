@@ -12,8 +12,6 @@ describe("Blueprint workspace shell", () => {
           <StudioChat
             automationVersionId={null}
             blueprintEmpty
-            onDraftBlueprint={async () => {}}
-            isDrafting={false}
           />
         </div>
         <div className="flex-1 border">

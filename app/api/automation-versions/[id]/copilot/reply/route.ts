@@ -69,6 +69,12 @@ export async function POST(_request: Request, { params }: { params: { id: string
     }
 
     copilotDebug("reply.orchestration", orchestrationResult);
+    if (orchestrationResult.blueprintUpdates) {
+      console.log("📦 Sending blueprint updates:", {
+        stepCount: orchestrationResult.blueprintUpdates.steps?.length ?? 0,
+        steps: orchestrationResult.blueprintUpdates.steps?.map((step) => step.id),
+      });
+    }
 
     const assistantMessage = await createCopilotMessage({
       tenantId: session.tenantId,
