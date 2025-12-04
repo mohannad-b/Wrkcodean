@@ -8,7 +8,7 @@ describe("CopilotReadinessCard", () => {
     const analysis = createEmptyCopilotAnalysisState();
     analysis.readiness.score = 72;
     analysis.sections.business_requirements = {
-      textSummary: "Need live Kayak pricing feed.",
+      textSummary: "Need live booking-platform pricing feed.",
       confidence: "medium",
       source: "user_input",
       missingInfo: [],
@@ -23,7 +23,7 @@ describe("CopilotReadinessCard", () => {
       {
         id: "todo-1",
         category: "systems_access",
-        description: "Connect Kayak API credentials.",
+        description: "Connect booking-platform API credentials.",
         status: "open",
       },
       {
@@ -44,7 +44,7 @@ describe("CopilotReadinessCard", () => {
 
     expect(screen.getByText("72/100")).toBeInTheDocument();
     expect(screen.getByText("2/8")).toBeInTheDocument();
-    expect(screen.getByText(/Connect Kayak API credentials/i)).toBeInTheDocument();
+    expect(screen.getByText(/Connect booking-platform API credentials/i)).toBeInTheDocument();
     expect(screen.getByText(/Confirm fields needed/)).toBeInTheDocument();
   });
 });

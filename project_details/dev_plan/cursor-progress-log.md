@@ -2,6 +2,16 @@
 
 Newest updates appear first. Each entry includes the timestamp (Pacific Time) when the work was logged.
 
+## 2025-12-03 · 14:20 PT
+
+### Phase 1 – Copilot Reliability & UX Polish
+- ✅ Hardened the readiness pass so truncated OpenAI payloads get salvaged (new `safeParsePossiblyTruncatedJson`) and never wipe the previous `CopilotAnalysisState`.
+- ✅ Added deterministic “next question” logic that pulls directly from blocking todos + section `missingInfo`, keeping StudioChat follow-ups tied to the actual gaps in the blueprint.
+- ✅ Expanded todo categories + unit coverage around the orchestrator helpers so future cleanup efforts can iterate safely.
+
+### Next Steps
+- [ ] Investigate the hydration mismatch and broader Studio cleanup items we scoped for today now that the Copilot brain is stable.
+
 ## 2025-12-03 · 11:35 PT
 
 ### Phase 1 – Copilot Blueprint Brain

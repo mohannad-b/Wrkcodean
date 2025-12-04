@@ -1,4 +1,6 @@
 import { BLUEPRINT_SECTION_KEYS, type BlueprintSectionKey } from "./types";
+import type { RequirementsState } from "@/lib/requirements/state";
+import type { SuggestedNextStep } from "@/lib/requirements/planner";
 
 export type CopilotSectionConfidence = "low" | "medium" | "high";
 export type CopilotSectionSource = "user_input" | "ai_inferred" | "confirmed";
@@ -58,6 +60,8 @@ export interface CopilotAnalysisState {
   readiness: CopilotReadiness;
   version?: string;
   lastUpdatedAt?: string;
+  requirementsState?: RequirementsState;
+  suggestedNextSteps?: SuggestedNextStep[];
 }
 
 export const COPILOT_ANALYSIS_VERSION = "v1";
@@ -94,6 +98,20 @@ export function cloneCopilotAnalysisState(state: CopilotAnalysisState): CopilotA
     },
     version: state.version ?? COPILOT_ANALYSIS_VERSION,
     lastUpdatedAt: state.lastUpdatedAt ?? new Date().toISOString(),
+    requirementsState: state.requirementsState
+      ? {
+          blueprintId: state.requirementsState.blueprintId,
+          items: Object.fromEntries(
+            Object.entries(state.requirementsState.items).map(([key, value]) => [
+              key,
+              { ...value },
+            ])
+          ),
+        }
+      : undefined,
+    suggestedNextSteps: state.suggestedNextSteps
+      ? state.suggestedNextSteps.map((step) => ({ ...step }))
+      : undefined,
   };
 }
 

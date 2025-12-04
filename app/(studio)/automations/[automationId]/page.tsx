@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { Loader2, RefreshCw, Send, StickyNote, Plus, Users, Play, Edit3, Sparkles, AlertTriangle, Calendar, Clock, DollarSign, Zap, CheckCircle2, ArrowUpRight, ArrowRight, History, Activity } from "lucide-react";
+import { Loader2, RefreshCw, Send, StickyNote, Plus, Users, Play, Edit3, Sparkles, AlertTriangle, Calendar, Clock, DollarSign, Zap, CheckCircle2, ArrowUpRight, ArrowRight, History } from "lucide-react";
 import type { Connection, Node, Edge, EdgeChange } from "reactflow";
 import { StudioChat, type CopilotMessage } from "@/components/automations/StudioChat";
 import { StudioInspector } from "@/components/automations/StudioInspector";
@@ -20,7 +20,7 @@ import { SettingsTab } from "@/components/automations/SettingsTab";
 import { TestTab } from "@/components/automations/TestTab";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import type { Blueprint, BlueprintSectionKey, BlueprintStep } from "@/lib/blueprint/types";
-import { BLUEPRINT_SECTION_TITLES, BLUEPRINT_SECTION_KEYS } from "@/lib/blueprint/types";
+import { BLUEPRINT_SECTION_KEYS, BLUEPRINT_SECTION_TITLES } from "@/lib/blueprint/types";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
 import { isBlueprintEffectivelyEmpty } from "@/lib/blueprint/utils";
 import { blueprintToNodes, blueprintToEdges, addConnection, removeConnection } from "@/lib/blueprint/canvas-utils";
@@ -30,7 +30,6 @@ import { cn } from "@/lib/utils";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
 import { VersionSelector, type VersionOption } from "@/components/ui/VersionSelector";
 import { Badge } from "@/components/ui/badge";
-import type { CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BUILD_STATUS_ORDER, type BuildStatus } from "@/lib/build-status/types";
 
@@ -255,7 +254,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [isBlueprintDirty, setBlueprintDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingNotes, setSavingNotes] = useState(false);
-  const [savingBlueprint, setSavingBlueprint] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
   const [creatingVersion, setCreatingVersion] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -266,9 +264,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [hasSelectedStep, setHasSelectedStep] = useState(false);
   const [showStepHelper, setShowStepHelper] = useState(false);
   const [isContributorMode, setIsContributorMode] = useState(false);
-  const [copilotAnalysis, setCopilotAnalysis] = useState<CopilotAnalysisState | null>(null);
-  const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [proceedingToBuild, setProceedingToBuild] = useState(false);
   const completionRef = useRef<ReturnType<typeof getBlueprintCompletionState> | null>(null);
   const preserveSelectionRef = useRef(false);
@@ -333,31 +328,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     fetchAutomation();
   }, [fetchAutomation]);
 
-  const fetchCopilotAnalysis = useCallback(
-    async (automationVersionId: string | null) => {
-      if (!automationVersionId) {
-        setCopilotAnalysis(null);
-        return;
-      }
-      setAnalysisLoading(true);
-      setAnalysisError(null);
-      try {
-        const response = await fetch(`/api/automation-versions/${automationVersionId}/copilot/analysis`, { cache: "no-store" });
-        if (!response.ok) {
-          throw new Error("Unable to load Copilot analysis");
-        }
-        const data = (await response.json()) as { analysis: CopilotAnalysisState };
-        setCopilotAnalysis(data.analysis);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to load Copilot analysis";
-        setAnalysisError(message);
-      } finally {
-        setAnalysisLoading(false);
-      }
-    },
-    []
-  );
-
   const selectedVersion = useMemo(() => {
     if (!automation || !selectedVersionId) {
       return automation?.versions[0] ?? null;
@@ -368,15 +338,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const activeVersionId = selectedVersion?.id ?? null;
 
   useEffect(() => {
-    void fetchCopilotAnalysis(activeVersionId);
-  }, [fetchCopilotAnalysis, activeVersionId]);
-
-
-  useEffect(() => {
     if (selectedVersion) {
       setNotes(selectedVersion.intakeNotes ?? "");
       const nextBlueprint = selectedVersion.blueprintJson ? cloneBlueprint(selectedVersion.blueprintJson) : createEmptyBlueprint();
-      setBlueprint(nextBlueprint);
+      const safeBlueprint = nextBlueprint ?? createEmptyBlueprint();
+      setBlueprint(safeBlueprint);
       setBlueprintError(null);
       setBlueprintDirty(false);
 
@@ -384,7 +350,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       if (shouldPreserveSelection) {
         preserveSelectionRef.current = false;
         if (selectedStepId) {
-          const exists = nextBlueprint.steps.some((step) => step.id === selectedStepId);
+          const exists = safeBlueprint.steps.some((step) => step.id === selectedStepId);
           if (!exists) {
             setSelectedStepId(null);
             setHasSelectedStep(false);
@@ -407,7 +373,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     const version = automation?.versions.find((v) => v.id === versionId);
     setNotes(version?.intakeNotes ?? "");
     const nextBlueprint = version?.blueprintJson ? cloneBlueprint(version.blueprintJson) : createEmptyBlueprint();
-    setBlueprint(nextBlueprint);
+    setBlueprint(nextBlueprint ?? createEmptyBlueprint());
     setBlueprintDirty(false);
     setBlueprintError(null);
     setSelectedStepId(null);
@@ -448,7 +414,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         return;
       }
       const payload = { ...blueprint, ...overrides, updatedAt: new Date().toISOString() };
-      setSavingBlueprint(true);
       setBlueprintError(null);
       try {
         const response = await fetch(`/api/automation-versions/${selectedVersion.id}`, {
@@ -470,7 +435,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         setBlueprintError(message);
         toast({ title: "Unable to save blueprint", description: message, variant: "error" });
       } finally {
-        setSavingBlueprint(false);
       }
     },
     [blueprint, fetchAutomation, selectedVersion, toast]
@@ -601,12 +565,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [applyBlueprintUpdate]
   );
 
-  const handleCopilotAnalysis = useCallback((analysis: CopilotAnalysisState) => {
-    setAnalysisError(null);
-    setAnalysisLoading(false);
-    setCopilotAnalysis(analysis);
-  }, []);
-
   const handleStepChange = useCallback(
     (stepId: string, patch: Partial<BlueprintStep>) => {
       applyBlueprintUpdate((current) => ({
@@ -678,24 +636,22 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [blueprint, selectedStepId]
   );
   const blueprintIsEmpty = useMemo(() => isBlueprintEffectivelyEmpty(blueprint), [blueprint]);
-  const readinessScore = copilotAnalysis?.readiness?.score ?? 0;
-  const readinessStateItems = copilotAnalysis?.readiness?.stateItemsSatisfied ?? [];
-  const analysisSectionCompletion = useMemo(() => {
-    const result = new Map<BlueprintSectionKey, boolean>();
-    if (copilotAnalysis?.sections) {
-      for (const key of Object.keys(copilotAnalysis.sections) as BlueprintSectionKey[]) {
-        const snapshot = copilotAnalysis.sections[key];
-        result.set(
-          key,
-          Boolean(snapshot?.textSummary?.trim()) && snapshot?.confidence !== "low"
-        );
-      }
+  const sectionCompletionMap = useMemo(() => {
+    const map = new Map<BlueprintSectionKey, boolean>();
+    if (!blueprint) {
+      BLUEPRINT_SECTION_KEYS.forEach((key) => map.set(key, false));
+      return map;
     }
-    const flowCompleteSatisfied =
-      readinessScore >= 70 || readinessStateItems.includes("flow_complete");
-    result.set("flow_complete", flowCompleteSatisfied);
-    return result;
-  }, [copilotAnalysis, readinessScore, readinessStateItems]);
+    BLUEPRINT_SECTION_KEYS.forEach((key) => {
+      const section = blueprint.sections.find((entry) => entry.key === key);
+      map.set(key, Boolean(section?.content?.trim()));
+    });
+    const flowCompleteReady = (blueprint.steps?.length ?? 0) >= 3;
+    map.set("flow_complete", map.get("flow_complete") ?? flowCompleteReady);
+    return map;
+  }, [blueprint]);
+
+  const summaryComplete = Boolean(blueprint?.summary?.trim());
   const checklistItems = useMemo(
     () =>
       BASE_CHECKLIST.map((item) =>
@@ -704,29 +660,28 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
               id: item.id,
               label: item.label,
               sectionKey: item.sectionKey,
-              completed: analysisSectionCompletion.get(item.sectionKey) ?? false,
+              completed: sectionCompletionMap.get(item.sectionKey) ?? false,
             }
           : {
               id: item.id,
               label: item.label,
               sectionKey: item.sectionKey,
-              completed: Boolean(blueprint?.summary?.trim()),
+              completed: summaryComplete,
             }
       ),
-    [blueprint?.summary, analysisSectionCompletion]
+    [summaryComplete, sectionCompletionMap]
   );
-  const readyForBuild = readinessScore >= 70;
+  const readyForBuild =
+    summaryComplete &&
+    (blueprint?.steps?.length ?? 0) >= 3 &&
+    Array.from(sectionCompletionMap.values()).every(Boolean);
   const alreadyInBuild = isAtOrBeyondBuild(selectedVersion?.status ?? null, "BuildInProgress");
-  const proceedDisabledReason = analysisError
-    ? "Copilot readiness unavailable. Try again after the next update."
-    : !readyForBuild
-    ? "Reach a readiness score of 70 or higher to proceed."
+  const proceedDisabledReason = !readyForBuild
+    ? "Complete the blueprint summary, sections, and at least three steps to proceed."
     : alreadyInBuild
     ? "This version is already in a build phase."
     : !selectedVersion?.id
     ? "Select an automation version first."
-    : analysisLoading
-    ? "Syncing readiness…"
     : null;
   const proceedButtonDisabled = Boolean(proceedDisabledReason) || proceedingToBuild;
 
@@ -758,12 +713,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setProceedingToBuild(false);
     }
   }, [selectedVersion?.id, proceedButtonDisabled, alreadyInBuild, fetchAutomation, toast]);
-  const totalBlueprintSections = BLUEPRINT_SECTION_KEYS.length;
-  const sectionsCoveredCount = useMemo(
-    () => checklistItems.filter((item) => item.sectionKey && item.completed).length,
-    [checklistItems]
-  );
-
   useEffect(() => {
     if (!blueprint) {
       return;
@@ -1091,7 +1040,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             isDrafting={draftingBlueprint}
             lastError={chatError}
             onBlueprintUpdates={handleBlueprintAIUpdates}
-            onCopilotAnalysis={handleCopilotAnalysis}
           />
         </div>
 
@@ -1174,7 +1122,9 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 variant="ghost"
                 size="sm"
                 className="text-xs text-gray-400 hover:text-[#0A0A0A]"
-                onClick={fetchAutomation}
+                onClick={() => {
+                  void fetchAutomation();
+                }}
               >
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Refresh

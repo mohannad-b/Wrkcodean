@@ -4,13 +4,11 @@ import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/contex
 import { listCopilotMessages, createCopilotMessage } from "@/lib/services/copilot-messages";
 import { OpenAIError } from "@/lib/ai/openai-client";
 import { getAutomationVersionDetail } from "@/lib/services/automations";
-import { fromDbAutomationStatus, type AutomationLifecycleStatus } from "@/lib/automations/status";
 import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { parseBlueprint } from "@/lib/blueprint/schema";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import { runCopilotOrchestration } from "@/lib/ai/copilot-orchestrator";
-import { getCopilotAnalysis, upsertCopilotAnalysis } from "@/lib/services/copilot-analysis";
 
 const MAX_USER_MESSAGE_LENGTH = 4000;
 const LONG_INPUT_RESPONSE =
@@ -45,23 +43,22 @@ export async function POST(_request: Request, { params }: { params: { id: string
         createdBy: null,
       });
       copilotDebug("reply.long_input", { messageId: assistantMessage.id, content: assistantMessage.content });
-      return NextResponse.json({ message: assistantMessage, blueprintUpdates: null, analysis: null, thinkingSteps: [] });
+      return NextResponse.json({
+        message: assistantMessage,
+        blueprintUpdates: null,
+        thinkingSteps: [],
+        conversationPhase: "discovery",
+      });
     }
 
     const blueprint = parseBlueprint(versionDetail.version.blueprintJson) ?? createEmptyBlueprint();
-    const previousAnalysis = await getCopilotAnalysis({
-      tenantId: session.tenantId,
-      automationVersionId: params.id,
-    });
 
     let orchestrationResult: Awaited<ReturnType<typeof runCopilotOrchestration>>;
     try {
       orchestrationResult = await runCopilotOrchestration({
         blueprint,
         messages: history,
-        previousAnalysis,
         automationName: versionDetail.automation?.name ?? undefined,
-        automationStatus: formatAutomationStatusForPrompt(versionDetail.version.status),
       });
     } catch (error) {
       console.error("Copilot orchestration failed:", error);
@@ -82,40 +79,15 @@ export async function POST(_request: Request, { params }: { params: { id: string
     });
     copilotDebug("reply.persisted_message", { messageId: assistantMessage.id, content: assistantMessage.content });
 
-    await upsertCopilotAnalysis({
-      tenantId: session.tenantId,
-      automationVersionId: params.id,
-      analysis: orchestrationResult.analysis,
-    });
-
     return NextResponse.json({
       message: assistantMessage,
       blueprintUpdates: orchestrationResult.blueprintUpdates,
-      analysis: orchestrationResult.analysis,
       thinkingSteps: orchestrationResult.thinkingSteps,
+      conversationPhase: orchestrationResult.conversationPhase,
     });
   } catch (error) {
     return handleApiError(error);
   }
-}
-
-const COPILOT_STATUS_LABELS: Record<AutomationLifecycleStatus, string> = {
-  IntakeInProgress: "Intake in Progress",
-  NeedsPricing: "Needs Pricing",
-  AwaitingClientApproval: "Awaiting Client Approval",
-  BuildInProgress: "Build in Progress",
-  QATesting: "QA & Testing",
-  Live: "Live",
-  Archived: "Archived",
-};
-
-function formatAutomationStatusForPrompt(status?: string | null): string | undefined {
-  if (!status) {
-    return undefined;
-  }
-
-  const normalized = fromDbAutomationStatus(status);
-  return COPILOT_STATUS_LABELS[normalized] ?? normalized;
 }
 
 function findLatestUserMessage(

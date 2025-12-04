@@ -27,7 +27,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ExceptionModal } from "@/components/modals/ExceptionModal";
 import { SystemPickerModal } from "@/components/modals/SystemPickerModal";
-import type { BlueprintStep } from "@/lib/blueprint/types";
+import type { BlueprintRiskLevel, BlueprintStep } from "@/lib/blueprint/types";
 import { cn } from "@/lib/utils";
 
 interface StudioInspectorProps {
@@ -52,7 +52,7 @@ const RESPONSIBILITY_TAB_MAP: Record<BlueprintStep["responsibility"], Responsibi
 };
 
 const TIMING_OPTIONS = ["Real-time", "1 Hour", "24 Hours", "1 Week"];
-const RISK_OPTIONS: BlueprintStep["riskLevel"][] = ["Low", "Medium", "High"];
+const RISK_OPTIONS: BlueprintRiskLevel[] = ["Low", "Medium", "High"];
 const NOTIFICATION_CHANNELS = ["Slack", "Email", "SMS", "MS Teams"];
 
 const BADGE_STYLES: Record<"complete" | "warning" | "error" | "ai-suggested", string> = {
@@ -156,7 +156,8 @@ export function StudioInspector({ step, onClose, onChange, onDelete }: StudioIns
   };
 
   const timingSelectValue = TIMING_OPTIONS.includes(step.timingSla ?? "") ? step.timingSla ?? undefined : undefined;
-  const riskSelectValue = step.riskLevel && RISK_OPTIONS.includes(step.riskLevel) ? step.riskLevel : undefined;
+  const riskSelectValue: BlueprintStep["riskLevel"] | "" =
+    step.riskLevel && RISK_OPTIONS.includes(step.riskLevel) ? step.riskLevel : "";
 
   return (
     <>
@@ -429,11 +430,21 @@ export function StudioInspector({ step, onClose, onChange, onDelete }: StudioIns
                       <Label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1">
                         <AlertTriangle size={10} /> Risk Level
                       </Label>
-                      <Select value={riskSelectValue} onValueChange={(value) => handleChange({ riskLevel: value as BlueprintStep["riskLevel"] })}>
+                      <Select
+                        value={riskSelectValue}
+                        onValueChange={(value) =>
+                          handleChange({
+                            riskLevel: value ? (value as BlueprintStep["riskLevel"]) : undefined,
+                          })
+                        }
+                      >
                         <SelectTrigger className="h-8 text-xs bg-white">
                           <SelectValue placeholder={step.riskLevel || "Select risk"} />
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value="" disabled>
+                            Select risk
+                          </SelectItem>
                           {RISK_OPTIONS.map((option) => (
                             <SelectItem key={option} value={option}>
                               {option} Risk
