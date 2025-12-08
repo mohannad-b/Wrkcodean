@@ -31,6 +31,8 @@ interface StudioChatProps {
   onBlueprintUpdates?: (updates: BlueprintUpdates) => void;
   onBlueprintRefresh?: () => Promise<void> | void;
   onProgressUpdate?: (progress: BlueprintProgressSnapshot | null) => void;
+  injectedMessage?: CopilotMessage | null;
+  onInjectedMessageConsumed?: () => void;
 }
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
@@ -74,6 +76,8 @@ export function StudioChat({
   onBlueprintUpdates,
   onBlueprintRefresh,
   onProgressUpdate,
+  injectedMessage = null,
+  onInjectedMessageConsumed,
 }: StudioChatProps) {
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
   const [input, setInput] = useState("");
@@ -198,6 +202,13 @@ useEffect(() => {
   useEffect(() => {
     onConversationChange?.(durableMessages);
   }, [durableMessages, onConversationChange]);
+
+  // Accept externally injected messages (e.g., system notices)
+  useEffect(() => {
+    if (!injectedMessage) return;
+    setMessages((prev) => [...prev, injectedMessage]);
+    onInjectedMessageConsumed?.();
+  }, [injectedMessage, onInjectedMessageConsumed]);
 
   // Auto-trigger blueprint generation if there's a user message but no assistant response
   useEffect(() => {

@@ -49,6 +49,8 @@ import { blueprintToNodes, blueprintToEdges, addConnection, removeConnection, re
 import { applyBlueprintUpdates, type BlueprintUpdates as CopilotBlueprintUpdates } from "@/lib/blueprint/ai-updates";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
 import { AUTOMATION_TABS, type AutomationTab } from "@/lib/automations/tabs";
 import { VersionSelector, type VersionOption } from "@/components/ui/VersionSelector";
@@ -354,6 +356,8 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [requirementsText, setRequirementsText] = useState("");
   const [savingRequirements, setSavingRequirements] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const previousRequirementsRef = useRef<string>("");
+  const [injectedChatMessage, setInjectedChatMessage] = useState<CopilotMessage | null>(null);
   
   // Sync activeTab with URL params when they change
   useEffect(() => {
@@ -473,6 +477,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   useEffect(() => {
     setVersionTasks(selectedVersion?.tasks ?? []);
     setRequirementsText(selectedVersion?.requirementsText ?? "");
+    previousRequirementsRef.current = selectedVersion?.requirementsText ?? "";
   }, [selectedVersion?.id, selectedVersion?.tasks, selectedVersion?.requirementsText]);
 
   const taskGroups = useMemo(() => {
@@ -538,6 +543,9 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
 
   const handleSaveRequirements = async () => {
     if (!selectedVersion) return;
+    const previous = previousRequirementsRef.current ?? "";
+    const next = requirementsText ?? "";
+    const diffSummary = summarizeRequirementsDiff(previous, next);
     setSavingRequirements(true);
     setError(null);
     try {
@@ -551,6 +559,17 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         throw new Error(data.error ?? "Failed to save requirements");
       }
       await fetchAutomation();
+      previousRequirementsRef.current = next;
+      // Inject a chat notice and trigger copilot rebuild based on the latest requirements
+      setInjectedChatMessage({
+        id: `req-change-${Date.now()}`,
+        role: "assistant",
+        content: `User changes detected in requirements. Summary: ${diffSummary}\n\nUpdating flowchart now…`,
+        createdAt: new Date().toISOString(),
+        transient: true,
+      });
+      toast({ title: "Requirements saved", description: "User changes detected, updating flowchart…", variant: "success" });
+      await handleOptimizeFlow();
       toast({ title: "Requirements saved", description: "Requirements updated.", variant: "success" });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to save requirements";
@@ -1459,6 +1478,8 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             blueprintEmpty={blueprintIsEmpty}
             onBlueprintUpdates={handleBlueprintAIUpdates}
             onBlueprintRefresh={refreshAutomationPreservingSelection}
+            injectedMessage={injectedChatMessage}
+            onInjectedMessageConsumed={() => setInjectedChatMessage(null)}
           />
         </div>
 
@@ -1688,12 +1709,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             {errorBanner}
             {activeTab === "Overview" ? (
               overviewContent
-            ) : activeTab === "Tasks" ? (
-              <AutomationTasksTab
-                tasks={versionTasks}
-                blockersRemaining={blockersRemaining}
-                onViewStep={handleViewTaskStep}
-              />
             ) : activeTab === "Build Status" ? (
               <BuildStatusTab
                 status={selectedVersion?.status}
@@ -2088,6 +2103,25 @@ interface RequirementsViewProps {
   automationVersionId: string | null;
 }
 
+function summarizeRequirementsDiff(previous: string, next: string): string {
+  const prev = previous?.trim() ?? "";
+  const curr = next?.trim() ?? "";
+  if (!prev && curr) {
+    return "New requirements added.";
+  }
+  if (prev && !curr) {
+    return "Requirements cleared.";
+  }
+  if (prev === curr) {
+    return "No textual changes.";
+  }
+  const added = curr.length - prev.length;
+  const diffHint =
+    added > 0 ? `Approximately ${added} more characters.` : `Approximately ${Math.abs(added)} fewer characters.`;
+  const sample = curr.slice(0, 200).replace(/\s+/g, " ").trim();
+  return `Requirements updated. ${diffHint} Sample: "${sample}${curr.length > 200 ? "…" : ""}"`;
+}
+
 function RequirementsView({ requirementsText, onRequirementsChange, onSave, saving, automationVersionId }: RequirementsViewProps) {
   return (
     <div className="flex-1 flex flex-col h-full bg-white overflow-hidden">
@@ -2096,16 +2130,24 @@ function RequirementsView({ requirementsText, onRequirementsChange, onSave, savi
           <div>
             <h2 className="text-lg font-semibold text-gray-900 mb-2">Requirements</h2>
             <p className="text-sm text-gray-500">
-              Write a comprehensive description of your workflow in plain English. This should fully describe the process, including triggers, steps, systems involved, and desired outcomes.
+              Edit in Markdown (single view). Include triggers, steps, systems, and desired outcomes.
             </p>
           </div>
-          <Textarea
-            value={requirementsText}
-            onChange={(e) => onRequirementsChange(e.target.value)}
-            placeholder="Describe your workflow in detail. Include what triggers it, what steps are involved, what systems you use, and what the end result should be..."
-            className="min-h-[600px] resize-none font-mono text-sm bg-white"
-            disabled={!automationVersionId}
-          />
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Textarea
+              value={requirementsText}
+              onChange={(e) => onRequirementsChange(e.target.value)}
+              placeholder="Describe your workflow in detail. Markdown supported."
+              className="min-h-[600px] resize-none font-mono text-sm bg-white"
+              disabled={!automationVersionId}
+            />
+            <div className="min-h-[600px] rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-800 overflow-y-auto">
+              <ReactMarkdown remarkPlugins={[remarkGfm]} className="prose prose-sm max-w-none">
+                {requirementsText?.trim() || "_No requirements yet._"}
+              </ReactMarkdown>
+            </div>
+          </div>
         </div>
       </div>
       <div className="border-t border-gray-200 bg-gray-50 px-6 py-4 flex items-center justify-end gap-3">
