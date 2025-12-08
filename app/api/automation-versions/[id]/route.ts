@@ -18,7 +18,8 @@ type RouteParams = {
 
 type UpdatePayload = {
   intakeNotes?: unknown;
-  blueprintJson?: unknown;
+  requirementsText?: unknown;
+  workflowJson?: unknown;
 };
 
 function validateIntakeNotes(value: unknown) {
@@ -33,6 +34,22 @@ function validateIntakeNotes(value: unknown) {
   }
   if (value.length > 20000) {
     throw new ApiError(400, "intakeNotes must be 20k characters or fewer.");
+  }
+  return value;
+}
+
+function validateRequirementsText(value: unknown) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new ApiError(400, "requirementsText must be a string.");
+  }
+  if (value.length > 50000) {
+    throw new ApiError(400, "requirementsText must be 50k characters or fewer.");
   }
   return value;
 }
@@ -80,7 +97,8 @@ export async function GET(_request: Request, { params }: RouteParams) {
         versionLabel: detail.version.versionLabel,
         status: fromDbAutomationStatus(detail.version.status),
         intakeNotes: detail.version.intakeNotes,
-        blueprintJson: parseBlueprint(detail.version.blueprintJson),
+        requirementsText: detail.version.requirementsText,
+        blueprintJson: parseBlueprint(detail.version.workflowJson),
         summary: detail.version.summary,
         createdAt: detail.version.createdAt,
         updatedAt: detail.version.updatedAt,
@@ -126,9 +144,10 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
     const payload = await parsePayload(request);
     const intakeNotes = validateIntakeNotes(payload.intakeNotes);
-    const blueprintJson = validateBlueprint(payload.blueprintJson);
+    const requirementsText = validateRequirementsText(payload.requirementsText);
+    const blueprintJson = validateBlueprint(payload.workflowJson);
 
-    if (intakeNotes === undefined && blueprintJson === undefined) {
+    if (intakeNotes === undefined && requirementsText === undefined && blueprintJson === undefined) {
       throw new ApiError(400, "No valid fields provided.");
     }
 
@@ -136,19 +155,21 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     if (!existingDetail) {
       throw new ApiError(404, "Automation version not found");
     }
-    const previousBlueprint = parseBlueprint(existingDetail.version.blueprintJson);
+    const previousBlueprint = parseBlueprint(existingDetail.version.workflowJson);
 
     const updated = await updateAutomationVersionMetadata({
       tenantId: session.tenantId,
       automationVersionId: params.id,
       intakeNotes,
-      blueprintJson,
+      requirementsText,
+      workflowJson: blueprintJson,
     });
 
     const metadata: Record<string, unknown> = {
       updatedFields: {
         intakeNotes: intakeNotes !== undefined,
-        blueprintJson: blueprintJson !== undefined,
+        requirementsText: requirementsText !== undefined,
+        workflowJson: blueprintJson !== undefined,
       },
     };
 
@@ -172,7 +193,8 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       version: {
         id: updated.id,
         intakeNotes: updated.intakeNotes,
-        blueprintJson: updated.blueprintJson,
+        requirementsText: updated.requirementsText,
+        blueprintJson: updated.workflowJson,
         updatedAt: updated.updatedAt,
       },
     });

@@ -1,16 +1,110 @@
 import { NextResponse } from "next/server";
+import OpenAI from "openai";
 import { can } from "@/lib/auth/rbac";
 import { handleApiError, requireTenantSession, ApiError } from "@/lib/api/context";
 import { listAutomationsForTenant, createAutomationWithInitialVersion } from "@/lib/services/automations";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
 import { logAudit } from "@/lib/audit/log";
+import { createCopilotMessage } from "@/lib/services/copilot-messages";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY ?? "",
+});
 
 type CreateAutomationPayload = {
   name?: unknown;
   description?: unknown;
   intakeNotes?: unknown;
+  automationType?: unknown;
+  processDescription?: unknown;
+  industry?: unknown;
 };
+
+async function generateAutomationNameAndDescription(
+  automationType: string,
+  processDescription: string,
+  industry: string
+): Promise<{ name: string; description: string }> {
+  if (!process.env.OPENAI_API_KEY) {
+    // Fallback if OpenAI is not configured
+    const fallbackName = processDescription.slice(0, 50).trim() || "New Automation";
+    return {
+      name: fallbackName,
+      description: `Automation for ${industry}: ${processDescription.slice(0, 200)}`,
+    };
+  }
+
+  const typeContext = {
+    starter: "The user wants AI to recommend their whole process from scratch. They may not know all the steps.",
+    intermediate: "The user has a general idea of their process and wants AI to map it out in more detail.",
+    advanced: "The user knows their steps inside out and wants AI to optimize their existing workflow.",
+  }[automationType] || "The user wants to automate a process.";
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `You are a helpful assistant that generates concise, professional automation names and descriptions for business workflows.
+
+Generate:
+1. A short, clear automation name (2-5 words max, no "Automation" suffix)
+2. A brief description (1-2 sentences) explaining what the automation does
+
+Be specific and use business-friendly language.`,
+        },
+        {
+          role: "user",
+          content: `Context: ${typeContext}
+
+Industry: ${industry}
+
+Process Description:
+${processDescription}
+
+Generate a name and description for this automation. Return ONLY valid JSON in this format:
+{
+  "name": "Short automation name",
+  "description": "Brief description of what this automation does"
+}`,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 200,
+    });
+
+    const content = completion.choices[0]?.message?.content?.trim();
+    if (!content) {
+      throw new Error("OpenAI returned empty response");
+    }
+
+    // Try to parse JSON from the response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        name: parsed.name || processDescription.slice(0, 50).trim() || "New Automation",
+        description: parsed.description || `Automation for ${industry}`,
+      };
+    }
+
+    // Fallback if JSON parsing fails
+    const fallbackName = processDescription.slice(0, 50).trim() || "New Automation";
+    return {
+      name: fallbackName,
+      description: content.slice(0, 300) || `Automation for ${industry}`,
+    };
+  } catch (error) {
+    // Fallback on error
+    const fallbackName = processDescription.slice(0, 50).trim() || "New Automation";
+    return {
+      name: fallbackName,
+      description: `Automation for ${industry}: ${processDescription.slice(0, 200)}`,
+    };
+  }
+}
 
 async function parsePayload(request: Request): Promise<CreateAutomationPayload> {
   try {
@@ -37,6 +131,14 @@ export async function GET() {
         description: automation.description,
         createdAt: automation.createdAt,
         updatedAt: automation.updatedAt,
+        creator: automation.creator
+          ? {
+              id: automation.creator.id,
+              name: automation.creator.name,
+              email: automation.creator.email,
+              avatarUrl: automation.creator.avatarUrl,
+            }
+          : null,
         latestVersion: automation.latestVersion
           ? {
               id: automation.latestVersion.id,
@@ -72,18 +174,45 @@ export async function POST(request: Request) {
     }
 
     const payload = await parsePayload(request);
-    const name = typeof payload.name === "string" ? payload.name.trim() : "";
-    const description =
-      typeof payload.description === "string" && payload.description.trim().length > 0
-        ? payload.description.trim()
-        : null;
-    const intakeNotes =
-      typeof payload.intakeNotes === "string" && payload.intakeNotes.trim().length > 0
-        ? payload.intakeNotes.trim()
-        : null;
+    
+    // Check if this is the new flow (with automationType, processDescription, industry)
+    const automationType = typeof payload.automationType === "string" ? payload.automationType : null;
+    const processDescription = typeof payload.processDescription === "string" ? payload.processDescription.trim() : null;
+    const industry = typeof payload.industry === "string" ? payload.industry.trim() : null;
 
-    if (!name) {
-      throw new ApiError(400, "name is required");
+    let name: string;
+    let description: string | null;
+    let intakeNotes: string | null;
+
+    if (automationType && processDescription && industry) {
+      // New flow: Generate name and description via OpenAI
+      const generated = await generateAutomationNameAndDescription(automationType, processDescription, industry);
+      name = generated.name;
+      description = generated.description;
+      
+      // Store the full context in intake notes
+      const typeLabel = {
+        starter: "Starter",
+        intermediate: "Intermediate",
+        advanced: "Advanced",
+      }[automationType] || automationType;
+      
+      intakeNotes = `Automation Type: ${typeLabel}\nIndustry: ${industry}\n\nProcess Description:\n${processDescription}`;
+    } else {
+      // Legacy flow: Use provided name/description
+      name = typeof payload.name === "string" ? payload.name.trim() : "";
+      description =
+        typeof payload.description === "string" && payload.description.trim().length > 0
+          ? payload.description.trim()
+          : null;
+      intakeNotes =
+        typeof payload.intakeNotes === "string" && payload.intakeNotes.trim().length > 0
+          ? payload.intakeNotes.trim()
+          : null;
+
+      if (!name) {
+        throw new ApiError(400, "name is required");
+      }
     }
 
     const { automation, version } = await createAutomationWithInitialVersion({
@@ -92,7 +221,27 @@ export async function POST(request: Request) {
       name,
       description,
       intakeNotes,
+      requirementsText: automationType && processDescription ? processDescription : null,
     });
+
+    // If this is the new flow, create an initial copilot message with the context
+    if (automationType && processDescription && industry) {
+      const typeContext = {
+        starter: "I want you to recommend my whole process from scratch. I may not know all the steps, so please suggest a complete workflow based on what I'm trying to accomplish.",
+        intermediate: "I have a general idea of my process and want you to map it out in more detail. Help me identify all the steps, systems, and decision points.",
+        advanced: "I know my steps inside out and want you to optimize my existing workflow. Review what I've described and suggest improvements, optimizations, and best practices.",
+      }[automationType] || "";
+
+      const initialMessage = `I'm working in the ${industry} industry. ${typeContext}\n\nHere's what I want to automate:\n\n${processDescription}\n\nPlease help me build this automation.`;
+
+      await createCopilotMessage({
+        tenantId: session.tenantId,
+        automationVersionId: version.id,
+        role: "user",
+        content: initialMessage,
+        createdBy: session.userId,
+      });
+    }
 
     await logAudit({
       tenantId: session.tenantId,

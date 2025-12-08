@@ -16,11 +16,15 @@ import { applyStepNumbers } from "@/lib/blueprint/step-numbering";
 import { parseCommand, isDirectCommand } from "@/lib/blueprint/command-parser";
 import { executeCommand } from "@/lib/blueprint/command-executor";
 import { db } from "@/db";
-import { automationVersions, tasks, type Task, type TaskMetadata } from "@/db/schema";
+import { automationVersions } from "@/db/schema";
 import { createCopilotMessage } from "@/lib/services/copilot-messages";
 import { determineConversationPhase, generateThinkingSteps } from "@/lib/ai/copilot-orchestrator";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { diffBlueprint } from "@/lib/blueprint/diff";
+import { syncAutomationTasks } from "@/lib/blueprint/task-sync";
+import { evaluateBlueprintProgress } from "@/lib/ai/blueprint-progress";
+import { createEmptyCopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
+import { getCopilotAnalysis, upsertCopilotAnalysis } from "@/lib/services/copilot-analysis";
 
 const DraftRequestSchema = z.object({
   messages: z
@@ -93,7 +97,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     const contextSummary = buildConversationSummary(normalizedMessages, payload.intakeNotes ?? detail.version.intakeNotes);
-    const currentBlueprint = parseBlueprint(detail.version.blueprintJson) ?? createEmptyBlueprint();
+    const currentBlueprint = parseBlueprint(detail.version.workflowJson) ?? createEmptyBlueprint();
     const userMessageContent =
       latestUserMessage?.content ??
       normalizedMessages.find((message) => message.role === "user")?.content ??
@@ -104,6 +108,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     let commandExecuted = false;
     let blueprintWithTasks: Blueprint;
     let aiTasks: AITask[] = [];
+    let updatedRequirementsText: string | null | undefined = undefined;
 
     if (directCommand && latestUserMessage) {
       commandExecuted = true;
@@ -141,6 +146,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
         tasks: generatedTasks,
         chatResponse,
         followUpQuestion,
+        sanitizationSummary,
+        requirementsText: updatedRequirementsText,
       } = await buildBlueprintFromChat({
         userMessage: userMessageContent,
         currentBlueprint,
@@ -148,6 +155,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           role: message.role,
           content: message.content,
         })),
+        requirementsText: detail.version.requirementsText,
       });
 
       const numberedBlueprint = applyStepNumbers(aiGeneratedBlueprint);
@@ -175,6 +183,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         followUpQuestion: trimmedFollowUp,
         stepCount: blueprintWithTasks.steps.length,
         taskCount: aiTasks.length,
+        sanitizationSummary,
       });
     }
 
@@ -184,12 +193,19 @@ export async function POST(request: Request, { params }: { params: { id: string 
       updatedAt: new Date().toISOString(),
     });
 
+    const updatePayload: { workflowJson: Blueprint; requirementsText?: string | null; updatedAt: Date } = {
+      workflowJson: validatedBlueprint,
+      updatedAt: new Date(),
+    };
+    
+    // Update requirements text if AI provided an update (non-empty string)
+    if (commandExecuted === false && updatedRequirementsText !== undefined && typeof updatedRequirementsText === 'string' && updatedRequirementsText.trim().length > 0) {
+      updatePayload.requirementsText = updatedRequirementsText.trim();
+    }
+
     const [savedVersion] = await db
       .update(automationVersions)
-      .set({
-        blueprintJson: validatedBlueprint,
-        updatedAt: new Date(),
-      })
+      .set(updatePayload)
       .where(eq(automationVersions.id, params.id))
       .returning();
 
@@ -233,9 +249,42 @@ export async function POST(request: Request, { params }: { params: { id: string 
       });
     }
 
+    const completionState = getBlueprintCompletionState(validatedBlueprint);
+    let progressSnapshot = null;
+    try {
+      progressSnapshot = await evaluateBlueprintProgress({
+        blueprint: validatedBlueprint,
+        completionState,
+        latestUserMessage: latestUserMessage?.content ?? null,
+      });
+    } catch (error) {
+      copilotDebug("draft_blueprint.progress_eval_failed", error instanceof Error ? error.message : error);
+    }
+
+    if (progressSnapshot) {
+      try {
+        const existingAnalysis =
+          (await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id })) ??
+          createEmptyCopilotAnalysisState();
+        const nextAnalysis = {
+          ...existingAnalysis,
+          progress: progressSnapshot,
+          lastUpdatedAt: new Date().toISOString(),
+        };
+        await upsertCopilotAnalysis({
+          tenantId: session.tenantId,
+          automationVersionId: params.id,
+          analysis: nextAnalysis,
+        });
+      } catch (analysisError) {
+        copilotDebug("draft_blueprint.progress_persist_failed", analysisError instanceof Error ? analysisError.message : analysisError);
+      }
+    }
+
     return NextResponse.json({
       blueprint: validatedBlueprint,
-      completion: getBlueprintCompletionState(validatedBlueprint),
+      completion: completionState,
+      progress: progressSnapshot,
       prompt: commandExecuted
         ? null
         : {
@@ -306,150 +355,4 @@ function buildConversationSummary(messages: CopilotMessage[], intakeNotes?: stri
   return summaryParts.join("\n");
 }
 
-type TaskAssignmentMap = Record<string, string[]>;
-
-async function syncAutomationTasks({
-  tenantId,
-  automationVersionId,
-  aiTasks,
-  blueprint,
-}: {
-  tenantId: string;
-  automationVersionId: string;
-  aiTasks: AITask[];
-  blueprint: Blueprint;
-}): Promise<TaskAssignmentMap> {
-  const assignments: TaskAssignmentMap = {};
-  blueprint.steps.forEach((step) => {
-    if (step.taskIds?.length) {
-      assignments[step.id] = [...step.taskIds];
-    }
-  });
-
-  if (aiTasks.length === 0) {
-    return assignments;
-  }
-
-  const existingTasks: Task[] = await db
-    .select()
-    .from(tasks)
-    .where(and(eq(tasks.tenantId, tenantId), eq(tasks.automationVersionId, automationVersionId)));
-
-  const stepIdByNumber = new Map<string, string>();
-  blueprint.steps.forEach((step) => {
-    if (step.stepNumber) {
-      stepIdByNumber.set(step.stepNumber, step.id);
-    }
-  });
-
-  for (const aiTask of aiTasks) {
-    const title = aiTask.title?.trim();
-    if (!title) {
-      continue;
-    }
-    const normalizedTitle = title.toLowerCase();
-    const normalizedSystemType = aiTask.systemType?.trim().toLowerCase();
-    const relatedStepNumbers = Array.isArray(aiTask.relatedSteps)
-      ? aiTask.relatedSteps
-          .map((step) => step?.trim())
-          .filter((value): value is string => Boolean(value))
-      : [];
-    const relatedStepIds = relatedStepNumbers
-      .map((stepNumber) => stepIdByNumber.get(stepNumber))
-      .filter((value): value is string => Boolean(value));
-
-    const metadata: TaskMetadata = {
-      systemType: normalizedSystemType,
-      relatedSteps: relatedStepNumbers,
-      isBlocker: mapTaskPriority(aiTask.priority) === "blocker",
-    };
-
-    const match = existingTasks.find((task) => {
-      const taskSystem = task.metadata?.systemType?.toLowerCase();
-      return task.title.toLowerCase() === normalizedTitle && taskSystem === normalizedSystemType;
-    });
-
-    let taskId: string;
-    if (match) {
-      const mergedRelatedSteps = Array.from(
-        new Set([...(match.metadata?.relatedSteps ?? []), ...relatedStepNumbers])
-      );
-      const shouldUpdate =
-        match.description !== (aiTask.description ?? match.description) ||
-        match.priority !== mapTaskPriority(aiTask.priority) ||
-        (match.metadata?.systemType ?? undefined) !== normalizedSystemType ||
-        (match.metadata?.isBlocker ?? false) !== metadata.isBlocker ||
-        mergedRelatedSteps.length !== (match.metadata?.relatedSteps ?? []).length;
-
-      if (shouldUpdate) {
-        await db
-          .update(tasks)
-          .set({
-            description: aiTask.description ?? match.description,
-            priority: mapTaskPriority(aiTask.priority),
-            metadata: {
-              ...match.metadata,
-              systemType: normalizedSystemType,
-              relatedSteps: mergedRelatedSteps,
-              isBlocker: metadata.isBlocker,
-            },
-            updatedAt: new Date(),
-          })
-          .where(eq(tasks.id, match.id));
-
-        match.description = aiTask.description ?? match.description;
-        match.priority = mapTaskPriority(aiTask.priority);
-        match.metadata = {
-          ...match.metadata,
-          systemType: normalizedSystemType,
-          relatedSteps: mergedRelatedSteps,
-          isBlocker: metadata.isBlocker,
-        };
-      }
-      taskId = match.id;
-    } else {
-      const [inserted] = await db
-        .insert(tasks)
-        .values({
-          tenantId,
-          automationVersionId,
-          title,
-          description: aiTask.description ?? "",
-          status: "pending",
-          priority: mapTaskPriority(aiTask.priority),
-          metadata,
-        })
-        .returning();
-
-      if (!inserted) {
-        continue;
-      }
-
-      taskId = inserted.id;
-      existingTasks.push(inserted);
-    }
-
-    relatedStepIds.forEach((stepId) => {
-      if (!assignments[stepId]) {
-        assignments[stepId] = [];
-      }
-      if (!assignments[stepId].includes(taskId)) {
-        assignments[stepId].push(taskId);
-      }
-    });
-  }
-
-  return assignments;
-}
-
-function mapTaskPriority(priority?: string): "blocker" | "important" | "optional" {
-  const normalized = priority?.toLowerCase();
-  if (normalized === "blocker" || normalized === "blocking" || normalized === "critical") {
-    return "blocker";
-  }
-  if (normalized === "optional" || normalized === "nice_to_have") {
-    return "optional";
-  }
-  return "important";
-}
 

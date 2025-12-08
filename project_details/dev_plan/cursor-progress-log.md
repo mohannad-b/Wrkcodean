@@ -2,6 +2,18 @@
 
 Newest updates appear first. Each entry includes the timestamp (Pacific Time) when the work was logged.
 
+## 2025-12-04 · 17:45 PT
+
+### Phase 1 – Copilot Blueprint UX Hardening
+- ✅ Added a blueprint sanitizer + telemetry that now powers every Copilot draft as well as the new “Optimize Flow” button. The sanitizer dedupes edges, re-parents branches, removes loops, limits fan-out, and auto-attaches orphan nodes so the canvas can’t devolve into spaghetti.
+- ✅ Introduced `/copilot/optimize` and `/copilot/suggest-next-steps`. Suggestions now stream status updates to the UI while Copilot fills in the next steps; both endpoints return the sanitization summary so ops can audit what changed.
+- ✅ Updated the Studio canvas toolbar with “Optimize Flow” + “Suggest next steps” actions (loaders + status text) and removed the unused contributor toggle. React Flow interaction is fully unlocked (drag/reconnect) so humans can rearrange layouts inline.
+- ✅ Shared the sanitizer summary via toast notifications/logs, wired the shared task-sync helper into every route, and added a focused Vitest suite for the sanitizer plus the new APIs.
+
+### Next Steps
+- [ ] Layer richer merge heuristics into the sanitizer (optional merge nodes, branch summaries) and expose success/failure telemetry in the UI so ops can review how Copilot reshaped a flow.
+- [ ] Consider streaming the “Suggest next steps” UX (thinking bubble + inline diff) once we move Copilot replies to streaming.
+
 ## 2025-12-03 · 14:20 PT
 
 ### Phase 1 – Copilot Reliability & UX Polish

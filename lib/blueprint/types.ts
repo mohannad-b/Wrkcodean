@@ -1,4 +1,4 @@
-export const BLUEPRINT_SECTION_KEYS = [
+export const WORKFLOW_SECTION_KEYS = [
   "business_requirements",
   "business_objectives",
   "success_criteria",
@@ -9,9 +9,9 @@ export const BLUEPRINT_SECTION_KEYS = [
   "flow_complete",
 ] as const;
 
-export type BlueprintSectionKey = (typeof BLUEPRINT_SECTION_KEYS)[number];
+export type WorkflowSectionKey = (typeof WORKFLOW_SECTION_KEYS)[number];
 
-export const BLUEPRINT_SECTION_TITLES: Record<BlueprintSectionKey, string> = {
+export const WORKFLOW_SECTION_TITLES: Record<WorkflowSectionKey, string> = {
   business_requirements: "Business Requirements",
   business_objectives: "Business Objectives",
   success_criteria: "Success Criteria",
@@ -22,40 +22,43 @@ export const BLUEPRINT_SECTION_TITLES: Record<BlueprintSectionKey, string> = {
   flow_complete: "Flow Complete",
 };
 
-export const BLUEPRINT_SECTION_DEFINITIONS: { key: BlueprintSectionKey; title: string }[] = BLUEPRINT_SECTION_KEYS.map(
+export const WORKFLOW_SECTION_DEFINITIONS: { key: WorkflowSectionKey; title: string }[] = WORKFLOW_SECTION_KEYS.map(
   (key) => ({
     key,
-    title: BLUEPRINT_SECTION_TITLES[key],
+    title: WORKFLOW_SECTION_TITLES[key],
   })
 );
 
-export type BlueprintStatus = "Draft" | "ReadyForQuote" | "ReadyToBuild";
+export type WorkflowProgressKey = "overview" | WorkflowSectionKey;
+export const WORKFLOW_PROGRESS_KEY_ORDER: WorkflowProgressKey[] = ["overview", ...WORKFLOW_SECTION_KEYS];
 
-export type BlueprintStepType = "Trigger" | "Action" | "Decision" | "Exception" | "Human";
+export type WorkflowStatus = "Draft" | "ReadyForQuote" | "ReadyToBuild";
 
-export type BlueprintResponsibility = "Automated" | "HumanReview" | "Approval";
+export type WorkflowStepType = "Trigger" | "Action" | "Decision" | "Exception" | "Human";
 
-export type BlueprintRiskLevel = "Low" | "Medium" | "High";
+export type WorkflowResponsibility = "Automated" | "HumanReview" | "Approval";
 
-export interface BlueprintSection {
+export type WorkflowRiskLevel = "Low" | "Medium" | "High";
+
+export interface WorkflowSection {
   id: string;
-  key: BlueprintSectionKey;
+  key: WorkflowSectionKey;
   title: string;
   content: string;
 }
 
-export interface BlueprintStep {
+export interface WorkflowStep {
   id: string;
-  type: BlueprintStepType;
+  type: WorkflowStepType;
   name: string;
   summary: string;
   description: string;
   goalOutcome: string;
-  responsibility: BlueprintResponsibility;
+  responsibility: WorkflowResponsibility;
   notesExceptions?: string;
   systemsInvolved: string[];
   timingSla?: string;
-  riskLevel?: BlueprintRiskLevel;
+  riskLevel?: WorkflowRiskLevel;
   notifications: string[];
   notesForOps?: string;
   exceptionIds?: string[];
@@ -68,7 +71,7 @@ export interface BlueprintStep {
   taskIds: string[];
 }
 
-export interface BlueprintBranch {
+export interface WorkflowBranch {
   id: string;
   parentStepId: string;
   condition: string;
@@ -76,14 +79,33 @@ export interface BlueprintBranch {
   targetStepId: string;
 }
 
-export interface Blueprint {
+export interface Workflow {
   version: 1;
-  status: BlueprintStatus;
+  status: WorkflowStatus;
   summary: string;
-  sections: BlueprintSection[];
-  steps: BlueprintStep[];
-  branches: BlueprintBranch[];
+  sections: WorkflowSection[];
+  steps: WorkflowStep[];
+  branches: WorkflowBranch[];
   createdAt: string;
   updatedAt: string;
+  metadata?: {
+    nodePositions?: Record<string, { x: number; y: number }>;
+  };
 }
+
+// Legacy type aliases for backward compatibility during migration
+export type BlueprintSectionKey = WorkflowSectionKey;
+export type BlueprintProgressKey = WorkflowProgressKey;
+export type BlueprintStatus = WorkflowStatus;
+export type BlueprintStepType = WorkflowStepType;
+export type BlueprintResponsibility = WorkflowResponsibility;
+export type BlueprintRiskLevel = WorkflowRiskLevel;
+export interface BlueprintSection extends WorkflowSection {}
+export interface BlueprintStep extends WorkflowStep {}
+export interface BlueprintBranch extends WorkflowBranch {}
+export interface Blueprint extends Workflow {}
+export const BLUEPRINT_SECTION_KEYS = WORKFLOW_SECTION_KEYS;
+export const BLUEPRINT_SECTION_TITLES = WORKFLOW_SECTION_TITLES;
+export const BLUEPRINT_SECTION_DEFINITIONS = WORKFLOW_SECTION_DEFINITIONS;
+export const BLUEPRINT_PROGRESS_KEY_ORDER = WORKFLOW_PROGRESS_KEY_ORDER;
 

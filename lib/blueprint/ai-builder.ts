@@ -4,7 +4,8 @@ import type { Blueprint, BlueprintStep, BlueprintBranch } from "./types";
 import { applyStepNumbers } from "./step-numbering";
 import { BLUEPRINT_SYSTEM_PROMPT, formatBlueprintPrompt } from "@/lib/ai/prompts";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
-import { sanitizeBlueprintTopology } from "@/lib/blueprint/sanitizer";
+import { sanitizeBlueprintTopology, type SanitizationSummary } from "@/lib/blueprint/sanitizer";
+import { syncAutomationTasks } from "@/lib/blueprint/task-sync";
 
 const BLUEPRINT_MODEL = process.env.BLUEPRINT_MODEL ?? "gpt-4-turbo-preview";
 
@@ -21,6 +22,7 @@ interface BuildBlueprintParams {
   userMessage: string;
   currentBlueprint: Blueprint;
   conversationHistory?: ConversationMessage[];
+  requirementsText?: string | null;
 }
 
 export type AITask = {
@@ -36,6 +38,8 @@ export interface BuildBlueprintResult {
   tasks: AITask[];
   chatResponse: string;
   followUpQuestion?: string;
+  sanitizationSummary: SanitizationSummary;
+  requirementsText?: string | null;
 }
 
 type AIStep = {
@@ -79,10 +83,13 @@ type AIResponse = {
     steps?: AIStep[];
     branches?: AIBranch[];
     tasks?: AITask[];
+    sections?: Record<string, string>;
   };
   steps?: AIStep[];
   branches?: AIBranch[];
   tasks?: AITask[];
+  sections?: Record<string, string>;
+  requirementsText?: string;
 };
 
 /**
@@ -93,12 +100,12 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     throw new Error("OPENAI_API_KEY is not configured");
   }
 
-  const { userMessage, currentBlueprint, conversationHistory = [] } = params;
+  const { userMessage, currentBlueprint, conversationHistory = [], requirementsText } = params;
 
   const messages: ConversationMessage[] = [
     { role: "system", content: BLUEPRINT_SYSTEM_PROMPT },
     ...conversationHistory.slice(-10),
-    { role: "user", content: formatBlueprintPrompt(userMessage, currentBlueprint) },
+    { role: "user", content: formatBlueprintPrompt(userMessage, currentBlueprint, requirementsText) },
   ];
 
   try {
@@ -133,11 +140,15 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       : Array.isArray(aiResponse.branches)
         ? aiResponse.branches
         : [];
+    const normalizedSections = aiResponse.blueprint?.sections ?? aiResponse.sections ?? {};
+    // Check both top-level and nested in blueprint object
+    const updatedRequirementsText = (aiResponse.requirementsText ?? aiResponse.blueprint?.requirementsText)?.trim() || undefined;
 
     const merged = mergeAIResponse(currentBlueprint, {
       steps: normalizedSteps,
       tasks: normalizedTasks,
       branches: normalizedBranches,
+      sections: normalizedSections,
     });
     const numberedBlueprint = applyStepNumbers(merged.blueprint);
 
@@ -149,6 +160,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       followUpQuestion,
       stepCount: numberedBlueprint.steps.length,
       taskCount: merged.tasks.length,
+      hasRequirementsUpdate: updatedRequirementsText !== null,
     });
 
     return {
@@ -156,6 +168,8 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       tasks: merged.tasks,
       chatResponse,
       followUpQuestion,
+      sanitizationSummary: merged.sanitizationSummary,
+      requirementsText: updatedRequirementsText,
     };
   } catch (error) {
     console.error("Error building blueprint from chat:", error);
@@ -182,7 +196,7 @@ function normalizeChatResponse(response?: string): string {
 
 function mergeAIResponse(
   currentBlueprint: Blueprint,
-  aiResponse: { steps: AIStep[]; tasks: AITask[]; branches?: AIBranch[] }
+  aiResponse: { steps: AIStep[]; tasks: AITask[]; branches?: AIBranch[]; sections?: Record<string, string> }
 ): { blueprint: Blueprint; tasks: AITask[] } {
   const aiSteps = Array.isArray(aiResponse.steps) ? aiResponse.steps : [];
   const aiTasks = Array.isArray(aiResponse.tasks) ? aiResponse.tasks : [];
@@ -235,20 +249,26 @@ function mergeAIResponse(
 
       const base: BlueprintStep =
         existing ??
-        ({
-          id: stepId,
-          stepNumber,
-          type: aiStep.type ?? "Action",
-          name: aiStep.name ?? `Step ${stepNumber}`,
-          summary: "",
-          description: "",
-          goalOutcome: "",
-          responsibility: mapTypeToResponsibility(aiStep.type ?? "Action"),
-          systemsInvolved: [],
-          notifications: [],
-          nextStepIds: [],
-          taskIds: [],
-        } as BlueprintStep);
+        (() => {
+          const validStepTypes: BlueprintStep["type"][] = ["Trigger", "Action", "Decision", "Exception", "Human"];
+          const defaultType = aiStep.type && validStepTypes.includes(aiStep.type as BlueprintStep["type"])
+            ? (aiStep.type as BlueprintStep["type"])
+            : "Action";
+          return {
+            id: stepId,
+            stepNumber,
+            type: defaultType,
+            name: aiStep.name ?? `Step ${stepNumber}`,
+            summary: "",
+            description: "",
+            goalOutcome: "",
+            responsibility: mapTypeToResponsibility(defaultType),
+            systemsInvolved: [],
+            notifications: [],
+            nextStepIds: [],
+            taskIds: [],
+          } as BlueprintStep;
+        })();
 
       const isExistingStep = Boolean(existing);
       const parentStepId = resolveParentStepId(aiStep, base, stepIdByNumber, existingStepIds);
@@ -270,18 +290,24 @@ function mergeAIResponse(
       const nextStepIds =
         explicitNextSteps.length > 0 && !hasBranches ? explicitNextSteps : Array.from(new Set(base.nextStepIds));
 
+      // Normalize step type - filter out invalid types like "Outcome"
+      const validStepTypes: BlueprintStep["type"][] = ["Trigger", "Action", "Decision", "Exception", "Human"];
+      const normalizedType = aiStep.type && validStepTypes.includes(aiStep.type as BlueprintStep["type"])
+        ? (aiStep.type as BlueprintStep["type"])
+        : base.type;
+
       const transformed: BlueprintStep = {
         ...base,
         id: stepId,
         stepNumber,
-        type: aiStep.type ?? base.type,
+        type: normalizedType,
         name: isExistingStep ? base.name : aiStep.name ?? base.name,
         description,
         summary,
         goalOutcome,
-        responsibility: mapTypeToResponsibility(aiStep.type ?? base.type),
+        responsibility: mapTypeToResponsibility(normalizedType),
         systemsInvolved,
-        branchType: aiStep.type ? deriveBranchType(aiStep, base.type) ?? base.branchType : base.branchType,
+        branchType: normalizedType !== base.type ? deriveBranchType(aiStep, normalizedType) ?? base.branchType : base.branchType,
         branchCondition: aiStep.branchCondition ?? base.branchCondition,
         branchLabel: aiStep.branchLabel ?? base.branchLabel,
         parentStepId,
@@ -324,11 +350,32 @@ function mergeAIResponse(
     updatedAt: new Date().toISOString(),
   };
 
-  const sanitizedBlueprint = sanitizeBlueprintTopology(mergedBlueprint);
+  // Populate sections from AI response if provided
+  let updatedSections = mergedBlueprint.sections;
+  if (aiResponse.sections && Object.keys(aiResponse.sections).length > 0) {
+    const sectionMap = new Map(mergedBlueprint.sections.map((s) => [s.key, s]));
+    const sectionsChanged = updatedSections.map((section) => {
+      const aiContent = aiResponse.sections?.[section.key];
+      // Only update if section is currently empty and AI provided content
+      if (aiContent && aiContent.trim().length > 0 && (!section.content || section.content.trim().length === 0)) {
+        return { ...section, content: aiContent.trim() };
+      }
+      return section;
+    });
+    updatedSections = sectionsChanged;
+  }
+
+  const mergedBlueprintWithSections = {
+    ...mergedBlueprint,
+    sections: updatedSections,
+  };
+
+  const { blueprint: sanitizedBlueprint, summary: sanitizationSummary } = sanitizeBlueprintTopology(mergedBlueprintWithSections);
 
   return {
     blueprint: sanitizedBlueprint,
     tasks: aiTasks,
+    sanitizationSummary,
   };
 }
 

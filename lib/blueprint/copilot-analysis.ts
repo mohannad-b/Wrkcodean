@@ -1,4 +1,4 @@
-import { BLUEPRINT_SECTION_KEYS, type BlueprintSectionKey } from "./types";
+import { BLUEPRINT_PROGRESS_KEY_ORDER, BLUEPRINT_SECTION_KEYS, type BlueprintProgressKey, type BlueprintSectionKey } from "./types";
 import type { RequirementsState } from "@/lib/requirements/state";
 import type { SuggestedNextStep } from "@/lib/requirements/planner";
 
@@ -62,6 +62,24 @@ export interface CopilotAnalysisState {
   lastUpdatedAt?: string;
   requirementsState?: RequirementsState;
   suggestedNextSteps?: SuggestedNextStep[];
+  progress?: BlueprintProgressSnapshot | null;
+}
+
+export type BlueprintSectionProgressStatus = "not_started" | "in_progress" | "complete";
+
+export interface BlueprintSectionProgressInsight {
+  key: BlueprintProgressKey;
+  score: number;
+  status: BlueprintSectionProgressStatus;
+  rationale: string;
+  missingData?: string[];
+}
+
+export interface BlueprintProgressSnapshot {
+  assessedAt: string;
+  overallScore: number;
+  missingInformation: string[];
+  sections: BlueprintSectionProgressInsight[];
 }
 
 export const COPILOT_ANALYSIS_VERSION = "v1";
@@ -74,6 +92,7 @@ export function createEmptyCopilotAnalysisState(): CopilotAnalysisState {
     readiness: createEmptyReadiness(),
     version: COPILOT_ANALYSIS_VERSION,
     lastUpdatedAt: new Date().toISOString(),
+    progress: null,
   };
 }
 
@@ -112,6 +131,14 @@ export function cloneCopilotAnalysisState(state: CopilotAnalysisState): CopilotA
     suggestedNextSteps: state.suggestedNextSteps
       ? state.suggestedNextSteps.map((step) => ({ ...step }))
       : undefined,
+    progress: state.progress
+      ? {
+          assessedAt: state.progress.assessedAt,
+          overallScore: state.progress.overallScore,
+          missingInformation: [...state.progress.missingInformation],
+          sections: state.progress.sections.map((section) => ({ ...section })),
+        }
+      : null,
   };
 }
 

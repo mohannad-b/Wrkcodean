@@ -18,6 +18,12 @@ type ApiAutomationSummary = {
   name: string;
   description: string | null;
   updatedAt: string | null;
+  creator: {
+    id: string;
+    name: string | null;
+    email: string;
+    avatarUrl: string | null;
+  } | null;
   latestVersion: {
     id: string;
     versionLabel: string;
@@ -197,9 +203,19 @@ export default function AutomationsPage() {
   const presentationData: LegacyAutomationSummary[] = filteredAutomations.map((automation) => {
     const version = automation.latestVersion;
     const status = mapStatusForCards(version?.status ?? "IntakeInProgress");
-    const owner = getMockOwnerProfile(automation.id);
     const metrics = getMockAutomationMetrics(automation.id);
     const spend = version?.latestQuote?.setupFee ? Number(version.latestQuote.setupFee) : metrics.spend;
+
+    // Use real creator data if available, otherwise fall back to mock data
+    const creator = automation.creator;
+    const owner = creator
+      ? {
+          id: creator.id,
+          name: creator.name ?? creator.email.split("@")[0],
+          email: creator.email,
+          avatar: creator.avatarUrl ?? getPlaceholderAvatar(creator.name ?? creator.email),
+        }
+      : getMockOwnerProfile(automation.id);
 
     return {
       id: automation.id,

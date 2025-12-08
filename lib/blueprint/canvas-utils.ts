@@ -8,6 +8,8 @@ import { generateStepNumbers } from "./step-numbering";
 export const CANVAS_LAYOUT = {
   NODE_X_GAP: 400,
   NODE_Y_GAP: 240,
+  BRANCH_X_GAP: 500, // Increased spacing for branches to prevent overlap
+  MIN_BRANCH_SPACING: 450, // Minimum spacing between branch nodes
 } as const;
 
 /**
@@ -44,8 +46,20 @@ export function blueprintToNodes(
   // Generate step numbers for all steps
   const numbering = generateStepNumbers(blueprint);
 
-  // Calculate positions
-  const positions = computeLayoutPositions(blueprint.steps);
+  // Calculate positions - use stored positions if available, otherwise compute layout
+  const storedPositions = blueprint.metadata?.nodePositions;
+  const computedPositions = computeLayoutPositions(blueprint.steps);
+  
+  // Merge stored positions with computed positions (stored takes precedence)
+  const positions = new Map<string, { x: number; y: number }>();
+  computedPositions.forEach((pos, id) => {
+    positions.set(id, pos);
+  });
+  if (storedPositions) {
+    Object.entries(storedPositions).forEach(([id, pos]) => {
+      positions.set(id, pos);
+    });
+  }
 
   return blueprint.steps.map((step, index) => {
     const position = positions.get(step.id) ?? { x: 0, y: index * CANVAS_LAYOUT.NODE_Y_GAP };
@@ -125,7 +139,7 @@ export function blueprintToEdges(blueprint: Blueprint | null): Edge[] {
           source: step.id,
           target: targetId,
           type: isConditionalEdge ? "condition" : "default",
-          data: isConditionalEdge ? { label } : undefined,
+          data: isConditionalEdge ? { label } : {},
         };
       })
   );
@@ -205,6 +219,27 @@ export function removeConnection(blueprint: Blueprint, edgeId: string): Blueprin
     steps: updatedSteps,
     updatedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Reconnect an edge in the blueprint
+ * Removes the old connection and adds the new one
+ *
+ * @param blueprint - The current Blueprint
+ * @param oldEdgeId - The old edge ID (format: "edge-{sourceId}-{targetId}")
+ * @param newConnection - The new connection
+ * @returns Updated Blueprint with reconnected edge
+ */
+export function reconnectEdge(blueprint: Blueprint, oldEdgeId: string, newConnection: Connection): Blueprint {
+  // First remove the old connection
+  let updated = removeConnection(blueprint, oldEdgeId);
+  
+  // Then add the new connection
+  if (newConnection.source && newConnection.target) {
+    updated = addConnection(updated, newConnection);
+  }
+  
+  return updated;
 }
 
 /**
@@ -294,6 +329,9 @@ function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number
     const levelOffset = (totalWidth - 1) / 2;
     let cursor = 0;
     const y = level * CANVAS_LAYOUT.NODE_Y_GAP;
+    
+    // Track all positioned nodes at this level to prevent overlaps
+    const positionedX = new Set<number>();
 
     groups.forEach((group) => {
       const { parentId, ids: childIds } = group;
@@ -304,15 +342,33 @@ function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number
         childIds.forEach((childId) => {
           const x = (cursor - levelOffset) * CANVAS_LAYOUT.NODE_X_GAP;
           positions.set(childId, { x, y });
+          positionedX.add(x);
           cursor += 1;
         });
         return;
       }
 
+      // For branches, use increased spacing to prevent overlap
+      // Calculate spacing based on number of branches - more branches need more space
+      // Use a minimum spacing that scales with the number of branches
+      const branchSpacing = Math.max(
+        CANVAS_LAYOUT.MIN_BRANCH_SPACING,
+        CANVAS_LAYOUT.BRANCH_X_GAP + (groupSize > 2 ? (groupSize - 2) * 100 : 0)
+      );
       const branchOffset = (groupSize - 1) / 2;
+      
       childIds.forEach((childId, index) => {
-        const x = parentPosition.x + (index - branchOffset) * CANVAS_LAYOUT.NODE_X_GAP;
+        let x = parentPosition.x + (index - branchOffset) * branchSpacing;
+        
+        // Ensure no overlap with other nodes at this level
+        // If there's a conflict, shift the position
+        const tolerance = CANVAS_LAYOUT.MIN_BRANCH_SPACING / 2;
+        while (Array.from(positionedX).some(pos => Math.abs(pos - x) < tolerance)) {
+          x += tolerance;
+        }
+        
         positions.set(childId, { x, y });
+        positionedX.add(x);
       });
       cursor += groupSize;
     });

@@ -15,6 +15,7 @@ type CreateVersionPayload = {
   versionLabel?: unknown;
   summary?: unknown;
   intakeNotes?: unknown;
+  copyFromVersionId?: unknown;
 };
 
 async function parsePayload(request: Request): Promise<CreateVersionPayload> {
@@ -34,12 +35,17 @@ export async function POST(request: Request, { params }: RouteParams) {
     }
 
     const payload = await parsePayload(request);
+    const copyFromVersionId =
+      typeof payload.copyFromVersionId === "string" && payload.copyFromVersionId.trim().length > 0
+        ? payload.copyFromVersionId.trim()
+        : null;
     const version = await createAutomationVersion({
       tenantId: session.tenantId,
       automationId: params.id,
       versionLabel: typeof payload.versionLabel === "string" ? payload.versionLabel : undefined,
       summary: typeof payload.summary === "string" ? payload.summary : undefined,
       intakeNotes: typeof payload.intakeNotes === "string" ? payload.intakeNotes : undefined,
+      copyFromVersionId,
     });
 
     await logAudit({

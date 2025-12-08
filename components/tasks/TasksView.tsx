@@ -397,7 +397,7 @@ export function TasksView() {
                   onClick={() => {
                     // Find automation by name and navigate to it
                     const automationId = "auto-1"; // Mock - in real app, lookup by automationName
-                    router.push(`/automations/${automationId}?tab=Blueprint`);
+                    router.push(`/automations/${automationId}?tab=Workflow`);
                   }}
                 >
                   <span className="flex items-center gap-2">

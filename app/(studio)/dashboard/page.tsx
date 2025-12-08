@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { StatCard } from "@/components/ui/StatCard";
-import { TaskCard } from "@/components/ui/TaskCard";
 import { DashboardAutomationCard } from "@/components/ui/DashboardAutomationCard";
 import { ActivityFeedItem } from "@/components/ui/ActivityFeedItem";
 import { UsageChart } from "@/components/charts/UsageChart";
@@ -26,12 +25,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { mockAutomations } from "@/lib/mock-automations";
-import {
-  mockTasks,
-  mockActivityFeed,
-  mockDashboardAutomations,
-  mockUsageData,
-} from "@/lib/mock-dashboard";
+import { mockActivityFeed, mockDashboardAutomations, mockUsageData } from "@/lib/mock-dashboard";
 import { currentUser } from "@/lib/mock-automations";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -122,25 +116,6 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* LEFT COLUMN (2/3 width on large screens) */}
           <div className="lg:col-span-2 space-y-8">
-            {/* My Tasks */}
-            <section>
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-bold text-[#0A0A0A]">My Tasks</h2>
-                <Button
-                  variant="link"
-                  onClick={() => router.push("/tasks")}
-                  className="text-[#E43632] text-xs font-bold h-auto p-0"
-                >
-                  View All
-                </Button>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {mockTasks.map((task) => (
-                  <TaskCard key={task.id} {...task} />
-                ))}
-              </div>
-            </section>
-
             {/* Active Automations Grid */}
             <section>
               <div className="flex items-center justify-between mb-4">

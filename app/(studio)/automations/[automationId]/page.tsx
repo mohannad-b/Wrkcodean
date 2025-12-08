@@ -3,35 +3,65 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { Loader2, RefreshCw, Send, StickyNote, Plus, Users, Play, Edit3, Sparkles, AlertTriangle, Calendar, Clock, DollarSign, Zap, CheckCircle2, ArrowUpRight, ArrowRight, History, ListChecks } from "lucide-react";
-import type { Connection, Node, Edge, EdgeChange } from "reactflow";
+import {
+  Loader2,
+  RefreshCw,
+  Send,
+  StickyNote,
+  Plus,
+  Users,
+  Play,
+  Edit3,
+  Sparkles,
+  AlertTriangle,
+  Calendar,
+  Clock,
+  DollarSign,
+  Zap,
+  CheckCircle2,
+  ArrowUpRight,
+  ArrowRight,
+  History,
+  ListChecks,
+  Lightbulb,
+  FileText,
+  GitBranch,
+  CheckSquare,
+} from "lucide-react";
+import type { Connection, Node, Edge, EdgeChange, NodeChange } from "reactflow";
 import { StudioChat } from "@/components/automations/StudioChat";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 import { ActivityTab } from "@/components/automations/ActivityTab";
 import { BuildStatusTab } from "@/components/automations/BuildStatusTab";
-import { ContributorsTab } from "@/components/automations/ContributorsTab";
 import { SettingsTab } from "@/components/automations/SettingsTab";
-import { TestTab } from "@/components/automations/TestTab";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import type { Blueprint, BlueprintSectionKey, BlueprintStep } from "@/lib/blueprint/types";
-import { BLUEPRINT_SECTION_KEYS, BLUEPRINT_SECTION_TITLES } from "@/lib/blueprint/types";
+import { BLUEPRINT_SECTION_TITLES } from "@/lib/blueprint/types";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
 import { isBlueprintEffectivelyEmpty } from "@/lib/blueprint/utils";
-import { blueprintToNodes, blueprintToEdges, addConnection, removeConnection } from "@/lib/blueprint/canvas-utils";
+import { blueprintToNodes, blueprintToEdges, addConnection, removeConnection, reconnectEdge } from "@/lib/blueprint/canvas-utils";
 import { applyBlueprintUpdates, type BlueprintUpdates as CopilotBlueprintUpdates } from "@/lib/blueprint/ai-updates";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
+import { AUTOMATION_TABS, type AutomationTab } from "@/lib/automations/tabs";
 import { VersionSelector, type VersionOption } from "@/components/ui/VersionSelector";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BUILD_STATUS_ORDER, type BuildStatus } from "@/lib/build-status/types";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ChevronDown } from "lucide-react";
 
 const StudioCanvas = dynamic(
   () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
@@ -54,12 +84,57 @@ type QuoteSummary = {
   updatedAt: string;
 };
 
+type SanitizationSummaryPayload = {
+  removedDuplicateEdges: number;
+  reparentedBranches: number;
+  removedCycles: number;
+  trimmedConnections: number;
+  attachedOrphans: number;
+};
+
+type SuggestionStreamEvent =
+  | { status: "thinking" }
+  | { status: "message"; content: string }
+  | {
+      status: "complete";
+      payload: {
+        telemetry?: {
+          sanitizationSummary?: SanitizationSummaryPayload;
+        };
+      };
+    }
+  | { status: "error"; message?: string };
+
+function formatSanitizationSummary(summary?: SanitizationSummaryPayload | null): string {
+  if (!summary) {
+    return "Blueprint updated.";
+  }
+  const parts: string[] = [];
+  if (summary.reparentedBranches) {
+    parts.push(`${summary.reparentedBranches} branch${summary.reparentedBranches === 1 ? "" : "es"} relinked`);
+  }
+  if (summary.removedCycles) {
+    parts.push(`${summary.removedCycles} cycle${summary.removedCycles === 1 ? "" : "s"} removed`);
+  }
+  if (summary.trimmedConnections) {
+    parts.push(`${summary.trimmedConnections} extra connection${summary.trimmedConnections === 1 ? "" : "s"} trimmed`);
+  }
+  if (summary.attachedOrphans) {
+    parts.push(`${summary.attachedOrphans} orphan step${summary.attachedOrphans === 1 ? "" : "s"} attached`);
+  }
+  if (parts.length === 0 && summary.removedDuplicateEdges) {
+    parts.push(`${summary.removedDuplicateEdges} duplicate edge${summary.removedDuplicateEdges === 1 ? "" : "s"} removed`);
+  }
+  return parts.length > 0 ? `Blueprint updated (${parts.join(", ")}).` : "Blueprint updated.";
+}
+
 type AutomationVersion = {
   id: string;
   versionLabel: string;
   status: AutomationLifecycleStatus;
   intakeNotes: string | null;
-  blueprintJson: Blueprint | null;
+  requirementsText: string | null;
+  workflowJson: Blueprint | null;
   summary: string | null;
   latestQuote: QuoteSummary | null;
   createdAt: string;
@@ -114,16 +189,13 @@ const formatDateTime = (value?: string | null) => {
   }
 };
 
-const AUTOMATION_TABS = ["Overview", "Build Status", "Tasks", "Blueprint", "Test", "Activity", "Contributors", "Settings"] as const;
 
-const BASE_CHECKLIST = [
-  { id: "overview", label: "Overview", sectionKey: null as BlueprintSectionKey | null },
-  ...Object.entries(BLUEPRINT_SECTION_TITLES).map(([key, title]) => ({
-    id: key,
-    label: title,
-    sectionKey: key as BlueprintSectionKey,
-  })),
-] as const;
+type BlueprintChecklistItem = {
+  id: string;
+  label: string;
+  sectionKey: BlueprintSectionKey | null;
+  completed: boolean;
+};
 
 const cloneBlueprint = (blueprint: Blueprint | null) => (blueprint ? (JSON.parse(JSON.stringify(blueprint)) as Blueprint) : null);
 
@@ -255,10 +327,9 @@ const MOCK_SUGGESTIONS = [
 ];
 // TODO: replace KPI, activity, attention, and suggestion mock data with real analytics + audit feeds.
 
-type AutomationTab = (typeof AUTOMATION_TABS)[number];
-
 export default function AutomationDetailPage({ params }: AutomationDetailPageProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const toast = useToast();
   const [automation, setAutomation] = useState<AutomationDetail | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
@@ -272,13 +343,32 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [transitioning, setTransitioning] = useState(false);
   const [creatingVersion, setCreatingVersion] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<AutomationTab>("Overview");
+  
+  // Read tab from URL params, default to "Overview"
+  const urlTab = searchParams?.get("tab");
+  const initialTab = (urlTab && AUTOMATION_TABS.includes(urlTab as AutomationTab)) 
+    ? (urlTab as AutomationTab) 
+    : "Overview";
+  const [activeTab, setActiveTab] = useState<AutomationTab>(initialTab);
+  const [canvasViewMode, setCanvasViewMode] = useState<"requirements" | "flowchart" | "tasks">("flowchart");
+  const [requirementsText, setRequirementsText] = useState("");
+  const [savingRequirements, setSavingRequirements] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  
+  // Sync activeTab with URL params when they change
+  useEffect(() => {
+    const tabFromUrl = searchParams?.get("tab");
+    if (tabFromUrl && AUTOMATION_TABS.includes(tabFromUrl as AutomationTab)) {
+      setActiveTab(tabFromUrl as AutomationTab);
+    }
+  }, [searchParams]);
   const [hasSelectedStep, setHasSelectedStep] = useState(false);
   const [showStepHelper, setShowStepHelper] = useState(false);
-  const [isContributorMode, setIsContributorMode] = useState(false);
   const [proceedingToBuild, setProceedingToBuild] = useState(false);
   const [isSynthesizingBlueprint, setIsSynthesizingBlueprint] = useState(false);
+  const [isOptimizingFlow, setIsOptimizingFlow] = useState(false);
+  const [isRequestingSuggestions, setIsRequestingSuggestions] = useState(false);
+  const [suggestionStatus, setSuggestionStatus] = useState<string | null>(null);
   const completionRef = useRef<ReturnType<typeof getBlueprintCompletionState> | null>(null);
   const preserveSelectionRef = useRef(false);
   const synthesisTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -321,7 +411,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         setSelectedVersionId(nextSelected);
         const version = data.automation.versions.find((v) => v.id === nextSelected);
         setNotes(version?.intakeNotes ?? "");
-        const blueprint = version?.blueprintJson ? cloneBlueprint(version.blueprintJson) : createEmptyBlueprint();
+        const blueprint = version?.workflowJson ? cloneBlueprint(version.workflowJson) : createEmptyBlueprint();
         setBlueprint(blueprint);
         setBlueprintError(null);
         setBlueprintDirty(false);
@@ -339,6 +429,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [params.automationId, selectedVersionId]
   );
 
+
   useEffect(() => {
     fetchAutomation();
   }, [fetchAutomation]);
@@ -350,10 +441,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     return automation.versions.find((version) => version.id === selectedVersionId) ?? automation.versions[0] ?? null;
   }, [automation, selectedVersionId]);
 
+
   useEffect(() => {
     if (selectedVersion) {
       setNotes(selectedVersion.intakeNotes ?? "");
-      const nextBlueprint = selectedVersion.blueprintJson ? cloneBlueprint(selectedVersion.blueprintJson) : createEmptyBlueprint();
+      const nextBlueprint = selectedVersion.workflowJson ? cloneBlueprint(selectedVersion.workflowJson) : createEmptyBlueprint();
       const safeBlueprint = nextBlueprint ?? createEmptyBlueprint();
       setBlueprint(safeBlueprint);
       setBlueprintError(null);
@@ -376,11 +468,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         setShowStepHelper(false);
       }
     }
-  }, [selectedVersion?.id, selectedVersion?.blueprintJson?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedVersion?.id, selectedVersion?.workflowJson?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setVersionTasks(selectedVersion?.tasks ?? []);
-  }, [selectedVersion?.id, selectedVersion?.tasks]);
+    setRequirementsText(selectedVersion?.requirementsText ?? "");
+  }, [selectedVersion?.id, selectedVersion?.tasks, selectedVersion?.requirementsText]);
 
   const taskGroups = useMemo(() => {
     const groups: Record<"blocker" | "important" | "optional", VersionTask[]> = {
@@ -408,7 +501,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     setSelectedVersionId(versionId);
     const version = automation?.versions.find((v) => v.id === versionId);
     setNotes(version?.intakeNotes ?? "");
-    const nextBlueprint = version?.blueprintJson ? cloneBlueprint(version.blueprintJson) : createEmptyBlueprint();
+    const nextBlueprint = version?.workflowJson ? cloneBlueprint(version.workflowJson) : createEmptyBlueprint();
     setBlueprint(nextBlueprint ?? createEmptyBlueprint());
     setBlueprintDirty(false);
     setBlueprintError(null);
@@ -443,6 +536,31 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     }
   };
 
+  const handleSaveRequirements = async () => {
+    if (!selectedVersion) return;
+    setSavingRequirements(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/automation-versions/${selectedVersion.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requirementsText: requirementsText }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to save requirements");
+      }
+      await fetchAutomation();
+      toast({ title: "Requirements saved", description: "Requirements updated.", variant: "success" });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to save requirements";
+      setError(message);
+      toast({ title: "Unable to save requirements", description: message, variant: "error" });
+    } finally {
+      setSavingRequirements(false);
+    }
+  };
+
   const handleSaveBlueprint = useCallback(
     async (overrides?: Partial<Blueprint>, options?: { preserveSelection?: boolean }) => {
       if (!selectedVersion || !blueprint) {
@@ -459,7 +577,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         const response = await fetch(`/api/automation-versions/${selectedVersion.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ blueprintJson: payload }),
+          body: JSON.stringify({ workflowJson: payload }),
         });
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
@@ -509,7 +627,10 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     await fetchAutomation({ preserveSelection: true });
   }, [fetchAutomation]);
 
-  const handleCreateVersion = async () => {
+  const handleCreateVersion = async (copyFromVersionId?: string | null) => {
+    // Handle case where event object might be passed instead of version ID
+    const versionId = typeof copyFromVersionId === "string" ? copyFromVersionId : null;
+    
     setCreatingVersion(true);
     setError(null);
     try {
@@ -518,7 +639,8 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           summary: selectedVersion?.summary ?? "",
-          intakeNotes: notes,
+          intakeNotes: versionId ? selectedVersion?.intakeNotes ?? notes : notes,
+          copyFromVersionId: versionId,
         }),
       });
       if (!response.ok) {
@@ -526,7 +648,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         throw new Error(data.error ?? "Unable to create version");
       }
       await fetchAutomation();
-      toast({ title: "New version created", description: "A draft version is ready.", variant: "success" });
+      toast({
+        title: "New version created",
+        description: versionId ? "A new version copied from the current version is ready." : "A draft version is ready.",
+        variant: "success",
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to create version";
       setError(message);
@@ -620,6 +746,62 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [applyBlueprintUpdate]
   );
 
+  const handleNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      // Handle node position changes
+      const positionChanges = changes.filter(
+        (change) => change.type === "position" && change.position
+      ) as Array<NodeChange & { type: "position"; position: { x: number; y: number } }>;
+      
+      if (positionChanges.length > 0) {
+        applyBlueprintUpdate((current) => {
+          const nodePositions = { ...(current.metadata?.nodePositions ?? {}) };
+          positionChanges.forEach((change) => {
+            if (change.id && change.position) {
+              nodePositions[change.id] = change.position;
+            }
+          });
+          return {
+            ...current,
+            metadata: {
+              ...current.metadata,
+              nodePositions,
+            },
+            updatedAt: new Date().toISOString(),
+          };
+        });
+      }
+
+      // Handle node removal
+      const removeChanges = changes.filter((change) => change.type === "remove");
+      if (removeChanges.length > 0) {
+        applyBlueprintUpdate((current) => {
+          const removedIds = new Set(
+            removeChanges
+              .map((change) => (change.type === "remove" ? change.id : null))
+              .filter((id): id is string => id !== null)
+          );
+          
+          const nodePositions = { ...(current.metadata?.nodePositions ?? {}) };
+          removedIds.forEach((id) => {
+            delete nodePositions[id];
+          });
+
+          return {
+            ...current,
+            steps: current.steps.filter((step) => !removedIds.has(step.id)),
+            metadata: {
+              ...current.metadata,
+              nodePositions,
+            },
+            updatedAt: new Date().toISOString(),
+          };
+        });
+      }
+    },
+    [applyBlueprintUpdate]
+  );
+
   const handleEdgesChange = useCallback(
     (changes: EdgeChange[]) => {
       const removeChanges = changes.filter((change) => change.type === "remove");
@@ -637,11 +819,121 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [applyBlueprintUpdate]
   );
 
+  const handleEdgeUpdate = useCallback(
+    (oldEdge: Edge, newConnection: Connection) => {
+      if (!oldEdge.id || !newConnection.source || !newConnection.target) {
+        return;
+      }
+      applyBlueprintUpdate((current) => reconnectEdge(current, oldEdge.id, newConnection));
+    },
+    [applyBlueprintUpdate]
+  );
+
   const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     setSelectedStepId(node.id);
     setHasSelectedStep(true);
     setShowStepHelper(false);
   }, []);
+
+  const handleOptimizeFlow = useCallback(async () => {
+    if (!selectedVersion?.id) {
+      toast({ title: "Select a version", description: "Choose a version before optimizing the flow.", variant: "error" });
+      return;
+    }
+    setIsOptimizingFlow(true);
+    try {
+      const response = await fetch(`/api/automation-versions/${selectedVersion.id}/copilot/optimize`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? "Unable to optimize the flow.");
+      }
+      const payload = await response.json();
+      await refreshAutomationPreservingSelection();
+      toast({
+        title: "Flow optimized",
+        description: formatSanitizationSummary(payload?.telemetry?.sanitizationSummary),
+        variant: "success",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to optimize the flow.";
+      toast({ title: "Unable to optimize", description: message, variant: "error" });
+    } finally {
+      setIsOptimizingFlow(false);
+    }
+  }, [refreshAutomationPreservingSelection, selectedVersion?.id, toast]);
+
+  const handleSuggestNextSteps = useCallback(async () => {
+    if (!selectedVersion?.id) {
+      toast({ title: "Select a version", description: "Choose a version before requesting suggestions.", variant: "error" });
+      return;
+    }
+    setIsRequestingSuggestions(true);
+    setIsSynthesizingBlueprint(true);
+    setSuggestionStatus("Evaluating blueprint…");
+    const decoder = new TextDecoder();
+    let telemetrySummary: SanitizationSummaryPayload | null = null;
+
+    try {
+      const response = await fetch(`/api/automation-versions/${selectedVersion.id}/copilot/suggest-next-steps`, {
+        method: "POST",
+      });
+      if (!response.ok || !response.body) {
+        const data = await response.text().catch(() => "");
+        throw new Error(data || "Unable to suggest next steps.");
+      }
+
+      const reader = response.body.getReader();
+      let buffer = "";
+      let completed = false;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        let boundary: number;
+        while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+          const chunk = buffer.slice(0, boundary).trim();
+          buffer = buffer.slice(boundary + 2);
+          if (!chunk.startsWith("data:")) {
+            continue;
+          }
+          const event = JSON.parse(chunk.slice(5)) as SuggestionStreamEvent;
+          if (event.status === "thinking") {
+            setSuggestionStatus("Evaluating blueprint…");
+          } else if (event.status === "message") {
+            setSuggestionStatus(event.content);
+          } else if (event.status === "complete") {
+            telemetrySummary = event.payload.telemetry?.sanitizationSummary ?? null;
+            completed = true;
+            break;
+          } else if (event.status === "error") {
+            throw new Error(event.message ?? "Unable to suggest next steps.");
+          }
+        }
+        if (completed) {
+          break;
+        }
+      }
+
+      await refreshAutomationPreservingSelection();
+      toast({
+        title: "Suggestions added",
+        description: formatSanitizationSummary(telemetrySummary),
+        variant: "success",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to suggest next steps.";
+      toast({ title: "Unable to suggest next steps", description: message, variant: "error" });
+    } finally {
+      setSuggestionStatus(null);
+      setIsRequestingSuggestions(false);
+      setIsSynthesizingBlueprint(false);
+    }
+  }, [refreshAutomationPreservingSelection, selectedVersion?.id, toast]);
 
   const handleViewTaskStep = useCallback(
     (stepNumber: string) => {
@@ -653,7 +945,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       if (!target) {
         return;
       }
-      setActiveTab("Blueprint");
+      setActiveTab("Workflow");
       setSelectedStepId(target.id);
       setHasSelectedStep(true);
       setShowStepHelper(false);
@@ -669,60 +961,71 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   }, [versionTasks]);
 
   const flowNodes = useMemo<Node[]>(() => blueprintToNodes(blueprint, taskLookup), [blueprint, taskLookup]);
-  const flowEdges = useMemo<Edge[]>(() => blueprintToEdges(blueprint), [blueprint]);
+  
+  const handleEdgeDelete = useCallback(
+    (edgeId: string) => {
+      applyBlueprintUpdate((current) => removeConnection(current, edgeId));
+    },
+    [applyBlueprintUpdate]
+  );
 
-  useEffect(() => {
-    console.log("🎨 Blueprint updated:", {
-      stepCount: blueprint?.steps?.length ?? 0,
-      steps: blueprint?.steps?.map((step) => step.name),
-      nodeCount: flowNodes.length,
-      edgeCount: flowEdges.length,
-    });
-  }, [blueprint, flowNodes, flowEdges]);
+  const flowEdges = useMemo<Edge[]>(() => {
+    const edges = blueprintToEdges(blueprint);
+    // Add onDelete handler to all edges
+    return edges.map((edge) => ({
+      ...edge,
+      data: {
+        ...edge.data,
+        onDelete: handleEdgeDelete,
+      },
+    }));
+  }, [blueprint, handleEdgeDelete]);
+
+  // Debug logging (commented out to reduce console noise)
+  // useEffect(() => {
+  //   console.log("🎨 Blueprint updated:", {
+  //     stepCount: blueprint?.steps?.length ?? 0,
+  //     steps: blueprint?.steps?.map((step) => step.name),
+  //     nodeCount: flowNodes.length,
+  //     edgeCount: flowEdges.length,
+  //   });
+  // }, [blueprint, flowNodes, flowEdges]);
   const selectedStep = useMemo(
     () => (blueprint ? blueprint.steps.find((step) => step.id === selectedStepId) ?? null : null),
     [blueprint, selectedStepId]
   );
   const blueprintIsEmpty = useMemo(() => isBlueprintEffectivelyEmpty(blueprint), [blueprint]);
-  const sectionCompletionMap = useMemo(() => {
-    const map = new Map<BlueprintSectionKey, boolean>();
-    if (!blueprint) {
-      BLUEPRINT_SECTION_KEYS.forEach((key) => map.set(key, false));
-      return map;
-    }
-    BLUEPRINT_SECTION_KEYS.forEach((key) => {
-      const section = blueprint.sections.find((entry) => entry.key === key);
-      map.set(key, Boolean(section?.content?.trim()));
-    });
-    const flowCompleteReady = (blueprint.steps?.length ?? 0) >= 3;
-    map.set("flow_complete", map.get("flow_complete") ?? flowCompleteReady);
-    return map;
-  }, [blueprint]);
+  const summaryComplete = completion.summaryComplete;
 
-  const summaryComplete = Boolean(blueprint?.summary?.trim());
-  const checklistItems = useMemo(
-    () =>
-      BASE_CHECKLIST.map((item) =>
-        item.sectionKey
-          ? {
-              id: item.id,
-              label: item.label,
-              sectionKey: item.sectionKey,
-              completed: sectionCompletionMap.get(item.sectionKey) ?? false,
-            }
-          : {
-              id: item.id,
-              label: item.label,
-              sectionKey: item.sectionKey,
-              completed: summaryComplete,
-            }
-      ),
-    [summaryComplete, sectionCompletionMap]
-  );
-  const readyForBuild =
-    summaryComplete &&
-    (blueprint?.steps?.length ?? 0) >= 3 &&
-    Array.from(sectionCompletionMap.values()).every(Boolean);
+  // Simple checkmark-based checklist - only show the 4 required items
+  const REQUIRED_CHECKLIST_ITEMS = [
+    { id: "business_requirements", label: "Business Requirements", sectionKey: "business_requirements" as BlueprintSectionKey },
+    { id: "business_objectives", label: "Business Objectives", sectionKey: "business_objectives" as BlueprintSectionKey },
+    { id: "success_criteria", label: "Success Criteria", sectionKey: "success_criteria" as BlueprintSectionKey },
+    { id: "systems", label: "Systems", sectionKey: "systems" as BlueprintSectionKey },
+  ] as const;
+
+  const checklistItems = useMemo<BlueprintChecklistItem[]>(() => {
+    return REQUIRED_CHECKLIST_ITEMS.map((item) => {
+      // Check if section exists and has content
+      const hasContent = item.sectionKey && blueprint?.sections?.some(
+        (s) => s.key === item.sectionKey && s.content?.trim().length > 0
+      );
+      
+      return {
+        id: item.id,
+        label: item.label,
+        sectionKey: item.sectionKey,
+        completed: hasContent ?? false,
+      };
+    });
+  }, [blueprint]);
+  // Check if all 4 required items are completed
+  const requiredItemsComplete = useMemo(() => {
+    return checklistItems.every((item) => item.completed);
+  }, [checklistItems]);
+
+  const readyForBuild = requiredItemsComplete;
   const alreadyInBuild = isAtOrBeyondBuild(selectedVersion?.status ?? null, "BuildInProgress");
   const pendingBlockerCopy =
     blockersRemaining === 1
@@ -731,7 +1034,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const proceedDisabledReason = blockersRemaining > 0
     ? pendingBlockerCopy
     : !readyForBuild
-    ? "Complete the blueprint summary, sections, and at least three steps to proceed."
+    ? "We need a little bit more information before we have enough information to build this automation."
     : alreadyInBuild
     ? "This version is already in a build phase."
     : !selectedVersion?.id
@@ -882,7 +1185,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         updatedAt={selectedVersion?.updatedAt ?? null}
         onInviteTeam={handleInviteTeam}
         onRunTest={handleRunTest}
-        onEditBlueprint={() => setActiveTab("Blueprint")}
+        onEditBlueprint={() => setActiveTab("Workflow")}
       />
 
       <OverviewMetrics stats={kpiStats} />
@@ -989,10 +1292,44 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 {savingNotes ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Save notes
               </Button>
-              <Button type="button" variant="outline" onClick={handleCreateVersion} disabled={creatingVersion || !selectedVersion}>
-                {creatingVersion ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
-                New version
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" disabled={creatingVersion || !selectedVersion}>
+                    {creatingVersion ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="mr-2 h-4 w-4" />
+                        New version
+                        <ChevronDown className="ml-2 h-4 w-4" />
+                      </>
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onClick={() => handleCreateVersion(null)}
+                    disabled={creatingVersion}
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-semibold">Start from scratch</span>
+                      <span className="text-xs text-gray-500">Create a new empty version</span>
+                    </div>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => handleCreateVersion(selectedVersion?.id ?? null)}
+                    disabled={creatingVersion || !selectedVersion}
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-semibold">Copy from this version</span>
+                      <span className="text-xs text-gray-500">Duplicate the current version</span>
+                    </div>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </form>
         </CardContent>
@@ -1009,89 +1346,105 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       <div className="border-b border-gray-100 bg-white px-6 py-3 z-20 relative">
         <div className="flex items-center gap-6 min-w-max overflow-x-auto no-scrollbar">
           {checklistItems.map((item) => {
-            const chipContent = (
-              <>
-                <div
-                  className={cn(
-                    "w-4 h-4 rounded-full border flex items-center justify-center transition-colors duration-300",
-                    item.completed ? "bg-emerald-500 border-emerald-500 text-white" : "border-gray-300 bg-white text-transparent"
-                  )}
-                >
-                  <CheckCircle2 size={10} />
-                </div>
+            const chipVisual = (
+              <div className="flex items-center gap-2">
+                {item.completed ? (
+                  <div className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                  </div>
+                ) : (
+                  <div className="h-5 w-5 rounded-full border-2 border-gray-300" />
+                )}
                 <span
                   className={cn(
-                    "text-xs font-medium transition-colors duration-300",
-                    item.completed ? "text-[#0A0A0A]" : "text-gray-400"
+                    "text-xs font-semibold transition-colors duration-300",
+                    item.completed ? "text-[#0A0A0A]" : "text-gray-500"
                   )}
                 >
                   {item.label}
                 </span>
-              </>
+              </div>
             );
-            if (item.id !== "flow_complete") {
-              return (
-                <div key={item.id} className="flex items-center gap-2">
-                  {chipContent}
-                </div>
-              );
-            }
-            const proceedButton = (
-              <Button
-                key="proceed-button"
-                size="sm"
-                onClick={handleProceedToBuild}
-                disabled={proceedButtonDisabled}
-                className={cn(
-                  "ml-2 gap-2 rounded-full px-4 py-1 text-xs font-semibold",
-                  alreadyInBuild ? "bg-gray-200 text-gray-600" : "bg-gray-900 text-white hover:bg-gray-800"
-                )}
-              >
-                {proceedingToBuild ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Updating…
-                  </>
-                ) : alreadyInBuild ? (
-                  "Build in progress"
-                ) : (
-                  <>
-                    Proceed to Build
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </>
-                )}
-              </Button>
-            );
-            const wrappedButton =
-              proceedDisabledReason && !alreadyInBuild && !proceedingToBuild ? (
-                <Tooltip key="tooltip-proceed">
-                  <TooltipTrigger asChild>{proceedButton}</TooltipTrigger>
-                  <TooltipContent className="text-xs">{proceedDisabledReason}</TooltipContent>
-                </Tooltip>
-              ) : (
-                proceedButton
-              );
             return (
-              <div key={item.id} className="flex items-center gap-3 flex-wrap">
-                {chipContent}
-                <div className="flex flex-col gap-1">
-                  {wrappedButton}
-                  {taskGroups.blocker.length > 0 ? (
-                    <span
-                      className={cn(
-                        "text-[10px] font-semibold",
-                        blockersRemaining > 0 ? "text-amber-600" : "text-emerald-600"
-                      )}
-                    >
-                      {blockersRemaining > 0
-                        ? `${blockersRemaining} blocker task${blockersRemaining === 1 ? "" : "s"} pending`
-                        : "All blocker tasks complete"}
-                    </span>
-                  ) : null}
-                </div>
+              <div key={item.id} className="flex items-center gap-2">
+                {chipVisual}
               </div>
             );
           })}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex flex-col gap-1">
+              {proceedButtonDisabled && !alreadyInBuild && !proceedingToBuild ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div>
+                      <Button
+                        size="sm"
+                        onClick={handleProceedToBuild}
+                        disabled={proceedButtonDisabled}
+                        className={cn(
+                          "ml-2 gap-2 rounded-full px-4 py-1 text-xs font-semibold",
+                          alreadyInBuild
+                            ? "bg-gray-200 text-gray-600"
+                            : proceedButtonDisabled
+                            ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                            : "bg-gray-900 text-white hover:bg-gray-800"
+                        )}
+                      >
+                        {proceedingToBuild ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Updating…
+                          </>
+                        ) : alreadyInBuild ? (
+                          "Build in progress"
+                        ) : (
+                          <>
+                            Proceed to Build
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent 
+                    side="bottom" 
+                    sideOffset={4}
+                    className="text-xs bg-gray-900 text-white border border-gray-700 shadow-lg [&>svg]:fill-gray-900 [&>svg]:stroke-gray-700 [&>svg]:w-4 [&>svg]:h-4"
+                  >
+                    {proceedDisabledReason || "We need a little bit more information before we have enough information to build this automation."}
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={handleProceedToBuild}
+                  disabled={proceedButtonDisabled}
+                  className={cn(
+                    "ml-2 gap-2 rounded-full px-4 py-1 text-xs font-semibold",
+                    alreadyInBuild
+                      ? "bg-gray-200 text-gray-600"
+                      : proceedButtonDisabled
+                      ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                      : "bg-gray-900 text-white hover:bg-gray-800"
+                  )}
+                >
+                  {proceedingToBuild ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Updating…
+                    </>
+                  ) : alreadyInBuild ? (
+                    "Build in progress"
+                  ) : (
+                    <>
+                      Proceed to Build
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </>
+                  )}
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1109,61 +1462,158 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           />
         </div>
 
-        <div className="flex-1 relative h-full z-10 bg-gray-50 min-h-0">
-          <StudioCanvas
-            nodes={flowNodes}
-            edges={flowEdges}
-            onConnect={handleConnectNodes}
-            onEdgesChange={handleEdgesChange}
-            onNodeClick={handleNodeClick}
-            isSynthesizing={isSynthesizingBlueprint}
-            emptyState={
-              blueprintIsEmpty ? (
-                <div className="text-center max-w-md mx-auto space-y-2">
-                  <Sparkles className="w-12 h-12 text-gray-300 mx-auto mb-2" />
-                  <p className="text-sm font-semibold text-gray-600">Blueprint Canvas</p>
-                  <p className="text-xs text-gray-500 leading-relaxed">
-                    Chat with the copilot to build your automation. Steps will appear here as you describe your workflow.
-                  </p>
-                </div>
-              ) : null
-            }
-          />
-
-          <div className="absolute bottom-4 left-4 z-50">
-            <button
-              onClick={() => setIsContributorMode((prev) => !prev)}
-              className="text-[10px] text-gray-400 hover:text-[#E43632] bg-white/70 backdrop-blur px-2 py-1 rounded border border-gray-200"
+        <div className="flex-1 relative h-full z-10 bg-gray-50 min-h-0 flex flex-col">
+          {/* View Mode Toggle */}
+          <div className="absolute top-4 left-4 z-50 flex gap-2 bg-white rounded-lg border border-gray-200 shadow-sm p-1">
+            <Button
+              size="sm"
+              variant={canvasViewMode === "requirements" ? "default" : "ghost"}
+              onClick={() => setCanvasViewMode("requirements")}
+              className={cn(
+                "text-xs font-semibold h-8 px-3",
+                canvasViewMode === "requirements"
+                  ? "bg-gray-900 text-white hover:bg-gray-800"
+                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+              )}
             >
-              {isContributorMode ? "Switch to builder view" : "Toggle contributor view"}
-            </button>
+              <FileText className="h-3.5 w-3.5 mr-1.5" />
+              Requirements
+            </Button>
+            <Button
+              size="sm"
+              variant={canvasViewMode === "flowchart" ? "default" : "ghost"}
+              onClick={() => setCanvasViewMode("flowchart")}
+              className={cn(
+                "text-xs font-semibold h-8 px-3",
+                canvasViewMode === "flowchart"
+                  ? "bg-gray-900 text-white hover:bg-gray-800"
+                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+              )}
+            >
+              <GitBranch className="h-3.5 w-3.5 mr-1.5" />
+              Flowchart
+            </Button>
+            <Button
+              size="sm"
+              variant={canvasViewMode === "tasks" ? "default" : "ghost"}
+              onClick={() => setCanvasViewMode("tasks")}
+              className={cn(
+                "text-xs font-semibold h-8 px-3",
+                canvasViewMode === "tasks"
+                  ? "bg-gray-900 text-white hover:bg-gray-800"
+                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+              )}
+            >
+              <CheckSquare className="h-3.5 w-3.5 mr-1.5" />
+              Tasks
+            </Button>
           </div>
 
-          {showStepHelper && !blueprintIsEmpty && (
-            <div className="absolute bottom-4 right-4 bg-gray-900/90 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none">
-              Click on any step to configure or refine.
+          <div className="absolute top-4 right-4 z-50 flex flex-wrap gap-2">
+            {canvasViewMode === "flowchart" && (
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={handleOptimizeFlow}
+                  disabled={isOptimizingFlow || !selectedVersion}
+                  className="text-xs font-semibold"
+                >
+                  {isOptimizingFlow ? (
+                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-2 h-3 w-3" />
+                  )}
+                  Optimize flow
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleSuggestNextSteps}
+                  disabled={isRequestingSuggestions || !selectedVersion}
+                  className="text-xs font-semibold"
+                >
+                  {isRequestingSuggestions ? (
+                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                  ) : (
+                    <Lightbulb className="mr-2 h-3 w-3" />
+                  )}
+                  Suggest next steps
+                </Button>
+                {suggestionStatus && (
+                  <p className="w-full text-[11px] text-gray-500">{suggestionStatus}</p>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* View Content */}
+          {canvasViewMode === "requirements" ? (
+            <RequirementsView
+              requirementsText={requirementsText}
+              onRequirementsChange={setRequirementsText}
+              onSave={handleSaveRequirements}
+              saving={savingRequirements}
+              automationVersionId={selectedVersion?.id ?? null}
+            />
+          ) : canvasViewMode === "tasks" ? (
+            <TasksViewCanvas
+              tasks={versionTasks}
+              blockersRemaining={blockersRemaining}
+              onViewStep={handleViewTaskStep}
+            />
+          ) : (
+            <div className="flex-1 relative h-full">
+              <StudioCanvas
+                nodes={flowNodes}
+                edges={flowEdges}
+                onNodesChange={handleNodesChange}
+                onEdgesChange={handleEdgesChange}
+                onConnect={handleConnectNodes}
+                onEdgeUpdate={handleEdgeUpdate}
+                onNodeClick={handleNodeClick}
+                isSynthesizing={isSynthesizingBlueprint}
+                emptyState={
+                  blueprintIsEmpty ? (
+                    <div className="text-center max-w-md mx-auto space-y-2">
+                      <Sparkles className="w-12 h-12 text-gray-300 mx-auto mb-2" />
+                      <p className="text-sm font-semibold text-gray-600">Blueprint Canvas</p>
+                      <p className="text-xs text-gray-500 leading-relaxed">
+                        Chat with the copilot to build your automation. Steps will appear here as you describe your workflow.
+                      </p>
+                    </div>
+                  ) : null
+                }
+              />
+
+              {showStepHelper && !blueprintIsEmpty && (
+                <div className="absolute bottom-4 right-4 bg-gray-900/90 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none">
+                  Click on any step to configure or refine.
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        <div
-          className={cn(
-            "shrink-0 z-20 bg-white transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)] border-l border-gray-200 shadow-xl overflow-y-auto min-h-0",
-            selectedStep ? "w-[420px] translate-x-0" : "w-0 translate-x-full opacity-0"
-          )}
-        >
-          <StudioInspector
-            step={selectedStep}
-            onClose={() => {
-              setSelectedStepId(null);
-              setHasSelectedStep(false);
-              setShowStepHelper(true);
-            }}
-            onChange={handleStepChange}
-            onDelete={handleDeleteStep}
-            tasks={versionTasks}
-          />
-        </div>
+        {canvasViewMode === "flowchart" && (
+          <div
+            className={cn(
+              "shrink-0 z-20 bg-white transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)] border-l border-gray-200 shadow-xl overflow-y-auto min-h-0",
+              selectedStep ? "w-[420px] translate-x-0" : "w-0 translate-x-full opacity-0"
+            )}
+          >
+            <StudioInspector
+              step={selectedStep}
+              onClose={() => {
+                setSelectedStepId(null);
+                setHasSelectedStep(false);
+                setShowStepHelper(true);
+              }}
+              onChange={handleStepChange}
+              onDelete={handleDeleteStep}
+              tasks={versionTasks}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1225,10 +1675,10 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       <div
         className={cn(
           "flex-1",
-          activeTab === "Blueprint" ? "flex flex-col overflow-hidden" : "overflow-y-auto"
+          activeTab === "Workflow" ? "flex flex-col overflow-hidden" : "overflow-y-auto"
         )}
       >
-        {activeTab === "Blueprint" ? (
+        {activeTab === "Workflow" ? (
           <>
             {errorBanner ? <div className="px-6 pt-6">{errorBanner}</div> : null}
             <div className="flex-1 min-h-0">{blueprintContent}</div>
@@ -1251,15 +1701,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 lastUpdated={selectedVersion?.updatedAt ?? null}
                 versionLabel={selectedVersion?.versionLabel ?? ""}
               />
-            ) : activeTab === "Test" ? (
-              <TestTab />
             ) : activeTab === "Activity" ? (
               <ActivityTab
                 automationVersionId={selectedVersion?.id ?? ""}
-                onNavigateToBlueprint={() => setActiveTab("Blueprint")}
+                onNavigateToBlueprint={() => setActiveTab("Workflow")}
               />
-            ) : activeTab === "Contributors" ? (
-              <ContributorsTab onInvite={() => toast({ title: "Invite teammates", description: "Coming soon." })} />
             ) : activeTab === "Settings" ? (
               <SettingsTab
                 onInviteUser={() => toast({ title: "Invite teammates", description: "Coming soon." })}
@@ -1268,6 +1714,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 onManageCredentials={(system) => handleMockAction(`Manage ${system}`)}
                 onNavigateToTab={(tab) => handleMockAction(`Navigate to ${tab}`)}
                 onNavigateToSettings={() => handleMockAction("Workspace settings")}
+                currentVersionId={selectedVersion?.id ?? null}
               />
             ) : null}
           </div>
@@ -1631,6 +2078,81 @@ const TASK_SECTION_CONFIG: Array<{
     icon: CheckCircle2,
   },
 ];
+
+// Requirements View Component
+interface RequirementsViewProps {
+  requirementsText: string;
+  onRequirementsChange: (text: string) => void;
+  onSave: () => void;
+  saving: boolean;
+  automationVersionId: string | null;
+}
+
+function RequirementsView({ requirementsText, onRequirementsChange, onSave, saving, automationVersionId }: RequirementsViewProps) {
+  return (
+    <div className="flex-1 flex flex-col h-full bg-white overflow-hidden">
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-4xl mx-auto space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Requirements</h2>
+            <p className="text-sm text-gray-500">
+              Write a comprehensive description of your workflow in plain English. This should fully describe the process, including triggers, steps, systems involved, and desired outcomes.
+            </p>
+          </div>
+          <Textarea
+            value={requirementsText}
+            onChange={(e) => onRequirementsChange(e.target.value)}
+            placeholder="Describe your workflow in detail. Include what triggers it, what steps are involved, what systems you use, and what the end result should be..."
+            className="min-h-[600px] resize-none font-mono text-sm bg-white"
+            disabled={!automationVersionId}
+          />
+        </div>
+      </div>
+      <div className="border-t border-gray-200 bg-gray-50 px-6 py-4 flex items-center justify-end gap-3">
+        <Button
+          onClick={onSave}
+          disabled={saving || !automationVersionId}
+          className="bg-gray-900 text-white hover:bg-gray-800"
+        >
+          {saving ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Saving...
+            </>
+          ) : (
+            <>
+              <Send className="mr-2 h-4 w-4" />
+              Save Requirements
+            </>
+          )}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Tasks View Canvas Component
+interface TasksViewCanvasProps {
+  tasks: VersionTask[];
+  blockersRemaining: number;
+  onViewStep: (stepId: string) => void;
+}
+
+function TasksViewCanvas({ tasks, blockersRemaining, onViewStep }: TasksViewCanvasProps) {
+  return (
+    <div className="flex-1 flex flex-col h-full bg-white overflow-hidden">
+      <div className="flex-1 overflow-y-auto pt-[100px]">
+        <div className="w-[90%] mx-auto">
+          <AutomationTasksTab
+            tasks={tasks}
+            blockersRemaining={blockersRemaining}
+            onViewStep={onViewStep}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function AutomationTasksTab({ tasks, blockersRemaining, onViewStep }: AutomationTasksTabProps) {
   const grouped = useMemo(() => {

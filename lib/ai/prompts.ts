@@ -227,6 +227,10 @@ CRITICAL RULES:
 - NEVER use template examples - adapt to their specific workflow
 - NEVER ask questions you can infer from context
 - ALWAYS use their terminology and system names
+- ALWAYS keep the existing flow order. When the user says "after step 3A", append a new step with a matching step number suffix (e.g. 3A1) and connect it via \`parentStep\` or \`nextSteps\`.
+- ALWAYS set \`nextSteps\` (or \`dependsOnIds\`) so the graph knows what comes next. If the step only belongs to a branch, set \`parentStep\` to that branch's step number.
+- NEVER create an extra Trigger unless the user explicitly adds a new entry point.
+- NEVER detach a step from the main flow—if you move a step, update both the previous step's \`nextSteps\` and the moved step's \`parentStep\`.
 - ALWAYS make the conversation feel collaborative, not interrogative
 `.trim();
 
@@ -272,13 +276,26 @@ Return ONLY valid JSON in this exact envelope:
   "blueprint": {
     "steps": [...],
     "branches": [...],
-    "tasks": [...]
+    "tasks": [...],
+    "sections": {
+      "business_requirements": "What this automation accomplishes",
+      "business_objectives": "Goals and objectives",
+      "success_criteria": "How success is measured",
+      "systems": "List of systems involved (comma-separated)"
+    }
   }
 }
 
 - "chatResponse" should say things like "Got it. Added the approvals branch." Never restate the entire workflow.
 - "followUpQuestion" is optional. If you don't need one, omit the field or set it to null.
 - The blueprint arrays ("blueprint.steps" / "branches" / "tasks") follow the schemas below.
+- "blueprint.sections" is optional but should be populated when the user describes their process. Extract:
+  - "business_requirements": What the automation accomplishes (from user's description)
+  - "business_objectives": Goals and objectives (if mentioned)
+  - "success_criteria": How success is measured (if mentioned)
+  - "systems": Comma-separated list of systems mentioned (e.g., "Shopify, QuickBooks, Gmail")
+- Only populate sections that are currently empty in the blueprint. Don't overwrite existing content.
+- "requirementsText" (REQUIRED when user provides new information): Include a comprehensive, plain English requirements document that fully describes the workflow. This should be a detailed, editable text that captures all the requirements discussed. If the user provides new information or you refine the requirements, ALWAYS include an updated requirementsText field with the complete requirements document. This is separate from the blueprint sections and should be a full narrative description of the workflow.
 - No markdown, no prose outside of JSON.
 
 # CHAT RESPONSE RULES
@@ -399,19 +416,26 @@ Output ONLY the updated step in valid JSON format.`;
 /**
  * Formats the user prompt sent to the AI with optional blueprint context.
  */
-export function formatBlueprintPrompt(userMessage: string, currentBlueprint?: Blueprint | null): string {
-  if (!currentBlueprint || currentBlueprint.steps?.length === 0) {
-    return userMessage;
+export function formatBlueprintPrompt(userMessage: string, currentBlueprint?: Blueprint | null, requirementsText?: string | null): string {
+  const parts: string[] = [];
+  
+  if (requirementsText?.trim()) {
+    parts.push(`CURRENT REQUIREMENTS DOCUMENT:\n${requirementsText.trim()}\n`);
   }
-
-  return `${summarizeBlueprintForAI(currentBlueprint)}
-
-USER REQUEST:
-${userMessage}
-
-Remember: Make MINIMAL changes. Preserve all existing structure unless explicitly asked to change it.
-
-Return ONLY valid JSON matching the blueprint format.`;
+  
+  if (currentBlueprint && currentBlueprint.steps?.length > 0) {
+    parts.push(summarizeBlueprintForAI(currentBlueprint));
+  }
+  
+  parts.push(`USER REQUEST:\n${userMessage}`);
+  
+  if (currentBlueprint && currentBlueprint.steps?.length > 0) {
+    parts.push("\nRemember: Make MINIMAL changes. Preserve all existing structure unless explicitly asked to change it.");
+  }
+  
+  parts.push("\nReturn ONLY valid JSON matching the blueprint format.");
+  
+  return parts.join("\n\n");
 }
 
 export function summarizeBlueprintForAI(blueprint: Blueprint): string {
