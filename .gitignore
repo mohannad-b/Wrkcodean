@@ -40,5 +40,3 @@ next-env.d.ts
 
 
 
-drizzle/*.sql
-drizzle/meta/*.json
