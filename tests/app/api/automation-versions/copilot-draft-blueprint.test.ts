@@ -41,7 +41,7 @@ vi.mock("@/lib/audit/log", () => ({
   logAudit: logAuditMock,
 }));
 
-vi.mock("@/lib/blueprint/ai-builder", () => ({
+vi.mock("@/lib/blueprint/ai-builder-simple", () => ({
   buildBlueprintFromChat: buildBlueprintFromChatMock,
 }));
 

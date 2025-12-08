@@ -6,7 +6,7 @@ import { getAutomationVersionDetail } from "@/lib/services/automations";
 import { listCopilotMessages, createCopilotMessage } from "@/lib/services/copilot-messages";
 import { parseBlueprint } from "@/lib/blueprint/schema";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
-import { buildBlueprintFromChat } from "@/lib/blueprint/ai-builder";
+import { buildBlueprintFromChat } from "@/lib/blueprint/ai-builder-simple";
 import { applyStepNumbers } from "@/lib/blueprint/step-numbering";
 import { syncAutomationTasks } from "@/lib/blueprint/task-sync";
 import { BlueprintSchema } from "@/lib/blueprint/schema";

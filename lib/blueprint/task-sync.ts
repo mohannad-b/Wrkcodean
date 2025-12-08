@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { tasks, type Task, type TaskMetadata } from "@/db/schema";
 import type { Blueprint } from "./types";
-import type { AITask } from "./ai-builder";
+import type { AITask } from "./ai-builder-simple";
 
 export type TaskAssignmentMap = Record<string, string[]>;
 

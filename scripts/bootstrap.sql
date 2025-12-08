@@ -1,9 +1,11 @@
 -- Bootstrap schema for WRK Copilot (drop + recreate everything)
 
--- Drop tables (if they exist)
+-- Drop tables (if they exist) - clean slate first
 DROP TABLE IF EXISTS audit_logs CASCADE;
 DROP TABLE IF EXISTS tasks CASCADE;
 DROP TABLE IF EXISTS messages CASCADE;
+DROP TABLE IF EXISTS copilot_analyses CASCADE;
+DROP TABLE IF EXISTS copilot_messages CASCADE;
 DROP TABLE IF EXISTS quotes CASCADE;
 DROP TABLE IF EXISTS projects CASCADE;
 DROP TABLE IF EXISTS ai_jobs CASCADE;
@@ -18,12 +20,16 @@ DROP TABLE IF EXISTS tenants CASCADE;
 DROP TYPE IF EXISTS task_priority;
 DROP TYPE IF EXISTS task_status;
 DROP TYPE IF EXISTS message_type;
+DROP TYPE IF EXISTS copilot_message_role;
 DROP TYPE IF EXISTS ai_job_status;
 DROP TYPE IF EXISTS file_status;
 DROP TYPE IF EXISTS quote_status;
 DROP TYPE IF EXISTS automation_status;
 DROP TYPE IF EXISTS membership_role;
 DROP TYPE IF EXISTS notification_preference;
+
+-- Extensions
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- Enumerations
 CREATE TYPE membership_role AS ENUM ('client_admin','client_member','ops_admin','admin');
@@ -40,6 +46,7 @@ CREATE TYPE quote_status AS ENUM ('draft','sent','accepted','rejected');
 CREATE TYPE file_status AS ENUM ('pending','uploaded','failed');
 CREATE TYPE ai_job_status AS ENUM ('pending','processing','succeeded','failed');
 CREATE TYPE message_type AS ENUM ('client','ops');
+CREATE TYPE copilot_message_role AS ENUM ('user','assistant','system');
 CREATE TYPE task_status AS ENUM ('pending','in_progress','complete');
 CREATE TYPE task_priority AS ENUM ('blocker','important','optional');
 CREATE TYPE notification_preference AS ENUM ('all','mentions','none');
@@ -103,8 +110,9 @@ CREATE TABLE automation_versions (
   status automation_status NOT NULL DEFAULT 'IntakeInProgress',
   summary text,
   intake_notes text,
+  requirements_text text,
   requirements_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-  blueprint_json jsonb NOT NULL DEFAULT jsonb_build_object(
+  workflow_json jsonb NOT NULL DEFAULT jsonb_build_object(
     'version', 1,
     'status', 'Draft',
     'summary', '',
@@ -194,6 +202,28 @@ CREATE TABLE quotes (
 );
 CREATE INDEX quotes_tenant_idx ON quotes(tenant_id);
 CREATE INDEX quotes_version_idx ON quotes(automation_version_id);
+
+-- Copilot Messages
+CREATE TABLE copilot_messages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  automation_version_id uuid NOT NULL REFERENCES automation_versions(id) ON DELETE CASCADE,
+  role copilot_message_role NOT NULL,
+  content text NOT NULL,
+  created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX copilot_messages_tenant_idx ON copilot_messages(tenant_id);
+CREATE INDEX copilot_messages_version_idx ON copilot_messages(automation_version_id);
+
+-- Copilot Analyses
+CREATE TABLE copilot_analyses (
+  automation_version_id uuid PRIMARY KEY REFERENCES automation_versions(id) ON DELETE CASCADE,
+  analysis_json jsonb NOT NULL,
+  version text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 
 -- Messages
 CREATE TABLE messages (

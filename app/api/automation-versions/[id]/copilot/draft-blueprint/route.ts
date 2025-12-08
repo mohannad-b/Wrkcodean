@@ -11,7 +11,7 @@ import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import type { Blueprint } from "@/lib/blueprint/types";
 import { BlueprintSchema, parseBlueprint } from "@/lib/blueprint/schema";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
-import { buildBlueprintFromChat, type AITask } from "@/lib/blueprint/ai-builder";
+import { buildBlueprintFromChat, type AITask } from "@/lib/blueprint/ai-builder-simple";
 import { applyStepNumbers } from "@/lib/blueprint/step-numbering";
 import { parseCommand, isDirectCommand } from "@/lib/blueprint/command-parser";
 import { executeCommand } from "@/lib/blueprint/command-executor";

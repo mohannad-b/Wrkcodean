@@ -90,7 +90,7 @@
     "dotenv": "^17.2.3",
     "drizzle-kit": "^0.31.7",
     "eslint": "^8.57.1",
-    "eslint-config-next": "^16.0.6",
+    "eslint-config-next": "^14.2.18",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-import": "^2.31.0",
     "jsdom": "^23.0.1",

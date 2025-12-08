@@ -13,7 +13,6 @@ import { applyStepNumbers } from "./step-numbering";
 import { BLUEPRINT_SYSTEM_PROMPT, formatBlueprintPrompt } from "@/lib/ai/prompts";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { sanitizeBlueprintTopology, type SanitizationSummary } from "./sanitizer";
-import type { AITask } from "./ai-builder";
 
 type ConversationMessage = {
   role: "system" | "user" | "assistant";
@@ -26,6 +25,14 @@ interface BuildBlueprintParams {
   conversationHistory?: ConversationMessage[];
   requirementsText?: string | null;
 }
+
+export type AITask = {
+  title: string;
+  description?: string;
+  priority?: "blocker" | "important" | "optional";
+  relatedSteps?: string[];
+  systemType?: string;
+};
 
 export interface BuildBlueprintResult {
   blueprint: Blueprint;
@@ -77,6 +84,7 @@ type AIResponse = {
     branches?: AIBranch[];
     tasks?: AITask[];
     sections?: Record<string, string>;
+    requirementsText?: string;
   };
   steps?: AIStep[];
   branches?: AIBranch[];

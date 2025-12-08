@@ -43,7 +43,7 @@ vi.mock("@/lib/services/copilot-messages", () => ({
   createCopilotMessage: createCopilotMessageMock,
 }));
 
-vi.mock("@/lib/blueprint/ai-builder", () => ({
+vi.mock("@/lib/blueprint/ai-builder-simple", () => ({
   buildBlueprintFromChat: buildBlueprintFromChatMock,
 }));
 
