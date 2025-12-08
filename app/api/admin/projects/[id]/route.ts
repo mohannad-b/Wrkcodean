@@ -43,6 +43,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
               versionLabel: detail.version.versionLabel,
               status: fromDbAutomationStatus(detail.version.status),
               intakeNotes: detail.version.intakeNotes,
+              requirementsText: detail.version.requirementsText,
             }
           : null,
         quotes: detail.quotes.map((quote) => ({

@@ -104,6 +104,7 @@ type ProjectDetail = {
     versionLabel: string;
     status: AutomationLifecycleStatus | string;
     intakeNotes: string | null;
+    requirementsText: string | null;
   } | null;
   quotes: Quote[];
 };
@@ -404,7 +405,7 @@ function AdminActions({ canMarkLive, markingLive, onMarkLive, canMarkSigned, onM
 }
 
 // Blueprint Tab Component
-function BlueprintTab() {
+function BlueprintTab({ requirementsText }: { requirementsText?: string | null }) {
   const [nodes, , onNodesChange] = useNodesState([
     {
       id: "1",
@@ -446,47 +447,15 @@ function BlueprintTab() {
 
   return (
     <div className="flex h-full border-t border-gray-200">
-      {/* Left: Intake Context */}
+      {/* Left: Requirements */}
       <div className="w-80 border-r border-gray-200 bg-white flex flex-col">
-        <div className="p-4 border-b border-gray-100 font-bold text-sm text-gray-700">
-          Client Intake
-        </div>
+        <div className="p-4 border-b border-gray-100 font-bold text-sm text-gray-700">Requirements</div>
         <ScrollArea className="flex-1 p-4">
-          <div className="space-y-4">
-            {mockIntakeChat.map((msg, i) => (
-              <div key={i} className="flex flex-col gap-1">
-                <div className="flex justify-between text-[10px] text-gray-400 uppercase font-bold">
-                  <span>{msg.role}</span>
-                  <span>{msg.time}</span>
-                </div>
-                <div
-                  className={cn(
-                    "p-3 rounded-lg text-xs leading-relaxed",
-                    msg.role === "user"
-                      ? "bg-gray-100 text-gray-800"
-                      : "bg-blue-50 text-blue-800"
-                  )}
-                >
-                  {msg.text}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-6 pt-4 border-t border-gray-100">
-            <p className="text-xs font-bold text-gray-400 uppercase mb-3">Attached Files</p>
-            <div className="space-y-2">
-              {mockFiles.map((f, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-2 p-2 rounded border border-gray-200 bg-gray-50 hover:bg-white cursor-pointer transition-colors"
-                >
-                  <FileText size={14} className="text-gray-400" />
-                  <span className="text-xs font-medium text-gray-700 truncate">{f}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          {requirementsText?.trim() ? (
+            <p className="text-xs text-gray-800 whitespace-pre-wrap leading-relaxed">{requirementsText}</p>
+          ) : (
+            <p className="text-xs text-gray-400">No requirements captured yet.</p>
+          )}
         </ScrollArea>
       </div>
 
@@ -973,7 +942,7 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
                 <OverviewTab project={displayProject} />
               </TabsContent>
               <TabsContent value="requirements-blueprint" className="h-full m-0 data-[state=inactive]:hidden">
-                <BlueprintTab />
+                <BlueprintTab requirementsText={project.version?.requirementsText} />
               </TabsContent>
               <TabsContent value="pricing-quote" className="h-full m-0 data-[state=inactive]:hidden">
                 <PricingTab

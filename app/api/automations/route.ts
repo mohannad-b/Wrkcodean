@@ -145,6 +145,8 @@ export async function GET() {
               versionLabel: automation.latestVersion.versionLabel,
               status: fromDbAutomationStatus(automation.latestVersion.status),
               intakeNotes: automation.latestVersion.intakeNotes,
+              // Ensure the field is always present in the response
+              requirementsText: automation.latestVersion.requirementsText ?? null,
               summary: automation.latestVersion.summary,
               updatedAt: automation.latestVersion.updatedAt,
               latestQuote: automation.latestVersion.latestQuote
