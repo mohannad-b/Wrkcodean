@@ -6,11 +6,13 @@ import {
   projects,
   quotes,
   tasks,
+  users,
   type Automation,
   type AutomationVersion,
   type Project,
   type Quote,
   type Task,
+  type User,
 } from "@/db/schema";
 import {
   API_AUTOMATION_STATUSES,
@@ -19,10 +21,12 @@ import {
   fromDbAutomationStatus,
   toDbAutomationStatus,
 } from "@/lib/automations/status";
-import type { Blueprint } from "@/lib/blueprint/types";
+import type { Workflow } from "@/lib/blueprint/types";
+import { createEmptyWorkflow } from "@/lib/blueprint/factory";
 
 type AutomationWithLatestVersion = Automation & {
   latestVersion: (AutomationVersion & { latestQuote: Quote | null }) | null;
+  creator: User | null;
 };
 
 export async function listAutomationsForTenant(tenantId: string): Promise<AutomationWithLatestVersion[]> {
@@ -37,6 +41,22 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
   }
 
   const automationIds = automationRows.map((row) => row.id);
+  const creatorIds = automationRows
+    .map((row) => row.createdBy)
+    .filter((id): id is string => id !== null);
+
+  // Fetch creator information
+  const creatorRows = creatorIds.length
+    ? await db
+        .select()
+        .from(users)
+        .where(inArray(users.id, creatorIds))
+    : [];
+
+  const creatorMap = new Map<string, User>();
+  for (const creator of creatorRows) {
+    creatorMap.set(creator.id, creator);
+  }
 
   const versionRows = await db
     .select()
@@ -72,9 +92,11 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
 
   return automationRows.map((automation) => {
     const version = latestVersionMap.get(automation.id);
+    const creator = automation.createdBy ? creatorMap.get(automation.createdBy) ?? null : null;
     return {
       ...automation,
       latestVersion: version ? { ...version, latestQuote: latestQuoteMap.get(version.id) ?? null } : null,
+      creator,
     };
   });
 }
@@ -142,6 +164,7 @@ type CreateAutomationParams = {
   name: string;
   description?: string | null;
   intakeNotes?: string | null;
+  requirementsText?: string | null;
   versionLabel?: string;
 };
 
@@ -169,6 +192,7 @@ export async function createAutomationWithInitialVersion(params: CreateAutomatio
         versionLabel: params.versionLabel ?? "v1.0",
         status: toDbAutomationStatus("IntakeInProgress"),
         intakeNotes: params.intakeNotes ?? null,
+        requirementsText: params.requirementsText ?? null,
         createdAt: new Date(),
       })
       .returning();
@@ -187,6 +211,7 @@ type CreateAutomationVersionParams = {
   versionLabel?: string;
   summary?: string | null;
   intakeNotes?: string | null;
+  copyFromVersionId?: string | null;
 };
 
 export async function createAutomationVersion(params: CreateAutomationVersionParams) {
@@ -202,6 +227,32 @@ export async function createAutomationVersion(params: CreateAutomationVersionPar
 
   const label = params.versionLabel ?? (await nextVersionLabel(params.automationId, params.tenantId));
 
+  // If copying from a version, fetch the source version's workflow
+  let workflowJson: Workflow;
+  if (params.copyFromVersionId) {
+    const [sourceVersion] = await db
+      .select()
+      .from(automationVersions)
+      .where(
+        and(
+          eq(automationVersions.id, params.copyFromVersionId),
+          eq(automationVersions.automationId, params.automationId),
+          eq(automationVersions.tenantId, params.tenantId)
+        )
+      )
+      .limit(1);
+
+    if (sourceVersion && sourceVersion.workflowJson) {
+      workflowJson = sourceVersion.workflowJson as Workflow;
+    } else {
+      // If source version doesn't have a workflow, create an empty one
+      workflowJson = createEmptyWorkflow();
+    }
+  } else {
+    // Start from scratch - create an empty workflow
+    workflowJson = createEmptyWorkflow();
+  }
+
   const [version] = await db
       .insert(automationVersions)
       .values({
@@ -209,9 +260,10 @@ export async function createAutomationVersion(params: CreateAutomationVersionPar
         automationId: params.automationId,
         versionLabel: label,
         status: toDbAutomationStatus("IntakeInProgress"),
-      summary: params.summary ?? null,
-      intakeNotes: params.intakeNotes ?? null,
-    })
+        summary: params.summary ?? null,
+        intakeNotes: params.intakeNotes ?? null,
+        workflowJson: workflowJson,
+      })
     .returning();
 
   if (!version) {
@@ -247,7 +299,8 @@ type UpdateMetadataParams = {
   tenantId: string;
   automationVersionId: string;
   intakeNotes?: string | null;
-  blueprintJson?: Blueprint | null;
+  requirementsText?: string | null;
+  workflowJson?: Workflow | null;
 };
 
 export async function updateAutomationVersionMetadata(params: UpdateMetadataParams) {
@@ -265,8 +318,11 @@ export async function updateAutomationVersionMetadata(params: UpdateMetadataPara
   if (params.intakeNotes !== undefined) {
     updatePayload.intakeNotes = params.intakeNotes;
   }
-  if (params.blueprintJson !== undefined) {
-    updatePayload.blueprintJson = params.blueprintJson ?? undefined;
+  if (params.requirementsText !== undefined) {
+    updatePayload.requirementsText = params.requirementsText;
+  }
+  if (params.workflowJson !== undefined) {
+    updatePayload.workflowJson = params.workflowJson ?? undefined;
   }
 
   if (Object.keys(updatePayload).length === 0) {

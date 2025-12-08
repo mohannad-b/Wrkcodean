@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Check, GitBranch, Plus, Clock } from "lucide-react";
+import { ChevronDown, Check, GitBranch, Plus, Clock, ChevronDown as ChevronDownIcon } from "lucide-react";
 import { Button } from "./button";
 import {
   DropdownMenu,
@@ -24,7 +24,7 @@ interface VersionSelectorProps {
   currentVersionId: string | null;
   versions: VersionOption[];
   onChange: (versionId: string) => void;
-  onNewVersion?: () => void;
+  onNewVersion?: (copyFromVersionId?: string | null) => void;
 }
 
 export function VersionSelector({ currentVersionId, versions, onChange, onNewVersion }: VersionSelectorProps) {
@@ -136,12 +136,28 @@ export function VersionSelector({ currentVersionId, versions, onChange, onNewVer
         </div>
         {onNewVersion ? (
           <div className="p-3 border-t border-gray-100 bg-gray-50">
-            <Button
-              onClick={onNewVersion}
-              className="w-full bg-[#E43632] hover:bg-[#C12E2A] text-white h-8 text-xs"
-            >
-              <Plus size={14} className="mr-2" /> Start New Version
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button className="w-full bg-[#E43632] hover:bg-[#C12E2A] text-white h-8 text-xs">
+                  <Plus size={14} className="mr-2" /> Start New Version
+                  <ChevronDownIcon size={14} className="ml-2" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuItem onClick={() => onNewVersion(null)}>
+                  <div className="flex flex-col">
+                    <span className="font-semibold">Start from scratch</span>
+                    <span className="text-xs text-gray-500">Create a new empty version</span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onNewVersion(currentVersionId)}>
+                  <div className="flex flex-col">
+                    <span className="font-semibold">Copy from this version</span>
+                    <span className="text-xs text-gray-500">Duplicate the current version</span>
+                  </div>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         ) : null}
       </DropdownMenuContent>

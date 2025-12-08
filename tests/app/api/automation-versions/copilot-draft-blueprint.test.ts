@@ -14,6 +14,7 @@ const whereMock = vi.fn(() => ({ returning: returningMock }));
 const setMock = vi.fn(() => ({ where: whereMock }));
 const updateMock = vi.fn(() => ({ set: setMock }));
 const createCopilotMessageMock = vi.fn();
+const syncAutomationTasksMock = vi.fn();
 
 vi.mock("@/lib/api/context", () => ({
   requireTenantSession: requireTenantSessionMock,
@@ -67,9 +68,14 @@ vi.mock("@/lib/services/copilot-messages", () => ({
   createCopilotMessage: createCopilotMessageMock,
 }));
 
+vi.mock("@/lib/blueprint/task-sync", () => ({
+  syncAutomationTasks: syncAutomationTasksMock,
+}));
+
 describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    syncAutomationTasksMock.mockResolvedValue({});
     requireTenantSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: ["client_admin"] });
     canMock.mockReturnValue(true);
     rateLimitMock.mockReturnValue({ remaining: 4, resetAt: Date.now() + 1000 });
@@ -171,6 +177,7 @@ describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
       role: "assistant",
       content: "Got it.",
     });
+    expect(syncAutomationTasksMock).toHaveBeenCalled();
     expect(updateMock).toHaveBeenCalled();
     expect(returningMock).toHaveBeenCalled();
     expect(revalidatePathMock).toHaveBeenCalledWith("/automations/auto-1");

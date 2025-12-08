@@ -3,16 +3,11 @@
 import { WorkspaceSettings } from "@/components/settings/WorkspaceSettings";
 import { useSearchParams } from "next/navigation";
 
+type WorkspaceSettingsTab = "profile" | "billing";
+
 export default function WorkspaceSettingsPage() {
   const searchParams = useSearchParams();
-  const tab = (searchParams?.get("tab") as
-    | "profile"
-    | "billing"
-    | "members"
-    | "systems"
-    | "notifications"
-    | "security"
-    | "branding") ?? undefined;
+  const tab = (searchParams?.get("tab") as WorkspaceSettingsTab) ?? undefined;
 
   return (
     <div className="h-full overflow-hidden">
@@ -20,7 +15,3 @@ export default function WorkspaceSettingsPage() {
     </div>
   );
 }
-
-
-
-

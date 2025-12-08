@@ -10,6 +10,7 @@ import ReactFlow, {
   Connection,
   OnNodesChange,
   OnEdgesChange,
+  OnEdgeUpdate,
   NodeTypes,
   BackgroundVariant,
   ReactFlowInstance,
@@ -19,6 +20,7 @@ import ReactFlow, {
 } from "reactflow";
 import CustomNode from "@/components/flow/CustomNode";
 import ConditionEdge from "@/components/flow/ConditionEdge";
+import DefaultEdge from "@/components/flow/DefaultEdge";
 
 // Define nodeTypes and edgeTypes at module level - MUST be outside component for ReactFlow
 // These are stable references that won't change between renders
@@ -26,9 +28,11 @@ const nodeTypes: NodeTypes = {
   custom: CustomNode,
 };
 
-const edgeTypes = {
+// Use Object.freeze to ensure ReactFlow recognizes these as stable references
+const edgeTypes = Object.freeze({
   condition: ConditionEdge,
-};
+  default: DefaultEdge,
+});
 
 // Define defaultEdgeOptions at module level to avoid recreating on each render
 const defaultEdgeOptions = {
@@ -43,6 +47,7 @@ interface StudioCanvasProps {
   onNodesChange?: OnNodesChange;
   onEdgesChange?: OnEdgesChange;
   onConnect?: (connection: Connection) => void;
+  onEdgeUpdate?: OnEdgeUpdate;
   onNodeClick?: (event: React.MouseEvent, node: Node) => void;
   isSynthesizing?: boolean;
   emptyState?: React.ReactNode;
@@ -54,6 +59,7 @@ export function StudioCanvas({
   onNodesChange,
   onEdgesChange,
   onConnect,
+  onEdgeUpdate,
   onNodeClick,
   isSynthesizing = false,
   emptyState,
@@ -108,8 +114,6 @@ export function StudioCanvas({
     [onNodesChange]
   );
 
-  const isInteractive = renderNodes.length > 0;
-
   return (
     <ReactFlowProvider>
       <div className="w-full h-full bg-[#F9FAFB] relative" data-testid="canvas-pane">
@@ -130,6 +134,7 @@ export function StudioCanvas({
           onNodesChange={handleNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          onEdgeUpdate={onEdgeUpdate}
           onNodeClick={onNodeClick}
           onInit={setRfInstance}
           nodeTypes={nodeTypes}
@@ -139,10 +144,13 @@ export function StudioCanvas({
           defaultEdgeOptions={defaultEdgeOptions}
           minZoom={0.1}
           maxZoom={2}
-          nodesDraggable={isInteractive}
-          nodesConnectable={isInteractive && Boolean(onConnect)}
+          nodesDraggable
+          nodesConnectable={Boolean(onConnect)}
+          connectOnClick={Boolean(onConnect)}
+          panOnDrag
           nodesFocusable
           elementsSelectable
+          selectNodesOnDrag={false}
           proOptions={{ hideAttribution: true }}
         >
           <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#E5E7EB" />

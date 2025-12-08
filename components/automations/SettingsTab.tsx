@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
+  ChevronDown,
   CreditCard as CardIcon,
   ExternalLink,
   FileText,
@@ -46,6 +47,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 // Mock Data
@@ -120,10 +127,11 @@ type SettingsTabType =
 interface SettingsTabProps {
   onInviteUser?: () => void;
   onAddSystem?: () => void;
-  onNewVersion?: () => void;
+  onNewVersion?: (copyFromVersionId?: string | null) => void;
   onManageCredentials?: (systemName: string) => void;
   onNavigateToTab?: (tab: string) => void;
   onNavigateToSettings?: () => void;
+  currentVersionId?: string | null;
 }
 
 export function SettingsTab({
@@ -133,6 +141,7 @@ export function SettingsTab({
   onManageCredentials,
   onNavigateToTab,
   onNavigateToSettings,
+  currentVersionId,
 }: SettingsTabProps = {}) {
   const [activeTab, setActiveTab] = useState<SettingsTabType>("general");
 
@@ -201,6 +210,7 @@ export function SettingsTab({
             {activeTab === "versions" && (
               <VersionsSettings
                 onNewVersion={onNewVersion}
+                currentVersionId={currentVersionId}
                 onNavigateToOverview={() => onNavigateToTab?.("Overview")}
                 onNavigateToTab={onNavigateToTab}
               />
@@ -564,10 +574,12 @@ function VersionsSettings({
   onNewVersion,
   onNavigateToOverview,
   onNavigateToTab,
+  currentVersionId,
 }: {
-  onNewVersion?: () => void;
+  onNewVersion?: (copyFromVersionId?: string | null) => void;
   onNavigateToOverview?: () => void;
   onNavigateToTab?: (tab: string) => void;
+  currentVersionId?: string | null;
 } = {}) {
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -601,12 +613,28 @@ function VersionsSettings({
           <h3 className="text-xl font-bold text-[#0A0A0A]">Version History</h3>
           <p className="text-sm text-gray-500">Manage deployment lifecycle and history.</p>
         </div>
-        <Button
-          className="bg-[#0A0A0A] hover:bg-gray-800 text-white"
-          onClick={() => onNewVersion?.()}
-        >
-          <Plus size={16} className="mr-2" /> Start New Version
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button className="bg-[#0A0A0A] hover:bg-gray-800 text-white">
+              <Plus size={16} className="mr-2" /> Start New Version
+              <ChevronDown size={16} className="ml-2" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-64">
+            <DropdownMenuItem onClick={() => onNewVersion?.(null)}>
+              <div className="flex flex-col">
+                <span className="font-semibold">Start from scratch</span>
+                <span className="text-xs text-gray-500">Create a new empty version</span>
+              </div>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onNewVersion?.(currentVersionId ?? null)}>
+              <div className="flex flex-col">
+                <span className="font-semibold">Copy from this version</span>
+                <span className="text-xs text-gray-500">Duplicate the current version</span>
+              </div>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       <div className="space-y-4">

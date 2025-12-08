@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, memo } from "react";
 import { BaseEdge, EdgeLabelRenderer, EdgeProps, getSmoothStepPath } from "reactflow";
-import { ChevronDown, AlertCircle, Sparkles, ExternalLink, Info } from "lucide-react";
+import { ChevronDown, AlertCircle, Sparkles, ExternalLink, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // This is the data we expect in the edge
@@ -17,6 +17,7 @@ interface ConditionEdgeData {
     newLabel: string,
     newData: { operator: string; value: string | number; unit: string }
   ) => void;
+  onDelete?: (id: string) => void;
 }
 
 function ConditionEdge({
@@ -123,6 +124,18 @@ function ConditionEdge({
               >
                 {data?.label || "Set Condition"}
               </span>
+              {selected && data?.onDelete && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    data.onDelete?.(id);
+                  }}
+                  className="ml-1 p-0.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"
+                  title="Delete connection"
+                >
+                  <X size={12} />
+                </button>
+              )}
               {data?.isMissingInfo && (
                 <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-white px-2 py-1 rounded shadow-lg border border-gray-100 whitespace-nowrap flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                   <Sparkles size={10} className="text-[#E43632]" />

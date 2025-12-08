@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uuid, uniqueIndex, index } from "drizzle-orm/pg-core";
-import type { Blueprint } from "@/lib/blueprint/types";
+import type { Workflow } from "@/lib/blueprint/types";
 import type { CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
 
 const membershipRoleEnum = pgEnum("membership_role", [
@@ -115,11 +115,12 @@ export const automationVersions = pgTable(
     status: automationStatusEnum("status").notNull().default("IntakeInProgress"),
     summary: text("summary"),
     intakeNotes: text("intake_notes"),
+    requirementsText: text("requirements_text"),
     requirementsJson: jsonb("requirements_json")
       .$type<Record<string, unknown>>()
       .default(sql`'{}'::jsonb`),
-    blueprintJson: jsonb("blueprint_json")
-      .$type<Blueprint>()
+    workflowJson: jsonb("workflow_json")
+      .$type<Workflow>()
       .notNull()
       .default(
         sql`jsonb_build_object(

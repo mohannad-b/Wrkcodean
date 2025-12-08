@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import type { BlueprintUpdates } from "@/lib/blueprint/ai-updates";
 import type { Blueprint } from "@/lib/blueprint/types";
 import type { CopilotThinkingStep } from "@/types/copilot-thinking";
+import type { BlueprintProgressSnapshot } from "@/lib/blueprint/copilot-analysis";
 
 type ChatRole = "user" | "assistant" | "system";
 
@@ -29,6 +30,7 @@ interface StudioChatProps {
   onConversationChange?: (messages: CopilotMessage[]) => void;
   onBlueprintUpdates?: (updates: BlueprintUpdates) => void;
   onBlueprintRefresh?: () => Promise<void> | void;
+  onProgressUpdate?: (progress: BlueprintProgressSnapshot | null) => void;
 }
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
@@ -71,6 +73,7 @@ export function StudioChat({
   onConversationChange,
   onBlueprintUpdates,
   onBlueprintRefresh,
+  onProgressUpdate,
 }: StudioChatProps) {
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
   const [input, setInput] = useState("");
@@ -196,6 +199,83 @@ useEffect(() => {
     onConversationChange?.(durableMessages);
   }, [durableMessages, onConversationChange]);
 
+  // Auto-trigger blueprint generation if there's a user message but no assistant response
+  useEffect(() => {
+    if (!automationVersionId || isSending || isAwaitingReply || isLoadingThread || disabled) {
+      return;
+    }
+
+    const userMessages = durableMessages.filter((m) => m.role === "user");
+    const assistantMessages = durableMessages.filter((m) => m.role === "assistant");
+    
+    // If there's at least one user message but no assistant response, auto-trigger
+    if (userMessages.length > 0 && assistantMessages.length === 0 && blueprintEmpty) {
+      const draftMessages = durableMessages
+        .filter(
+          (message) =>
+            (message.role === "user" || message.role === "assistant") && message.content.trim().length > 0
+        )
+        .map((message) => ({
+          role: message.role,
+          content: message.content,
+        }));
+
+      if (draftMessages.length > 0) {
+        setIsAwaitingReply(true);
+        setShowThinkingBubble(true);
+        setThinkingSteps(DEFAULT_USER_FACING_THINKING_STEPS);
+        setCurrentThinkingIndex(0);
+        setAssistantError(null);
+
+        fetch(`/api/automation-versions/${automationVersionId}/copilot/draft-blueprint`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: draftMessages }),
+        })
+          .then(async (response) => {
+            if (!response.ok) {
+              const errorData = await response.json().catch(() => ({}));
+              throw new Error(errorData.error ?? "Failed to generate blueprint");
+            }
+            return response.json();
+          })
+          .then(async (data: {
+            blueprint?: Blueprint | null;
+            message?: ApiCopilotMessage;
+            thinkingSteps?: CopilotThinkingStep[];
+            progress?: BlueprintProgressSnapshot | null;
+          }) => {
+            if (data.message) {
+              const assistantMessage = mapApiMessage(data.message);
+              setMessages((prev) => {
+                const updated = [...prev, assistantMessage].sort(
+                  (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+                );
+                return updated;
+              });
+            }
+            if (data.blueprint) {
+              onBlueprintUpdates?.(data.blueprint);
+              await onBlueprintRefresh?.();
+            }
+            if (data.progress) {
+              onProgressUpdate?.(data.progress);
+            }
+            if (data.thinkingSteps && data.thinkingSteps.length > 0) {
+              setThinkingSteps(data.thinkingSteps);
+            }
+          })
+          .catch((error) => {
+            setAssistantError(error instanceof Error ? error.message : "Failed to generate blueprint");
+          })
+          .finally(() => {
+            setIsAwaitingReply(false);
+            setShowThinkingBubble(false);
+          });
+      }
+    }
+  }, [automationVersionId, durableMessages, blueprintEmpty, isSending, isAwaitingReply, isLoadingThread, disabled, mapApiMessage, onBlueprintUpdates, onBlueprintRefresh, onProgressUpdate]);
+
   const displayedThinkingSteps = useMemo(
     () => (thinkingSteps.length > 0 ? thinkingSteps : DEFAULT_USER_FACING_THINKING_STEPS).slice(0, 3),
     [thinkingSteps]
@@ -291,6 +371,7 @@ useEffect(() => {
         blueprint?: Blueprint | null;
         message?: ApiCopilotMessage;
         thinkingSteps?: CopilotThinkingStep[];
+        progress?: BlueprintProgressSnapshot | null;
       } = await draftResponse.json();
 
       if (draftData.message) {
@@ -306,6 +387,10 @@ useEffect(() => {
 
       if (draftData.blueprint && onBlueprintUpdates) {
         onBlueprintUpdates(mapBlueprintToUpdates(draftData.blueprint));
+      }
+
+      if (typeof onProgressUpdate === "function") {
+        onProgressUpdate(draftData.progress ?? null);
       }
 
       if (draftData.thinkingSteps && draftData.thinkingSteps.length > 0) {

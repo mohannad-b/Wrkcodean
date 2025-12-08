@@ -1,15 +1,5 @@
-"use client";
-
-import { TasksView } from "@/components/tasks/TasksView";
+import { redirect } from "next/navigation";
 
 export default function TasksPage() {
-  return (
-    <div className="h-full overflow-hidden">
-      <TasksView />
-    </div>
-  );
+  redirect("/dashboard");
 }
-
-
-
-

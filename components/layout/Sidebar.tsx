@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronRight,
   LayoutDashboard,
-  CheckSquare,
   MessageSquare,
   Users,
   UserCog,
@@ -27,7 +26,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 const navItems = [
   { id: "dashboard", icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
   { id: "automations", icon: Workflow, label: "Automations", href: "/automations" },
-  { id: "tasks", icon: CheckSquare, label: "Tasks", href: "/tasks" },
   { id: "messages", icon: MessageSquare, label: "Messages", href: "/messages" },
   {
     id: "workspace-settings",

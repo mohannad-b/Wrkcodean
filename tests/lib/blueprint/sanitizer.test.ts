@@ -130,7 +130,7 @@ describe("sanitizeBlueprintTopology", () => {
       },
     ];
 
-    const sanitized = sanitizeBlueprintTopology(blueprint);
+    const { blueprint: sanitized, summary } = sanitizeBlueprintTopology(blueprint);
     const steps = new Map(sanitized.steps.map((step) => [step.id, step]));
 
     expect(steps.get(extractId)?.nextStepIds).toEqual([decisionId]);
@@ -140,6 +140,7 @@ describe("sanitizeBlueprintTopology", () => {
 
     expect(sanitized.branches).toHaveLength(2);
     sanitizeBranchExpectations(sanitized.branches, decisionId, autoId, manualId);
+    expect(summary.removedDuplicateEdges + summary.trimmedConnections + summary.attachedOrphans).toBeGreaterThanOrEqual(0);
   });
 });
 

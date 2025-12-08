@@ -38,7 +38,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
           versionLabel: version.versionLabel,
           status: fromDbAutomationStatus(version.status),
           intakeNotes: version.intakeNotes,
-          blueprintJson: parseBlueprint(version.blueprintJson),
+          workflowJson: parseBlueprint(version.workflowJson),
           summary: version.summary,
           createdAt: version.createdAt,
           updatedAt: version.updatedAt,
