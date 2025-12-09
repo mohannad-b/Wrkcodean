@@ -66,6 +66,63 @@ export async function listProjectsForTenant(tenantId: string): Promise<ProjectLi
   }));
 }
 
+export async function listAutomationRequestsForTenant(tenantId: string, excludeVersionIds = new Set<string>()): Promise<ProjectListItem[]> {
+  const versionRows = await db
+    .select()
+    .from(automationVersions)
+    .where(eq(automationVersions.tenantId, tenantId))
+    .orderBy(desc(automationVersions.updatedAt));
+
+  const filteredVersions = versionRows.filter((version) => !excludeVersionIds.has(version.id));
+  if (filteredVersions.length === 0) {
+    return [];
+  }
+
+  const automationIds = Array.from(new Set(filteredVersions.map((row) => row.automationId).filter(Boolean))) as string[];
+  const automationRows = automationIds.length
+    ? await db.select().from(automations).where(inArray(automations.id, automationIds))
+    : [];
+  const automationMap = new Map(automationRows.map((row) => [row.id, row]));
+
+  const versionIds = filteredVersions.map((row) => row.id);
+  const quoteRows = versionIds.length
+    ? await db
+        .select()
+        .from(quotes)
+        .where(inArray(quotes.automationVersionId, versionIds))
+        .orderBy(desc(quotes.createdAt))
+    : [];
+  const latestQuoteMap = new Map<string, Quote>();
+  for (const quote of quoteRows) {
+    if (!latestQuoteMap.has(quote.automationVersionId)) {
+      latestQuoteMap.set(quote.automationVersionId, quote);
+    }
+  }
+
+  return filteredVersions.map((version) => {
+    const automation = version.automationId ? automationMap.get(version.automationId) ?? null : null;
+    // Fabricate a lightweight project wrapper so downstream mapping continues to work.
+    const pseudoProject: Project = {
+      id: version.id,
+      tenantId: version.tenantId,
+      automationId: version.automationId ?? null,
+      automationVersionId: version.id,
+      name: automation?.name ?? "Automation request",
+      status: version.status,
+      ownerId: null,
+      createdAt: version.createdAt,
+      updatedAt: version.updatedAt,
+    };
+
+    return {
+      project: pseudoProject,
+      automation,
+      version,
+      latestQuote: latestQuoteMap.get(version.id) ?? null,
+    };
+  });
+}
+
 export async function getProjectDetail(tenantId: string, projectId: string) {
   const projectRows = await db
     .select()

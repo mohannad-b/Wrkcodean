@@ -18,6 +18,7 @@ interface StudioInspectorProps {
   onDelete: (stepId: string) => void;
   clientName?: string;
   tasks?: StepTaskSummary[];
+  onViewTask?: (taskId: string) => void;
 }
 
 type StepTaskSummary = {
@@ -84,7 +85,7 @@ function formatTaskStatus(status: StepTaskSummary["status"]) {
   }
 }
 
-export function StudioInspector({ step, onClose, onChange, onDelete, clientName, tasks = [] }: StudioInspectorProps) {
+export function StudioInspector({ step, onClose, onChange, onDelete, clientName, tasks = [], onViewTask }: StudioInspectorProps) {
   const [responsibilityTab, setResponsibilityTab] = useState<ResponsibilityTab>("automated");
   const parsedExceptions = useMemo(() => {
     if (!step?.notesExceptions) return [];
@@ -201,7 +202,11 @@ export function StudioInspector({ step, onClose, onChange, onDelete, clientName,
                 </Label>
                 <div className="space-y-3">
                   {stepTasks.map((task) => (
-                    <div key={task.id} className="border border-gray-100 rounded-xl bg-gray-50/60 p-3">
+                    <div
+                      key={task.id}
+                      className="border border-gray-100 rounded-xl bg-gray-50/60 p-3 cursor-pointer hover:border-gray-200 transition-colors"
+                      onClick={() => onViewTask?.(task.id)}
+                    >
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="text-sm font-semibold text-[#0A0A0A] leading-tight">{task.title}</p>

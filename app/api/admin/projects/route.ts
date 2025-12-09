@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
-import { listProjectsForTenant } from "@/lib/services/projects";
+import { listAutomationRequestsForTenant, listProjectsForTenant } from "@/lib/services/projects";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
 import { db } from "@/db";
@@ -26,14 +26,19 @@ export async function GET() {
   try {
     const session = await requireTenantSession();
 
-    if (!can(session, "admin:project:read")) {
+    const isAdmin = can(session, "admin:project:read");
+    const canViewTenant = can(session, "automation:read", { type: "automation", tenantId: session.tenantId });
+    if (!isAdmin && !canViewTenant) {
       throw new ApiError(403, "Forbidden");
     }
 
     const items = await listProjectsForTenant(session.tenantId);
+    const seenVersionIds = new Set(items.map((item) => item.version?.id).filter(Boolean) as string[]);
+    const requests = await listAutomationRequestsForTenant(session.tenantId, seenVersionIds);
+    const combined = [...items, ...requests];
 
     return NextResponse.json({
-      projects: items.map((item) => ({
+      projects: combined.map((item) => ({
         id: item.project.id,
         name: item.project.name,
         status: fromDbAutomationStatus(item.project.status),

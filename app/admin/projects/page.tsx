@@ -734,12 +734,12 @@ export default function AdminProjectsPage() {
         </div>
         <div>
           <h3 className="text-lg font-bold text-[#0A0A0A]">
-            {isFiltered ? "No projects match your filters" : "No projects yet"}
+            {isFiltered ? "No automation requests match your filters" : "No automation requests yet"}
           </h3>
           <p className="text-sm text-gray-500 max-w-md mx-auto">
             {isFiltered
               ? "Adjust your search or filters to see more work."
-              : "Send an automation to pricing to create its project tracker."}
+              : "Client submissions will show here once they request a build."}
           </p>
         </div>
       </div>
@@ -753,9 +753,9 @@ return (
         <div className="flex flex-col gap-6">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <h1 className="text-2xl font-bold text-[#0A0A0A]">Projects</h1>
+              <h1 className="text-2xl font-bold text-[#0A0A0A]">Automation Requests</h1>
               <p className="text-xs text-gray-500 mt-1">
-                Managing {presentationProjects.length} active automations
+                Tracking {presentationProjects.length} client-submitted versions
               </p>
             </div>
             <div className="flex items-center gap-3">

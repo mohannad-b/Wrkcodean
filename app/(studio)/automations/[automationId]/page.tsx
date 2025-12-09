@@ -985,6 +985,16 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     setSelectedTask(task);
   }, []);
 
+  const handleInspectTask = useCallback(
+    (taskId: string) => {
+      const target = versionTasks.find((task) => task.id === taskId);
+      if (target) {
+        setSelectedTask(target);
+      }
+    },
+    [versionTasks]
+  );
+
   const handleSaveTask = useCallback(
     async (taskId: string, patch: { status?: VersionTask["status"]; description?: string | null; metadata?: Record<string, unknown> | null }) => {
       setSavingTask(true);
@@ -1054,6 +1064,21 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     () => (blueprint ? blueprint.steps.find((step) => step.id === selectedStepId) ?? null : null),
     [blueprint, selectedStepId]
   );
+
+  const inspectorTasks = useMemo(() => {
+    if (!selectedStep?.stepNumber) return [];
+    const stepNumber = selectedStep.stepNumber;
+    return versionTasks
+      .filter((task) => Array.isArray(task.metadata?.relatedSteps) && task.metadata.relatedSteps.includes(stepNumber))
+      .map((task) => ({
+        id: task.id,
+        title: task.title,
+        description: task.description ?? null,
+        status: task.status ?? "pending",
+        priority: task.priority ?? "important",
+        metadata: task.metadata ?? {},
+      }));
+  }, [selectedStep?.stepNumber, versionTasks]);
   const blueprintIsEmpty = useMemo(() => isBlueprintEffectivelyEmpty(blueprint), [blueprint]);
   const summaryComplete = completion.summaryComplete;
 
@@ -1105,7 +1130,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       const response = await fetch(`/api/automation-versions/${selectedVersion.id}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "BuildInProgress" }),
+        body: JSON.stringify({ status: "NeedsPricing" }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -1113,7 +1138,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       }
       toast({
         title: "Proceeding to build",
-        description: "Status updated to Build in Progress.",
+        description: "Status updated to Needs Pricing. Generating quote…",
         variant: "success",
       });
       await fetchAutomation({ preserveSelection: true });
@@ -1667,7 +1692,8 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
               }}
               onChange={handleStepChange}
               onDelete={handleDeleteStep}
-              tasks={versionTasks}
+              tasks={inspectorTasks}
+              onViewTask={handleInspectTask}
             />
           </div>
         )}
@@ -2681,6 +2707,8 @@ function getStatusBadgeClasses(status: VersionTask["status"]) {
       return "bg-amber-50 text-amber-700 border border-amber-100";
   }
 }
+
+export { TaskDrawer };
 
 function getPriorityBadgeClasses(priority: NonNullable<VersionTask["priority"]>) {
   switch (priority) {
