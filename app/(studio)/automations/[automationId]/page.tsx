@@ -1115,6 +1115,9 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       return;
     }
     setProceedingToBuild(true);
+    setShowProceedCelebration(true);
+    let pricingModalTimer: ReturnType<typeof setTimeout> | null = null;
+    pricingModalTimer = setTimeout(() => setShowPricingModal(true), 3000);
     try {
       const response = await fetch(`/api/automation-versions/${selectedVersion.id}/status`, {
         method: "PATCH",
@@ -1125,26 +1128,54 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload?.error ?? "Unable to update status");
       }
+      // Estimate actions (LLM) then generate quote with that estimate.
+      const estimateResponse = await fetch(
+        `/api/automation-versions/${selectedVersion.id}/estimate-actions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+      if (!estimateResponse.ok) {
+        const payload = await estimateResponse.json().catch(() => ({}));
+        throw new Error(payload?.error ?? "Unable to estimate actions");
+      }
+      const estimate = await estimateResponse.json();
+
+      const priceResponse = await fetch(
+        `/api/automation-versions/${selectedVersion.id}/price-and-quote`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            complexity: estimate?.complexity ?? "medium",
+            estimatedVolume: estimate?.estimatedVolume ?? 1000,
+            estimatedActions: estimate?.estimatedActions ?? [],
+            discounts: [],
+          }),
+        }
+      );
+      if (!priceResponse.ok) {
+        const payload = await priceResponse.json().catch(() => ({}));
+        throw new Error(payload?.error ?? "Unable to generate quote");
+      }
       toast({
         title: "Proceeding to build",
-        description: "Status updated to Needs Pricing. Generating quote…",
+        description: "Status updated to Needs Pricing. Quote generated.",
         variant: "success",
       });
       await fetchAutomation({ preserveSelection: true });
-      setShowProceedCelebration(true);
-      setTimeout(() => {
-        setShowProceedCelebration(false);
-        setActiveTab("Build Status");
-        setTimeout(() => {
-          setShowPricingModal(true);
-          setTimeout(() => setShowPricingModal(false), 4500);
-        }, 1000);
-      }, 5000);
+      setActiveTab("Build Status");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Proceed request failed";
       toast({ title: "Unable to proceed", description: message, variant: "error" });
     } finally {
       setProceedingToBuild(false);
+      if (pricingModalTimer) {
+        clearTimeout(pricingModalTimer);
+      }
+      setShowProceedCelebration(false);
+      setShowPricingModal(false);
     }
   }, [selectedVersion?.id, proceedButtonDisabled, alreadyInBuild, fetchAutomation, toast]);
   useEffect(() => {
@@ -1226,6 +1257,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       title: "Invite teammates coming soon",
       description: "Connect this action to workspace invitations once backend hooks are live.",
     });
+  };
+
+  const goToTasksView = () => {
+    setActiveTab("Workflow");
+    setCanvasViewMode("tasks");
   };
 
   const handleRunTest = () => {
@@ -1326,7 +1362,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         </div>
 
         <div className="space-y-6">
-          <NeedsAttentionCard tasks={attentionTasks} onGoToWorkflow={() => setActiveTab("Workflow")} />
+          <NeedsAttentionCard tasks={attentionTasks} onGoToWorkflow={goToTasksView} />
         </div>
       </section>
     </div>
@@ -1694,6 +1730,8 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 lastUpdated={selectedVersion?.updatedAt ?? null}
                 versionLabel={selectedVersion?.versionLabel ?? ""}
                 tasks={selectedVersion?.tasks ?? []}
+                onViewTasks={goToTasksView}
+                automationVersionId={selectedVersion?.id}
               />
             ) : activeTab === "Activity" ? (
               <ActivityTab

@@ -2,8 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { StatusBadge } from "@/components/ui/StatusBadge";
+import { Card } from "@/components/ui/card";
 import { NeedsAttentionCard } from "@/components/automations/NeedsAttentionCard";
 import { QuoteSignatureModal } from "@/components/modals/QuoteSignatureModal";
 import { cn } from "@/lib/utils";
@@ -15,18 +14,7 @@ import {
 } from "@/lib/build-status/types";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
 import { getAttentionTasks, type AutomationTask } from "@/lib/automations/tasks";
-import {
-  AlertTriangle,
-  ArrowRight,
-  Check,
-  CheckCircle2,
-  Clock,
-  FileSignature,
-  Hammer,
-  MessageSquare,
-  Sparkles,
-  Rocket,
-} from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, FileSignature, Hammer, Sparkles, Rocket } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 interface BuildStatusTabProps {
@@ -42,16 +30,9 @@ interface BuildStatusTabProps {
   lastUpdated?: string | null;
   versionLabel?: string;
   tasks?: AutomationTask[];
+  onViewTasks?: () => void;
+  automationVersionId?: string | null;
 }
-
-const BUILD_STAGE_SUMMARY: Record<BuildStatus, string> = {
-  IntakeInProgress: "Collecting requirements and shaping the automation scope.",
-  NeedsPricing: "Commercial team is preparing pricing details and the initial quote.",
-  AwaitingClientApproval: "Quote has been delivered and is awaiting client approval.",
-  BuildInProgress: "Build team is implementing the approved blueprint and integrations.",
-  QATesting: "QA is validating flows, data paths, and go-live readiness.",
-  Live: "Automation is deployed and running in production.",
-};
 
 const formatCurrency = (value?: string | null) => {
   if (!value) return "—";
@@ -85,12 +66,21 @@ const STAGE_ICONS: Record<BuildStatus, React.ComponentType<{ size?: number | str
   IntakeInProgress: CheckCircle2,
   NeedsPricing: CheckCircle2,
   AwaitingClientApproval: FileSignature,
+  ReadyForBuild: FileSignature,
   BuildInProgress: Hammer,
   QATesting: Check,
   Live: Rocket,
 };
 
-export function BuildStatusTab({ status, latestQuote, lastUpdated, versionLabel, tasks = [] }: BuildStatusTabProps) {
+export function BuildStatusTab({
+  status,
+  latestQuote,
+  lastUpdated,
+  versionLabel,
+  tasks = [],
+  onViewTasks,
+  automationVersionId,
+}: BuildStatusTabProps) {
   const [localStatus, setLocalStatus] = useState<BuildStatus>(resolveBuildStatus(status));
   useEffect(() => {
     setLocalStatus(resolveBuildStatus(status));
@@ -118,13 +108,25 @@ export function BuildStatusTab({ status, latestQuote, lastUpdated, versionLabel,
   const activeTier = pricingTiers.find((tier) => sliderVolume <= tier.maxVolume) ?? pricingTiers[pricingTiers.length - 1];
   const unitPriceValue = latestQuote?.unitPrice ? Number(latestQuote.unitPrice) : activeTier.price;
   const unitPrice = unitPriceValue.toFixed(2);
-  const previousUnitPrice = Math.max(Number(unitPrice) - 0.01, 0);
   const oneTimeFee = latestQuote?.setupFee ?? "1000";
   const maxTierVolume = pricingTiers[pricingTiers.length - 1].maxVolume ?? maxVolume;
   const sliderPercent = Math.min(Math.max((sliderVolume - minVolume) / (maxTierVolume - minVolume), 0), 1) * 100;
   const redFillPercent = Math.min(100, Math.ceil(sliderPercent / 25) * 25);
   const [showQuoteModal, setShowQuoteModal] = useState(false);
   const monthlyCost = unitPriceValue * sliderVolume;
+
+  const advanceAutomationStatus = async () => {
+    if (!automationVersionId) return;
+    try {
+      await fetch(`/api/automation-versions/${automationVersionId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "BuildInProgress" }),
+      });
+    } catch (err) {
+      console.error("Failed to advance automation status", err);
+    }
+  };
 
   return (
     <div className="h-full overflow-y-auto bg-gray-50">
@@ -158,8 +160,6 @@ export function BuildStatusTab({ status, latestQuote, lastUpdated, versionLabel,
                 const isComplete = index < currentIndex;
                 const isActive = index === currentIndex;
                   const Icon = STAGE_ICONS[stage];
-                  const showDate = index < 2; // show date for first two like mock
-                  const dateLabel = showDate ? `Nov ${12 + index}` : "";
                 return (
                     <div key={stage} className="flex flex-col items-center gap-2 w-full">
                     <div
@@ -183,7 +183,6 @@ export function BuildStatusTab({ status, latestQuote, lastUpdated, versionLabel,
                       >
                         {BUILD_STATUS_LABELS[stage]}
                       </p>
-                        {showDate ? <p className="text-xs text-gray-400 mt-0.5">Nov {12 + index}</p> : null}
                     </div>
                   </div>
                 );
@@ -330,15 +329,18 @@ export function BuildStatusTab({ status, latestQuote, lastUpdated, versionLabel,
               </p>
         </Card>
 
-            <NeedsAttentionCard tasks={attentionTasks} />
+            <NeedsAttentionCard tasks={attentionTasks} onGoToWorkflow={onViewTasks} />
           </div>
         </div>
       </div>
       <QuoteSignatureModal
         open={showQuoteModal}
         onOpenChange={setShowQuoteModal}
-        onSigned={() => {
-          setLocalStatus("BuildInProgress");
+        onSigned={(result) => {
+          if (result?.automationStatus) {
+            setLocalStatus(resolveBuildStatus(result.automationStatus as AutomationLifecycleStatus));
+          }
+          void advanceAutomationStatus();
         }}
         quoteId={latestQuote?.id ?? undefined}
         volume={sliderVolume}

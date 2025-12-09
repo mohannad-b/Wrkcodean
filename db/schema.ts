@@ -14,13 +14,20 @@ export const automationStatusEnum = pgEnum("automation_status", [
   "IntakeInProgress",
   "NeedsPricing",
   "AwaitingClientApproval",
+  "ReadyForBuild",
   "BuildInProgress",
   "QATesting",
   "Live",
   "Archived",
 ]);
 
+const projectPricingStatusEnum = pgEnum("project_pricing_status", ["NotGenerated", "Draft", "Sent", "Signed"]);
+const projectTypeEnum = pgEnum("project_type", ["new_automation", "revision"]);
+
 const quoteStatusEnum = pgEnum("quote_status", ["draft", "sent", "accepted", "rejected"]);
+const quoteTypeEnum = pgEnum("quote_type", ["initial_commitment", "change_order"]);
+const invoiceStatusEnum = pgEnum("invoice_status", ["pending", "paid", "failed"]);
+const invoiceTypeEnum = pgEnum("invoice_type", ["setup_fee"]);
 const fileStatusEnum = pgEnum("file_status", ["pending", "uploaded", "failed"]);
 const aiJobStatusEnum = pgEnum("ai_job_status", ["pending", "processing", "succeeded", "failed"]);
 const messageTypeEnum = pgEnum("message_type", ["client", "ops"]);
@@ -278,6 +285,9 @@ export const projects = pgTable(
     }),
     name: text("name").notNull(),
     status: automationStatusEnum("status").notNull().default("IntakeInProgress"),
+    pricingStatus: projectPricingStatusEnum("pricing_status").notNull().default("NotGenerated"),
+    type: projectTypeEnum("type").notNull().default("new_automation"),
+    checklistProgress: integer("checklist_progress").notNull().default(0),
     ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -285,6 +295,7 @@ export const projects = pgTable(
   (table) => ({
     tenantIdx: index("projects_tenant_idx").on(table.tenantId),
     statusIdx: index("projects_status_idx").on(table.status),
+    pricingStatusIdx: index("projects_pricing_status_idx").on(table.pricingStatus),
   })
 );
 
@@ -299,17 +310,48 @@ export const quotes = pgTable(
       .notNull()
       .references(() => automationVersions.id, { onDelete: "cascade" }),
     status: quoteStatusEnum("status").notNull().default("draft"),
+    quoteType: quoteTypeEnum("quote_type").notNull().default("initial_commitment"),
+    currency: text("currency").notNull().default("USD"),
     setupFee: numeric("setup_fee", { precision: 12, scale: 2 }).notNull().default("0"),
     unitPrice: numeric("unit_price", { precision: 12, scale: 4 }).notNull().default("0"),
+    effectiveUnitPrice: numeric("effective_unit_price", { precision: 12, scale: 4 }).notNull().default("0"),
     estimatedVolume: integer("estimated_volume"),
     notes: text("notes"),
     clientMessage: text("client_message"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    signedAt: timestamp("signed_at", { withTimezone: true }),
+    signatureMetadata: jsonb("signature_metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     tenantIdx: index("quotes_tenant_idx").on(table.tenantId),
     versionIdx: index("quotes_version_idx").on(table.automationVersionId),
+  })
+);
+
+export const invoices = pgTable(
+  "invoices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
+    quoteId: uuid("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    type: invoiceTypeEnum("type").notNull().default("setup_fee"),
+    status: invoiceStatusEnum("status").notNull().default("pending"),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull().default("0"),
+    currency: text("currency").notNull().default("USD"),
+    providerChargeId: text("provider_charge_id"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantIdx: index("invoices_tenant_idx").on(table.tenantId),
+    quoteIdx: index("invoices_quote_idx").on(table.quoteId),
+    projectIdx: index("invoices_project_idx").on(table.projectId),
   })
 );
 

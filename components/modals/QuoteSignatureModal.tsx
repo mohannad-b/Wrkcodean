@@ -85,7 +85,14 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
       const response = await fetch(`/api/quotes/${quoteId}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "SIGNED" }),
+        body: JSON.stringify({
+          status: "signed",
+          signature_metadata: {
+            name: signature,
+            company: companyName,
+            channel: "in_app",
+          },
+        }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -116,13 +123,13 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
   const particles = useMemo(
     () =>
       Array.from({ length: 120 }).map((_, i) => ({
-        id: i,
+    id: i,
         x: Math.random() * 100,
         y: Math.random() * 100,
         dx: (Math.random() - 0.5) * 500,
         dy: (Math.random() - 0.5) * 400,
         size: 24 + Math.random() * 28,
-        color: ["#E43632", "#22c55e", "#3b82f6", "#f59e0b"][Math.floor(Math.random() * 4)],
+    color: ["#E43632", "#22c55e", "#3b82f6", "#f59e0b"][Math.floor(Math.random() * 4)],
         delay: Math.random() * 0.4,
       })),
     []
@@ -164,28 +171,28 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
             <AnimatePresence>
               {celebrating &&
                 particles.map((p) => (
-                  <motion.div
-                    key={p.id}
+                <motion.div
+                  key={p.id}
                     initial={{ opacity: 0.9, scale: 0.5, x: 0, y: 0 }}
                     animate={{ opacity: 0, scale: 2.6, x: p.dx, y: p.dy }}
-                    exit={{ opacity: 0 }}
+                  exit={{ opacity: 0 }}
                     transition={{ duration: 1.2, delay: p.delay }}
-                    className="absolute"
+                  className="absolute"
                     style={{
                       left: `${p.x}%`,
                       top: `${p.y}%`,
                       color: p.color,
                       pointerEvents: "none",
                     }}
-                  >
+                >
                     <Sparkles size={p.size} />
-                  </motion.div>
-                ))}
+                </motion.div>
+              ))}
             </AnimatePresence>
             {showCheckmark ? (
               <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 shadow-inner transition-opacity duration-300">
-                <CheckCircle2 className="h-10 w-10" />
-              </div>
+              <CheckCircle2 className="h-10 w-10" />
+            </div>
             ) : null}
             <div className="text-center space-y-2">
               <h3 className="text-2xl font-bold text-[#0A0A0A]">Build Authorized</h3>

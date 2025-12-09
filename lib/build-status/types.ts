@@ -2,6 +2,7 @@ export type BuildStatus =
   | "IntakeInProgress"
   | "NeedsPricing"
   | "AwaitingClientApproval"
+  | "ReadyForBuild"
   | "BuildInProgress"
   | "QATesting"
   | "Live";
@@ -10,6 +11,7 @@ export const BUILD_STATUS_LABELS: Record<BuildStatus, string> = {
   IntakeInProgress: "Intake in Progress",
   NeedsPricing: "Needs Pricing",
   AwaitingClientApproval: "Awaiting client approval",
+  ReadyForBuild: "Ready for build",
   BuildInProgress: "Build in progress",
   QATesting: "QA & Testing",
   Live: "Live",
@@ -19,6 +21,7 @@ export const BUILD_STATUS_ORDER: BuildStatus[] = [
   "IntakeInProgress",
   "NeedsPricing",
   "AwaitingClientApproval",
+  "ReadyForBuild",
   "BuildInProgress",
   "QATesting",
   "Live",

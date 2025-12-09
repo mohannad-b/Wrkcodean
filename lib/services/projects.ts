@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   automations,
@@ -23,6 +23,17 @@ export type ProjectListItem = {
   version: AutomationVersion | null;
   latestQuote: Quote | null;
 };
+
+export class SigningError extends Error {
+  code: string;
+  status: number;
+
+  constructor(code: string, message: string, status = 409) {
+    super(message);
+    this.code = code;
+    this.status = status;
+  }
+}
 
 export async function listProjectsForTenant(tenantId: string): Promise<ProjectListItem[]> {
   const projectRows = await db
@@ -262,32 +273,74 @@ type SignQuoteResult = {
   previousQuoteStatus: QuoteLifecycleStatus;
   previousAutomationStatus?: AutomationLifecycleStatus | null;
   previousProjectStatus?: AutomationLifecycleStatus | null;
+  alreadyApplied?: boolean;
 };
 
-export async function signQuoteAndPromote(params: { tenantId: string; quoteId: string }): Promise<SignQuoteResult> {
+type SignQuoteParams = {
+  tenantId: string;
+  quoteId: string;
+  lastKnownUpdatedAt?: string | null;
+  signatureMetadata?: Record<string, unknown> | null;
+};
+
+type QuoteType = "initial_commitment" | "change_order";
+
+function parseQuoteType(value: unknown): QuoteType {
+  if (value === "change_order") return "change_order";
+  return "initial_commitment";
+}
+
+function isAllowedBillingActiveStatus(status: AutomationLifecycleStatus | null) {
+  return (
+    status === "ReadyForBuild" ||
+    status === "BuildInProgress" ||
+    status === "Live" ||
+    status === "QATesting"
+  );
+}
+
+export async function signQuoteAndPromote(params: SignQuoteParams): Promise<SignQuoteResult> {
+  const { tenantId, quoteId, lastKnownUpdatedAt, signatureMetadata } = params;
+
   return db.transaction(async (tx) => {
     const quoteRows = await tx
       .select()
       .from(quotes)
-      .where(and(eq(quotes.id, params.quoteId), eq(quotes.tenantId, params.tenantId)))
+      .where(and(eq(quotes.id, quoteId), eq(quotes.tenantId, tenantId)))
       .limit(1);
 
     if (quoteRows.length === 0) {
-      throw new Error("Quote not found");
+      throw new SigningError("not_found", "Quote not found", 404);
     }
 
     const quote = quoteRows[0];
     const previousQuoteStatus = fromDbQuoteStatus(quote.status);
+    const quoteType = parseQuoteType((quote as unknown as { quoteType?: QuoteType }).quoteType);
 
-    if (previousQuoteStatus !== "SENT") {
-      throw new Error("Quote must be SENT before signing");
+    // Idempotent shortcut when already signed.
+    if (previousQuoteStatus === "SIGNED") {
+      return {
+        quote,
+        previousQuoteStatus,
+        alreadyApplied: true,
+      };
     }
 
-    const [updatedQuote] = await tx
-      .update(quotes)
-      .set({ status: toDbQuoteStatus("SIGNED") })
-      .where(eq(quotes.id, quote.id))
-      .returning();
+    if (previousQuoteStatus !== "SENT") {
+      throw new SigningError("invalid_quote_status", "Quote must be SENT before signing", 409);
+    }
+
+    if (lastKnownUpdatedAt) {
+      const known = new Date(lastKnownUpdatedAt).getTime();
+      const actual = quote.updatedAt instanceof Date ? quote.updatedAt.getTime() : new Date(quote.updatedAt).getTime();
+      if (Number.isFinite(known) && Number.isFinite(actual) && known !== actual) {
+        throw new SigningError("concurrency_conflict", "Quote has changed since last read", 409);
+      }
+    }
+
+    if (quote.expiresAt && quote.expiresAt < new Date()) {
+      throw new SigningError("quote_expired", "Quote has expired", 400);
+    }
 
     let automationVersionResult: AutomationVersion | null = null;
     let previousAutomationStatus: AutomationLifecycleStatus | null = null;
@@ -298,43 +351,84 @@ export async function signQuoteAndPromote(params: { tenantId: string; quoteId: s
       const versionRows = await tx
         .select()
         .from(automationVersions)
-        .where(and(eq(automationVersions.id, quote.automationVersionId), eq(automationVersions.tenantId, params.tenantId)))
+        .where(and(eq(automationVersions.id, quote.automationVersionId), eq(automationVersions.tenantId, tenantId)))
         .limit(1);
 
       if (versionRows.length > 0) {
         previousAutomationStatus = fromDbAutomationStatus(versionRows[0].status);
         automationVersionResult = versionRows[0];
 
-    if (previousAutomationStatus === "NeedsPricing" || previousAutomationStatus === "AwaitingClientApproval") {
-          const [updatedVersion] = await tx
-            .update(automationVersions)
-        .set({ status: toDbAutomationStatus("BuildInProgress") })
-            .where(eq(automationVersions.id, versionRows[0].id))
-            .returning();
-
-          automationVersionResult = updatedVersion ?? automationVersionResult;
-        }
-
         const projectRows = await tx
           .select()
           .from(projects)
-          .where(and(eq(projects.automationVersionId, versionRows[0].id), eq(projects.tenantId, params.tenantId)))
+          .where(and(eq(projects.automationVersionId, versionRows[0].id), eq(projects.tenantId, tenantId)))
           .limit(1);
 
         if (projectRows.length > 0) {
           previousProjectStatus = fromDbAutomationStatus(projectRows[0].status);
           projectResult = projectRows[0];
-
-          if (previousProjectStatus === "NeedsPricing" || previousProjectStatus === "AwaitingClientApproval") {
-            const [updatedProject] = await tx
-              .update(projects)
-              .set({ status: toDbAutomationStatus("BuildInProgress") })
-              .where(eq(projects.id, projectRows[0].id))
-              .returning();
-            projectResult = updatedProject ?? projectResult;
-          }
         }
       }
+    }
+
+    // Enforce AAA or BAT triads before any write.
+    if (quoteType === "initial_commitment") {
+      if (previousProjectStatus !== "AwaitingClientApproval") {
+        throw new SigningError("project_not_editable", "Project must be Awaiting Client Approval", 409);
+      }
+      if (previousAutomationStatus !== "AwaitingClientApproval") {
+        throw new SigningError("invalid_status_transition", "Automation version not Awaiting Client Approval", 409);
+      }
+    } else {
+      if ((projectResult as unknown as { pricingStatus?: string })?.pricingStatus !== "Signed") {
+        throw new SigningError("project_not_priced", "Project pricing_status must be Signed", 409);
+      }
+      if (!isAllowedBillingActiveStatus(previousAutomationStatus)) {
+        throw new SigningError("automation_not_active_for_billing", "Automation must be billing-active", 409);
+      }
+    }
+
+    const signaturePayload =
+      signatureMetadata && typeof signatureMetadata === "object"
+        ? (signatureMetadata as Record<string, unknown>)
+        : undefined;
+
+    const [updatedQuote] = await tx
+      .update(quotes)
+      .set({
+        status: toDbQuoteStatus("SIGNED"),
+        signedAt: new Date(),
+        signatureMetadata: signaturePayload
+          ? sql`${quotes.signatureMetadata} || ${signaturePayload}::jsonb`
+          : quotes.signatureMetadata,
+        updatedAt: new Date(),
+      })
+      .where(eq(quotes.id, quote.id))
+      .returning();
+
+    // Update automation + project lifecycles.
+    if (automationVersionResult) {
+      if (quoteType === "initial_commitment" && previousAutomationStatus !== "ReadyForBuild") {
+        const [updatedVersion] = await tx
+          .update(automationVersions)
+          .set({ status: toDbAutomationStatus("ReadyForBuild") })
+          .where(eq(automationVersions.id, automationVersionResult.id))
+          .returning();
+        automationVersionResult = updatedVersion ?? automationVersionResult;
+      }
+    }
+
+    if (projectResult) {
+      const updates: Partial<typeof projects.$inferInsert> = { pricingStatus: "Signed" };
+      if (quoteType === "initial_commitment" && previousProjectStatus !== "ReadyForBuild") {
+        updates.status = toDbAutomationStatus("ReadyForBuild");
+      }
+      const [updatedProject] = await tx
+        .update(projects)
+        .set(updates)
+        .where(eq(projects.id, projectResult.id))
+        .returning();
+      projectResult = updatedProject ?? projectResult;
     }
 
     return {
@@ -344,6 +438,7 @@ export async function signQuoteAndPromote(params: { tenantId: string; quoteId: s
       previousQuoteStatus,
       previousAutomationStatus,
       previousProjectStatus,
+      alreadyApplied: false,
     };
   });
 }

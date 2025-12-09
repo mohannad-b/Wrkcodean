@@ -59,7 +59,7 @@ export function NeedsAttentionCard({ tasks, onGoToWorkflow, className }: NeedsAt
             onClick={onGoToWorkflow}
             disabled={tasks.length === 0}
           >
-            Go to Workflow
+            View Tasks
           </Button>
         ) : null}
       </div>
