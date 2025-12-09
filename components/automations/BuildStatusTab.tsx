@@ -67,7 +67,7 @@ const formatCurrency = (value?: string | null) => {
 const formatUnitPrice = (value?: string | null) => {
   if (!value) return "—";
   const next = Number(value);
-  return Number.isFinite(next) ? `$${next.toFixed(3)}` : value;
+  return Number.isFinite(next) ? `$${next.toFixed(2)}` : value;
 };
 
 const formatTimestamp = (value?: string | null) => {
@@ -117,7 +117,7 @@ export function BuildStatusTab({ status, latestQuote, lastUpdated, versionLabel,
     Math.min(Math.max(estimatedVolume, minVolume), pricingTiers.at(-1)?.maxVolume ?? maxVolume)
   );
   const activeTier = pricingTiers.find((tier) => sliderVolume <= tier.maxVolume) ?? pricingTiers[pricingTiers.length - 1];
-  const unitPrice = (latestQuote?.unitPrice ? Number(latestQuote.unitPrice) : activeTier.price).toFixed(3);
+  const unitPrice = (latestQuote?.unitPrice ? Number(latestQuote.unitPrice) : activeTier.price).toFixed(2);
   const previousUnitPrice = Math.max(Number(unitPrice) - 0.01, 0);
   const oneTimeFee = latestQuote?.setupFee ?? "1000";
   const maxTierVolume = pricingTiers[pricingTiers.length - 1].maxVolume ?? maxVolume;
@@ -258,10 +258,10 @@ export function BuildStatusTab({ status, latestQuote, lastUpdated, versionLabel,
                           type="range"
                           min={minVolume}
                           max={maxTierVolume}
-                          step={250}
+                          step={100}
                           value={sliderVolume}
                           onChange={(event) => setSliderVolume(Number(event.target.value))}
-                          className="w-full accent-black"
+                          className="w-full accent-black h-3"
                         />
                         <span className="text-xs text-gray-500 w-16 text-right">{sliderVolume.toLocaleString()}</span>
                       </div>

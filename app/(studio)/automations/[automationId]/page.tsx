@@ -1812,8 +1812,8 @@ function RecentActivity({ entries, onViewAll, isLoading, error }: RecentActivity
           <div className="py-4 text-sm text-gray-500">No activity yet.</div>
         ) : (
           <div className="space-y-8 relative before:absolute before:left-2.5 before:top-2 before:h-full before:w-px before:bg-gray-100">
-            {entries.map((entry) => (
-              <div key={`${entry.title}-${entry.time}`} className="relative pl-8">
+            {entries.map((entry, index) => (
+              <div key={`${entry.title}-${entry.time}-${index}`} className="relative pl-8">
                 <div
                   className={cn(
                     "absolute left-0 top-0 w-5 h-5 rounded-full flex items-center justify-center border-2 border-white ring-1 ring-gray-100 shadow-sm",
