@@ -6,10 +6,10 @@ import { generateStepNumbers } from "./step-numbering";
  * Configuration for canvas layout
  */
 export const CANVAS_LAYOUT = {
-  NODE_X_GAP: 400,
-  NODE_Y_GAP: 240,
-  BRANCH_X_GAP: 500, // Increased spacing for branches to prevent overlap
-  MIN_BRANCH_SPACING: 450, // Minimum spacing between branch nodes
+  NODE_X_GAP: 500,
+  NODE_Y_GAP: 280,
+  BRANCH_X_GAP: 560, // Increased spacing for branches to prevent overlap
+  MIN_BRANCH_SPACING: 520, // Minimum spacing between branch nodes
 } as const;
 
 /**
@@ -362,7 +362,7 @@ function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number
         
         // Ensure no overlap with other nodes at this level
         // If there's a conflict, shift the position
-        const tolerance = CANVAS_LAYOUT.MIN_BRANCH_SPACING / 2;
+        const tolerance = CANVAS_LAYOUT.MIN_BRANCH_SPACING * 0.6;
         while (Array.from(positionedX).some(pos => Math.abs(pos - x) < tolerance)) {
           x += tolerance;
         }

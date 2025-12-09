@@ -151,6 +151,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
       stepCount: validatedBlueprint.steps.length,
       sanitizationSummary: result.sanitizationSummary,
     });
+    console.log("[copilot:suggest-next-steps] raw assistant reply:", responseMessage);
 
     send({ status: "message", content: responseMessage });
     send({

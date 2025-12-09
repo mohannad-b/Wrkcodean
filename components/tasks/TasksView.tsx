@@ -309,107 +309,96 @@ export function TasksView() {
             initial={{ x: "100%", opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: "100%", opacity: 0 }}
-            transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className="absolute top-0 right-0 h-full w-[450px] bg-white border-l border-gray-200 shadow-2xl z-30 flex flex-col"
+            transition={{ type: "spring", stiffness: 280, damping: 30 }}
+            className="absolute top-0 right-0 h-full w-[420px] bg-white border-l border-gray-200 shadow-xl shadow-gray-200/50 z-30 flex flex-col"
           >
-            <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-              <div className="flex items-center gap-2 text-sm font-bold text-gray-500 uppercase tracking-wider">
-                Task Details
+            <div className="flex-none px-6 py-5 border-b border-gray-100 bg-white sticky top-0 z-10 flex items-start justify-between">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "rounded-md px-2 py-0.5 h-auto text-[10px] font-semibold tracking-wide capitalize",
+                      selectedTask.priority === "blocking"
+                        ? "border-red-200 bg-red-50 text-red-700"
+                        : selectedTask.priority === "high"
+                        ? "border-amber-200 bg-amber-50 text-amber-700"
+                        : "border-gray-200 bg-gray-50 text-gray-600"
+                    )}
+                  >
+                    {selectedTask.priority === "blocking"
+                      ? "Blocker"
+                      : selectedTask.priority === "high"
+                      ? "Important"
+                      : "Normal"}
+                  </Badge>
+                  <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">
+                    {selectedTask.date}
+                  </span>
+                </div>
+                <h2 className="text-xl font-bold text-[#0A0A0A] leading-tight">{selectedTask.title}</h2>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => setSelectedTaskId(null)}>
-                <X size={20} className="text-gray-400 hover:text-gray-900" />
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400 hover:text-[#0A0A0A]" onClick={() => setSelectedTaskId(null)}>
+                <X size={16} />
               </Button>
             </div>
 
-            <ScrollArea className="flex-1">
-              <div className="p-8 space-y-8">
-                {/* Title Section */}
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center">
-                      <TaskIcon type={selectedTask.type} />
-                    </div>
-                    <PriorityBadge priority={selectedTask.priority} />
-                  </div>
-                  <h2 className="text-2xl font-bold text-[#0A0A0A] leading-tight">
-                    {selectedTask.title}
-                  </h2>
-                </div>
-
-                {/* Metadata Grid */}
-                <div className="grid grid-cols-2 gap-6 bg-gray-50 p-4 rounded-xl border border-gray-100">
+            <div className="flex-1 w-full overflow-y-auto min-h-0">
+              <div className="p-6 space-y-6">
+                <div className="grid grid-cols-2 gap-4 bg-gray-50 rounded-xl border border-gray-100 p-4">
                   <div>
-                    <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">
-                      Automation
-                    </label>
-                    <p className="text-sm font-bold text-[#0A0A0A]">
-                      {selectedTask.automationName}
-                    </p>
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Automation</p>
+                    <p className="text-sm font-semibold text-[#0A0A0A]">{selectedTask.automationName}</p>
                   </div>
                   <div>
-                    <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">
-                      Version
-                    </label>
-                    <p className="text-sm font-bold text-[#0A0A0A]">{selectedTask.version}</p>
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Version</p>
+                    <p className="text-sm font-semibold text-[#0A0A0A]">{selectedTask.version}</p>
                   </div>
                   <div>
-                    <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">
-                      Step
-                    </label>
-                    <p className="text-sm font-medium text-gray-600">
-                      {selectedTask.stepName || "N/A"}
-                    </p>
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Step</p>
+                    <p className="text-sm text-gray-700">{selectedTask.stepName || "N/A"}</p>
                   </div>
                   <div>
-                    <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">
-                      Requested By
-                    </label>
-                    <p className="text-sm font-medium text-gray-600 flex items-center gap-1">
-                      {selectedTask.origin === "AI System" && <Bot size={14} />}
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Requested By</p>
+                    <p className="text-sm text-gray-700 flex items-center gap-1">
+                      {selectedTask.origin === "AI System" && <Bot size={14} className="text-blue-500" />}
                       {selectedTask.origin}
                     </p>
                   </div>
                 </div>
 
-                {/* Description */}
-                <div>
-                  <h3 className="text-sm font-bold text-[#0A0A0A] mb-2">Description</h3>
-                  <p className="text-gray-600 leading-relaxed text-sm">
-                    {selectedTask.description}
-                  </p>
+                <div className="space-y-2">
+                  <Label className="text-xs font-bold text-[#0A0A0A] uppercase tracking-wider">Description</Label>
+                  <p className="text-sm text-gray-700 leading-relaxed">{selectedTask.description}</p>
                 </div>
 
-                {/* AI Note */}
                 {selectedTask.aiNote && (
-                  <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 flex gap-3">
+                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-3">
                     <Bot size={18} className="text-blue-500 shrink-0 mt-0.5" />
                     <div className="space-y-1">
-                      <p className="text-xs font-bold text-blue-700">AI Insight</p>
-                      <p className="text-xs text-blue-600 leading-relaxed">{selectedTask.aiNote}</p>
+                      <p className="text-xs font-bold text-blue-700 uppercase tracking-wider">AI Insight</p>
+                      <p className="text-xs text-blue-700 leading-relaxed">{selectedTask.aiNote}</p>
                     </div>
                   </div>
                 )}
 
-                {/* Blueprint Link */}
                 <Button
                   variant="outline"
-                  className="w-full justify-between border-gray-200 text-gray-700 h-12"
+                  className="w-full justify-between border-gray-200 text-gray-700 h-11"
                   onClick={() => {
-                    // Find automation by name and navigate to it
-                    const automationId = "auto-1"; // Mock - in real app, lookup by automationName
+                    const automationId = "auto-1"; // TODO: lookup real automation id
                     router.push(`/automations/${automationId}?tab=Workflow`);
                   }}
                 >
-                  <span className="flex items-center gap-2">
+                  <span className="flex items-center gap-2 text-sm font-semibold">
                     <Zap size={16} /> View in Blueprint
                   </span>
                   <ArrowRight size={16} className="text-gray-400" />
                 </Button>
               </div>
-            </ScrollArea>
+            </div>
 
-            {/* Footer Actions */}
-            <div className="p-6 border-t border-gray-200 bg-gray-50 shrink-0 space-y-3">
+            <div className="flex-none p-6 border-t border-gray-200 bg-white space-y-3">
               {selectedTask.type === "approval" || selectedTask.type === "version" ? (
                 <div className="grid grid-cols-2 gap-3">
                   <Button variant="outline" className="border-gray-200 text-gray-700">

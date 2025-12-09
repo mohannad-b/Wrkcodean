@@ -185,6 +185,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         taskCount: aiTasks.length,
         sanitizationSummary,
       });
+      console.log("[copilot:draft-blueprint] raw assistant reply:", chatResponse);
     }
 
     const validatedBlueprint = BlueprintSchema.parse({

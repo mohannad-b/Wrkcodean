@@ -23,11 +23,10 @@ describe("Blueprint workspace shell", () => {
       </div>
     );
 
-    expect(screen.queryByText(/Create Blueprint/i)).toBeNull();
     expect(screen.getByTestId("copilot-pane")).toBeInTheDocument();
     expect(screen.getByTestId("canvas-pane")).toBeInTheDocument();
-    expect(screen.getByTestId("inspector-placeholder")).toBeInTheDocument();
-    expect(screen.getByText(/Select a step to edit/i)).toBeInTheDocument();
+    expect(screen.getByText(/No Step Selected/i)).toBeInTheDocument();
+    expect(screen.getByText(/Click on a block in the canvas to edit/i)).toBeInTheDocument();
   });
 });
 

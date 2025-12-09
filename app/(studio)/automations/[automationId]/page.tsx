@@ -6,6 +6,8 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -161,6 +163,10 @@ type VersionTask = {
     systemType?: string;
     relatedSteps?: string[];
     isBlocker?: boolean;
+    requirementsText?: string;
+    notes?: string;
+    documents?: string[];
+    assigneeEmail?: string;
   } | null;
 };
 
@@ -358,6 +364,8 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const previousRequirementsRef = useRef<string>("");
   const [injectedChatMessage, setInjectedChatMessage] = useState<CopilotMessage | null>(null);
+  const [selectedTask, setSelectedTask] = useState<VersionTask | null>(null);
+  const [savingTask, setSavingTask] = useState(false);
   
   // Sync activeTab with URL params when they change
   useEffect(() => {
@@ -972,6 +980,38 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [blueprint]
   );
 
+  const handleViewTask = useCallback((task: VersionTask) => {
+    setSelectedTask(task);
+  }, []);
+
+  const handleSaveTask = useCallback(
+    async (taskId: string, patch: { status?: VersionTask["status"]; description?: string | null; metadata?: Record<string, unknown> | null }) => {
+      setSavingTask(true);
+      try {
+        const response = await fetch(`/api/tasks/${taskId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error ?? "Failed to update task");
+        }
+        const data = (await response.json()) as { task: VersionTask };
+        setVersionTasks((prev) => prev.map((t) => (t.id === data.task.id ? { ...t, ...data.task } : t)));
+        setSelectedTask((prev) => (prev && prev.id === data.task.id ? { ...prev, ...data.task } : prev));
+        toast({ title: "Task updated", description: "Task changes saved.", variant: "success" });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to update task";
+        toast({ title: "Unable to update task", description: message, variant: "error" });
+        throw err;
+      } finally {
+        setSavingTask(false);
+      }
+    },
+    [toast]
+  );
+
   const completion = useMemo(() => getBlueprintCompletionState(blueprint), [blueprint]);
   const taskLookup = useMemo(() => {
     const map = new Map<string, VersionTask>();
@@ -1581,6 +1621,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
               tasks={versionTasks}
               blockersRemaining={blockersRemaining}
               onViewStep={handleViewTaskStep}
+              onViewTask={handleViewTask}
             />
           ) : (
             <div className="flex-1 relative h-full">
@@ -1735,6 +1776,15 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           </div>
         )}
       </div>
+
+      {selectedTask ? (
+        <TaskDrawer
+          task={selectedTask}
+          saving={savingTask}
+          onClose={() => setSelectedTask(null)}
+          onSave={(patch) => handleSaveTask(selectedTask.id, patch)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2056,6 +2106,7 @@ interface AutomationTasksTabProps {
   tasks: VersionTask[];
   blockersRemaining?: number;
   onViewStep?: (stepNumber: string) => void;
+  onViewTask?: (task: VersionTask) => void;
 }
 
 type TaskSectionKey = "blocker" | "important" | "optional";
@@ -2178,9 +2229,10 @@ interface TasksViewCanvasProps {
   tasks: VersionTask[];
   blockersRemaining: number;
   onViewStep: (stepId: string) => void;
+  onViewTask: (task: VersionTask) => void;
 }
 
-function TasksViewCanvas({ tasks, blockersRemaining, onViewStep }: TasksViewCanvasProps) {
+function TasksViewCanvas({ tasks, blockersRemaining, onViewStep, onViewTask }: TasksViewCanvasProps) {
   return (
     <div className="flex-1 flex flex-col h-full bg-white overflow-hidden">
       <div className="flex-1 overflow-y-auto pt-[100px]">
@@ -2189,6 +2241,7 @@ function TasksViewCanvas({ tasks, blockersRemaining, onViewStep }: TasksViewCanv
             tasks={tasks}
             blockersRemaining={blockersRemaining}
             onViewStep={onViewStep}
+            onViewTask={onViewTask}
           />
         </div>
       </div>
@@ -2196,7 +2249,7 @@ function TasksViewCanvas({ tasks, blockersRemaining, onViewStep }: TasksViewCanv
   );
 }
 
-function AutomationTasksTab({ tasks, blockersRemaining, onViewStep }: AutomationTasksTabProps) {
+function AutomationTasksTab({ tasks, blockersRemaining, onViewStep, onViewTask }: AutomationTasksTabProps) {
   const grouped = useMemo(() => {
     const groups: Record<TaskSectionKey, VersionTask[]> = {
       blocker: [],
@@ -2245,6 +2298,7 @@ function AutomationTasksTab({ tasks, blockersRemaining, onViewStep }: Automation
           icon={section.icon}
           tasks={grouped[section.key]}
           onViewStep={onViewStep}
+          onViewTask={onViewTask}
         />
       ))}
     </div>
@@ -2323,9 +2377,19 @@ interface TaskGroupCardProps {
   icon: typeof AlertTriangle | typeof CheckCircle2 | typeof Clock;
   tasks: VersionTask[];
   onViewStep?: (stepNumber: string) => void;
+  onViewTask?: (task: VersionTask) => void;
 }
 
-function TaskGroupCard({ title, description, emptyMessage, accentClass, icon: Icon, tasks, onViewStep }: TaskGroupCardProps) {
+function TaskGroupCard({
+  title,
+  description,
+  emptyMessage,
+  accentClass,
+  icon: Icon,
+  tasks,
+  onViewStep,
+  onViewTask,
+}: TaskGroupCardProps) {
   return (
     <div className={cn("rounded-2xl border p-6 space-y-4", accentClass)}>
       <div className="flex items-start justify-between gap-4">
@@ -2347,7 +2411,7 @@ function TaskGroupCard({ title, description, emptyMessage, accentClass, icon: Ic
       ) : (
         <div className="space-y-3">
           {tasks.map((task) => (
-            <TaskListItem key={task.id} task={task} onViewStep={onViewStep} />
+            <TaskListItem key={task.id} task={task} onViewStep={onViewStep} onViewTask={onViewTask} />
           ))}
         </div>
       )}
@@ -2358,16 +2422,20 @@ function TaskGroupCard({ title, description, emptyMessage, accentClass, icon: Ic
 interface TaskListItemProps {
   task: VersionTask;
   onViewStep?: (stepNumber: string) => void;
+  onViewTask?: (task: VersionTask) => void;
 }
 
-function TaskListItem({ task, onViewStep }: TaskListItemProps) {
+function TaskListItem({ task, onViewStep, onViewTask }: TaskListItemProps) {
   const statusLabel = formatTaskStatus(task.status);
   const statusClasses = getStatusBadgeClasses(task.status);
   const priorityClasses = getPriorityBadgeClasses(task.priority ?? "important");
   const relatedSteps = Array.isArray(task.metadata?.relatedSteps) ? task.metadata?.relatedSteps ?? [] : [];
 
   return (
-    <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+    <div
+      className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm hover:border-gray-300 cursor-pointer transition-colors"
+      onClick={() => onViewTask?.(task)}
+    >
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-[#0A0A0A] leading-tight">{task.title}</p>
@@ -2391,7 +2459,10 @@ function TaskListItem({ task, onViewStep }: TaskListItemProps) {
             <button
               key={`${task.id}-${stepNumber}`}
               type="button"
-              onClick={() => onViewStep?.(stepNumber)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onViewStep?.(stepNumber);
+              }}
               className="px-2 py-1 text-[11px] font-semibold rounded-full border border-gray-200 text-gray-600 hover:border-[#E43632] hover:text-[#E43632]"
             >
               Step {stepNumber}
@@ -2399,6 +2470,191 @@ function TaskListItem({ task, onViewStep }: TaskListItemProps) {
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+interface TaskDrawerProps {
+  task: VersionTask;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (patch: { status?: VersionTask["status"]; description?: string | null; metadata?: Record<string, unknown> | null }) => Promise<void>;
+}
+
+function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
+  const [status, setStatus] = useState<VersionTask["status"]>(task.status);
+  const [requirements, setRequirements] = useState<string>(task.metadata?.requirementsText ?? "");
+  const [notes, setNotes] = useState<string>(task.metadata?.notes ?? "");
+  const [documents, setDocuments] = useState<string[]>(task.metadata?.documents ?? []);
+  const [assignee, setAssignee] = useState<string>(task.metadata?.assigneeEmail ?? "");
+  const [description, setDescription] = useState<string>(task.description ?? "");
+
+  useEffect(() => {
+    setStatus(task.status);
+    setRequirements(task.metadata?.requirementsText ?? "");
+    setNotes(task.metadata?.notes ?? "");
+    setDocuments(task.metadata?.documents ?? []);
+    setAssignee(task.metadata?.assigneeEmail ?? "");
+    setDescription(task.description ?? "");
+  }, [task]);
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) return;
+    const names = files.map((file) => file.name);
+    setDocuments((prev) => [...prev, ...names]);
+  };
+
+  const handleRemoveDoc = (name: string) => {
+    setDocuments((prev) => prev.filter((doc) => doc !== name));
+  };
+
+  const handleSubmit = async (nextStatus?: VersionTask["status"]) => {
+    const patchStatus = nextStatus ?? status;
+    await onSave({
+      status: patchStatus,
+      description,
+      metadata: {
+        ...task.metadata,
+        requirementsText: requirements || undefined,
+        notes: notes || undefined,
+        documents,
+        assigneeEmail: assignee || undefined,
+      },
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div className="flex-1 bg-black/40" onClick={onClose} />
+      <div className="w-[420px] max-w-full h-full bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+        <div className="p-5 border-b border-gray-100 flex items-start justify-between">
+          <div>
+            <p className="text-[11px] uppercase font-bold text-gray-400">Task</p>
+            <h3 className="text-lg font-bold text-[#0A0A0A] leading-tight">{task.title}</h3>
+            {task.metadata?.systemType ? (
+              <p className="text-xs text-gray-500 mt-1 capitalize">System: {task.metadata.systemType}</p>
+            ) : null}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="ghost" size="sm" onClick={onClose} className="text-xs text-gray-500">
+              Close
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold text-gray-700">Status</Label>
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as VersionTask["status"])}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+            >
+              <option value="pending">Pending</option>
+              <option value="in_progress">In Progress</option>
+              <option value="complete">Complete</option>
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold text-gray-700">Task requirements / how to complete</Label>
+            <Textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="min-h-[80px] text-sm"
+              placeholder="Add instructions or requirements to complete this task."
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold text-gray-700">Additional notes</Label>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="min-h-[80px] text-sm"
+              placeholder="Internal notes or clarifications."
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold text-gray-700">Task requirements (Markdown)</Label>
+            <Textarea
+              value={requirements}
+              onChange={(e) => setRequirements(e.target.value)}
+              className="min-h-[120px] text-sm font-mono"
+              placeholder="Add detailed requirements in Markdown."
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold text-gray-700">Documents</Label>
+            <input type="file" multiple onChange={handleFileChange} className="text-sm" />
+            {documents.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {documents.map((doc) => (
+                  <div
+                    key={doc}
+                    className="flex items-center gap-2 px-3 py-1 rounded-full border border-gray-200 bg-gray-50 text-xs text-gray-700"
+                  >
+                    <span>{doc}</span>
+                    <button
+                      type="button"
+                      className="text-gray-400 hover:text-red-500"
+                      onClick={() => handleRemoveDoc(doc)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400">No documents attached.</p>
+            )}
+            <p className="text-[11px] text-gray-400">Uploads are captured as filenames for now; wire storage later.</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold text-gray-700">Assign / invite</Label>
+            <Input
+              value={assignee}
+              onChange={(e) => setAssignee(e.target.value)}
+              placeholder="email@company.com"
+              className="text-sm"
+            />
+            <p className="text-[11px] text-gray-400">
+              Enter teammate email to tag/invite (invites to be wired later).
+            </p>
+          </div>
+        </div>
+
+        <div className="p-4 border-t border-gray-200 bg-white flex items-center justify-between gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-sm"
+            disabled={saving}
+            onClick={() => handleSubmit("complete")}
+          >
+            Mark complete
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" size="sm" className="text-sm" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button size="sm" className="bg-gray-900 text-white" disabled={saving} onClick={() => handleSubmit()}>
+              {saving ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save task"
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

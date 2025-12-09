@@ -22,6 +22,7 @@ export interface StepNumbering {
 export function generateStepNumbers(blueprint: Blueprint): Map<string, StepNumbering> {
   const numbering = new Map<string, StepNumbering>();
   const visited = new Set<string>();
+  const allocatedNumbers = new Map<string, number>(); // guard against duplicates
 
   // Build incoming edge count for each step
   const incomingCount = new Map<string, number>();
@@ -75,10 +76,17 @@ export function generateStepNumbers(blueprint: Blueprint): Map<string, StepNumbe
     const branchLabel = step.branchLabel ? ` (${step.branchLabel})` : "";
     const displayLabel = `Step ${stepNumber}${branchLabel}`;
 
-    // Store numbering info
+    // Ensure uniqueness: if a number already exists, append a counter suffix
+    const baseKey = stepNumber;
+    const nextCount = (allocatedNumbers.get(baseKey) ?? 0) + 1;
+    if (nextCount > 1) {
+      stepNumber = `${baseKey}-${nextCount}`;
+    }
+    allocatedNumbers.set(baseKey, nextCount);
+
     numbering.set(step.id, {
       stepNumber,
-      displayLabel,
+      displayLabel: `Step ${stepNumber}${branchLabel}`,
       level,
       branchIndex,
     });
