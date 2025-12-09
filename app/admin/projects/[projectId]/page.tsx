@@ -16,13 +16,18 @@ import {
   ShieldAlert,
   Signature,
 } from "lucide-react";
-import { mockAdminProjects, mockProjectMessages, AdminProject, PricingStatus, ProjectStatus } from "@/lib/admin-mock";
+import { mockProjectMessages } from "@/lib/admin-mock";
+import type { AdminProject, PricingStatus, ProjectStatus } from "@/lib/types";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { PricingOverridePanel } from "@/components/admin/PricingOverridePanel";
 import { ConversationThread } from "@/components/admin/ConversationThread";
 import dynamic from "next/dynamic";
 import { useNodesState, useEdgesState } from "reactflow";
+import { blueprintToEdges, blueprintToNodes } from "@/lib/blueprint/canvas-utils";
+import { createEmptyBlueprint } from "@/lib/blueprint/factory";
+import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
+import { BLUEPRINT_SECTION_KEYS, BLUEPRINT_SECTION_TITLES, type Blueprint } from "@/lib/blueprint/types";
 
 // Dynamically import StudioCanvas to reduce initial bundle size
 // ReactFlow is heavy (~200KB), so we only load it when the Blueprint tab is active
@@ -68,19 +73,6 @@ const AI_SUGGESTIONS = [
   { tier: "20,000 - ∞", discount: "20%", price: "$0.0360" },
 ];
 
-// TODO: replace with blueprint checklist data from automation_versions.blueprint_json.
-const CHECKLIST_ITEMS = [
-  "Overview",
-  "Business Requirements",
-  "Business Objectives",
-  "Success Criteria",
-  "Systems",
-  "Data Needs",
-  "Exceptions",
-  "Human Touchpoints",
-  "Flow",
-];
-
 type Quote = {
   id: string;
   status: string;
@@ -105,8 +97,13 @@ type ProjectDetail = {
     status: AutomationLifecycleStatus | string;
     intakeNotes: string | null;
     requirementsText: string | null;
+    intakeProgress?: number | null;
+    workflow?: Blueprint | null;
   } | null;
   quotes: Quote[];
+  tasks?: ProjectTask[];
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 type PricingTabProps = {
@@ -122,6 +119,27 @@ type QuoteStatusCardProps = {
   latestQuote: Quote | null;
   onQuoteStatus: (status: "SENT" | "SIGNED") => void;
   updatingQuote: "SENT" | "SIGNED" | null;
+};
+
+type ChecklistItem = {
+  key: string;
+  title: string;
+  progress: number;
+  complete: boolean;
+};
+
+type ProjectTask = {
+  id: string;
+  title: string;
+  status: "pending" | "in_progress" | "complete";
+  priority?: string | null;
+  dueDate?: string | null;
+  assignee?: {
+    id?: string | null;
+    name?: string | null;
+    avatarUrl?: string | null;
+    title?: string | null;
+  } | null;
 };
 
 const mapLifecycleToProjectStatus = (status?: AutomationLifecycleStatus | string | null): ProjectStatus => {
@@ -168,7 +186,7 @@ interface ProjectDetailPageProps {
 }
 
 // Overview Tab Component
-function OverviewTab({ project }: { project: AdminProject }) {
+function OverviewTab({ project, checklistItems }: { project: AdminProject; checklistItems: ChecklistItem[] }) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6 h-full overflow-y-auto">
       {/* Summary Card */}
@@ -208,18 +226,22 @@ function OverviewTab({ project }: { project: AdminProject }) {
         <div className="grid grid-cols-3 gap-4 pt-4 border-t border-gray-100">
           <div>
             <p className="text-xs text-gray-500 uppercase font-bold mb-1">Risk Level</p>
-            <Badge
-              className={cn(
-                "border-none",
+            {(() => {
+              const riskLevel = project.risk ?? "Unknown";
+              const riskClass =
                 project.risk === "Low"
                   ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100"
                   : project.risk === "Medium"
                   ? "bg-amber-100 text-amber-700 hover:bg-amber-100"
-                  : "bg-red-100 text-red-700 hover:bg-red-100"
-              )}
-            >
-              {project.risk || "Not Set"} Risk
-            </Badge>
+                  : project.risk === "High"
+                  ? "bg-red-100 text-red-700 hover:bg-red-100"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-100";
+              return (
+                <Badge className={cn("border-none", riskClass)}>
+                  {riskLevel === "Unknown" ? "Risk TBD" : `${riskLevel} Risk`}
+                </Badge>
+              );
+            })()}
           </div>
           <div>
             <p className="text-xs text-gray-500 uppercase font-bold mb-1">Complexity</p>
@@ -251,17 +273,20 @@ function OverviewTab({ project }: { project: AdminProject }) {
         )}
 
         <div className="space-y-3 flex-1">
-          {CHECKLIST_ITEMS.map((item, i) => {
-            const isComplete = i < (project.checklistProgress / 100) * CHECKLIST_ITEMS.length;
+          {checklistItems.map((item) => {
+            const isComplete = item.complete || item.progress >= 1;
             return (
-              <div key={i} className="flex items-center justify-between text-sm">
+              <div key={item.key} className="flex items-center justify-between text-sm">
                 <span className={cn("text-gray-600", !isComplete && "text-amber-600 font-medium")}>
-                  {item}
+                  {item.title}
                 </span>
                 {isComplete ? (
                   <CheckCircle2 size={16} className="text-emerald-500" />
                 ) : (
-                  <AlertTriangle size={16} className="text-amber-500" />
+                  <div className="flex items-center gap-1 text-amber-600 text-xs">
+                    <AlertTriangle size={16} className="text-amber-500" />
+                    <span className="text-[11px]">{Math.round(item.progress * 100)}%</span>
+                  </div>
                 )}
               </div>
             );
@@ -405,38 +430,19 @@ function AdminActions({ canMarkLive, markingLive, onMarkLive, canMarkSigned, onM
 }
 
 // Blueprint Tab Component
-function BlueprintTab({ requirementsText }: { requirementsText?: string | null }) {
-  const [nodes, , onNodesChange] = useNodesState([
-    {
-      id: "1",
-      type: "custom",
-      position: { x: 250, y: 50 },
-      data: { title: "Invoice Email", icon: FileText, type: "trigger", status: "complete" },
-    },
-    {
-      id: "2",
-      type: "custom",
-      position: { x: 250, y: 200 },
-      data: { title: "Extract Data", icon: FileText, type: "action", status: "complete" },
-    },
-    {
-      id: "3",
-      type: "custom",
-      position: { x: 250, y: 350 },
-      data: {
-        title: "Sanctions Check",
-        icon: ShieldAlert,
-        type: "action",
-        status: "warning",
-        description: "Needs API Key",
-      },
-    },
-  ]);
-  const [edges, , onEdgesChange] = useEdgesState([
-    { id: "e1-2", source: "1", target: "2" },
-    { id: "e2-3", source: "2", target: "3" },
-  ]);
+function BlueprintTab({ requirementsText, workflow }: { requirementsText?: string | null; workflow?: Blueprint | null }) {
+  const blueprint = useMemo(() => workflow ?? createEmptyBlueprint(), [workflow]);
+  const initialNodes = useMemo(() => blueprintToNodes(blueprint), [blueprint]);
+  const initialEdges = useMemo(() => blueprintToEdges(blueprint), [blueprint]);
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
+  useEffect(() => {
+    setNodes(blueprintToNodes(blueprint));
+    setEdges(blueprintToEdges(blueprint));
+  }, [blueprint, setEdges, setNodes]);
+
+  const hasSteps = blueprint.steps.length > 0;
   const mockIntakeChat = [
     { role: "user", text: "We need to add a check for high value invoices.", time: "2d ago" },
     { role: "ai", text: "Understood. What is the threshold?", time: "2d ago" },
@@ -461,18 +467,24 @@ function BlueprintTab({ requirementsText }: { requirementsText?: string | null }
 
       {/* Center: Canvas */}
       <div className="flex-1 bg-gray-50 relative">
-        <StudioCanvas
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={() => {}}
-          onNodeClick={() => {}}
-          isSynthesizing={false}
-        />
-        <div className="absolute top-4 right-4 bg-white/90 backdrop-blur p-2 rounded-lg shadow-sm border border-gray-200 text-xs text-gray-500">
-          Ops Edit Mode
-        </div>
+        {hasSteps ? (
+          <>
+            <StudioCanvas
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={() => {}}
+              onNodeClick={() => {}}
+              isSynthesizing={false}
+            />
+            <div className="absolute top-4 right-4 bg-white/90 backdrop-blur p-2 rounded-lg shadow-sm border border-gray-200 text-xs text-gray-500">
+              Ops Edit Mode
+            </div>
+          </>
+        ) : (
+          <div className="flex h-full items-center justify-center text-sm text-gray-500">No steps defined yet.</div>
+        )}
       </div>
 
       {/* Right: Internal Notes */}
@@ -501,26 +513,45 @@ function BlueprintTab({ requirementsText }: { requirementsText?: string | null }
 }
 
 // Tasks Tab Component
-function TasksTab() {
-  const tasks = {
-    backlog: [{ id: 1, title: "Configure Webhook Listener", assignee: "Mike R.", due: "Nov 14" }],
-    in_progress: [
-      { id: 2, title: "Implement Sanctions API", assignee: "Mike R.", due: "Nov 12" },
-      { id: 3, title: "Update Email Template", assignee: "Sarah C.", due: "Nov 12" },
-    ],
-    qa: [],
-    done: [{ id: 4, title: "Refactor Logic Node", assignee: "Mike R.", due: "Nov 10" }],
+function TasksTab({ tasks }: { tasks: ProjectTask[] }) {
+  const grouped = useMemo(
+    () => ({
+      backlog: tasks.filter((task) => task.status === "pending"),
+      in_progress: tasks.filter((task) => task.status === "in_progress"),
+      qa: [] as ProjectTask[],
+      done: tasks.filter((task) => task.status === "complete"),
+    }),
+    [tasks]
+  );
+
+  const columns = [
+    { id: "backlog", label: "Backlog", items: grouped.backlog, color: "bg-gray-200" },
+    { id: "in_progress", label: "In Progress", items: grouped.in_progress, color: "bg-blue-500" },
+    { id: "qa", label: "QA", items: grouped.qa, color: "bg-pink-500" },
+    { id: "done", label: "Done", items: grouped.done, color: "bg-emerald-500" },
+  ];
+
+  const renderDueDate = (value?: string | null) => {
+    if (!value) return "No due date";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "No due date";
+    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
+
+  if (!tasks || tasks.length === 0) {
+    return (
+      <div className="p-6 h-full overflow-x-auto bg-gray-50">
+        <div className="flex h-full items-center justify-center text-sm text-gray-500 border border-dashed border-gray-200 rounded-xl bg-white">
+          No build tasks yet for this version.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 h-full overflow-x-auto bg-gray-50">
       <div className="flex gap-6 h-full min-w-[1000px]">
-        {[
-          { id: "backlog", label: "Backlog", items: tasks.backlog, color: "bg-gray-200" },
-          { id: "in_progress", label: "In Progress", items: tasks.in_progress, color: "bg-blue-500" },
-          { id: "qa", label: "QA", items: tasks.qa, color: "bg-pink-500" },
-          { id: "done", label: "Done", items: tasks.done, color: "bg-emerald-500" },
-        ].map((col) => (
+        {columns.map((col) => (
           <div key={col.id} className="w-[300px] flex flex-col h-full">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
@@ -530,42 +561,40 @@ function TasksTab() {
                   {col.items.length}
                 </span>
               </div>
-              <Button variant="ghost" size="icon" className="h-6 w-6">
-                <span className="text-lg">+</span>
-              </Button>
             </div>
 
             <div className="flex-1 bg-gray-200/50 rounded-xl p-2 space-y-3 overflow-y-auto">
               {col.items.map((task) => (
-                <Card key={task.id} className="p-3 shadow-sm hover:shadow-md transition-shadow cursor-pointer group">
+                <Card key={task.id} className="p-3 shadow-sm hover:shadow-md transition-shadow">
                   <div className="flex justify-between items-start mb-2">
                     <p className="text-sm font-bold text-[#0A0A0A] leading-tight">{task.title}</p>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "text-[10px] border",
+                        task.priority === "blocker"
+                          ? "border-red-200 bg-red-50 text-red-700"
+                          : task.priority === "important"
+                          ? "border-amber-200 bg-amber-50 text-amber-700"
+                          : "border-gray-200 bg-white text-gray-500"
+                      )}
+                    >
+                      {task.priority ?? "optional"}
+                    </Badge>
                   </div>
                   <div className="flex items-center justify-between mt-3 pt-2 border-t border-gray-50">
                     <div className="flex items-center gap-1.5">
                       <div className="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center text-[9px] font-bold text-gray-600">
-                        {task.assignee.charAt(0)}
+                        {(task.assignee?.name ?? "Unassigned").charAt(0)}
                       </div>
-                      <span className="text-[10px] text-gray-500">{task.assignee}</span>
+                      <span className="text-[10px] text-gray-500">{task.assignee?.name ?? "Unassigned"}</span>
                     </div>
-                    <div
-                      className={cn(
-                        "text-[10px] px-1.5 py-0.5 rounded",
-                        new Date(task.due) < new Date()
-                          ? "bg-red-50 text-red-600"
-                          : "bg-gray-50 text-gray-500"
-                      )}
-                    >
-                      {task.due}
+                    <div className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 text-gray-500">
+                      {renderDueDate(task.dueDate)}
                     </div>
                   </div>
                 </Card>
               ))}
-              {col.id === "backlog" && (
-                <Button variant="outline" className="w-full border-dashed border-gray-300 text-gray-500 text-xs h-9">
-                  + Add Task
-                </Button>
-              )}
             </div>
           </div>
         ))}
@@ -575,7 +604,7 @@ function TasksTab() {
 }
 
 // Activity Tab Component
-function ActivityTab() {
+function ActivityTab({ automationVersionId: _automationVersionId }: { automationVersionId?: string }) {
   const activityLog = [
     { id: 1, type: "internal", text: "Pricing draft generated by Mike Ross", time: "2h ago" },
     { id: 2, type: "client", text: "Client uploaded 'Updated_SOP_v2.docx'", time: "4h ago" },
@@ -788,7 +817,46 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
   }, [fetchProject]);
 
   const latestQuote = useMemo(() => project?.quotes[0] ?? null, [project]);
-  const mockProject = useMemo(() => mockAdminProjects.find((p) => p.id === params.projectId) ?? mockAdminProjects[0], [params.projectId]);
+  const blueprint = useMemo(() => project?.version?.workflow ?? null, [project]);
+  const completionState = useMemo(() => getBlueprintCompletionState(blueprint), [blueprint]);
+  const completionPercent = useMemo(
+    () => Math.max(Math.round(completionState.score * 100), project?.version?.intakeProgress ?? 0),
+    [completionState.score, project?.version?.intakeProgress]
+  );
+  const checklistItems = useMemo<ChecklistItem[]>(
+    () =>
+      BLUEPRINT_SECTION_KEYS.map((key) => {
+        const section = completionState.sections.find((item) => item.key === key);
+        return {
+          key,
+          title: BLUEPRINT_SECTION_TITLES[key],
+          progress: section?.progress ?? 0,
+          complete: section?.complete ?? false,
+        };
+      }),
+    [completionState.sections]
+  );
+  const derivedSystems = useMemo(() => {
+    const systems = new Set<string>();
+    if (blueprint) {
+      blueprint.sections
+        .filter((section) => section.key === "systems")
+        .forEach((section) => {
+          section.content
+            .split(/[\n,]/)
+            .map((item) => item.trim())
+            .filter(Boolean)
+            .forEach((item) => systems.add(item));
+        });
+      blueprint.steps.forEach((step) => {
+        step.systemsInvolved.forEach((system) => {
+          const trimmed = system.trim();
+          if (trimmed) systems.add(trimmed);
+        });
+      });
+    }
+    return Array.from(systems);
+  }, [blueprint]);
 
   if (loading && !project) {
     return (
@@ -798,7 +866,7 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
     );
   }
 
-  if (!project || !mockProject) {
+  if (!project) {
     return (
       <div className="p-10 space-y-3">
         <p className="text-sm text-gray-600">Project not found.</p>
@@ -809,18 +877,40 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
     );
   }
 
+  const formatRelativeTime = (value?: string) => {
+    if (!value) return "—";
+    const date = new Date(value);
+    const diff = Date.now() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 1) return "Just now";
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
+
   const displayProject: AdminProject = {
-    ...mockProject,
     id: project.id,
-    name: project.name ?? mockProject.name,
-    description: project.automation?.description ?? mockProject.description,
-    version: project.version?.versionLabel ?? mockProject.version,
+    clientId: project.automation?.id ?? project.id,
+    clientName: project.automation?.name ?? "Client",
+    name: project.name ?? project.automation?.name ?? "Automation",
+    version: project.version?.versionLabel ?? "v1.0",
+    type: project.version?.versionLabel?.toLowerCase().includes("v1.") ? "New Automation" : "Revision",
     status: mapLifecycleToProjectStatus(project.status),
-    pricingStatus: latestQuote ? mapQuoteStatusToPricing(latestQuote.status) : mockProject.pricingStatus,
-    checklistProgress: mockProject.checklistProgress ?? 60,
-    systems: mockProject.systems ?? [],
-    setupFee: latestQuote ? Number(latestQuote.setupFee) : mockProject.setupFee,
-    unitPrice: latestQuote ? Number(latestQuote.unitPrice) : mockProject.unitPrice,
+    pricingStatus: latestQuote ? mapQuoteStatusToPricing(latestQuote.status) : "Not Generated",
+    checklistProgress: completionPercent,
+    systems: derivedSystems,
+    owner: { name: "Unassigned", avatar: "", role: "" },
+    eta: "TBD",
+    lastUpdated: project.updatedAt ?? project.createdAt ?? new Date().toISOString(),
+    lastUpdatedRelative: formatRelativeTime(project.updatedAt ?? project.createdAt ?? undefined),
+    description: project.automation?.description ?? project.automation?.name ?? "",
+    risk: undefined,
+    estimatedVolume: latestQuote?.estimatedVolume ?? undefined,
+    setupFee: latestQuote ? Number(latestQuote.setupFee) : undefined,
+    unitPrice: latestQuote ? Number(latestQuote.unitPrice) : undefined,
+    effectiveUnitPrice: latestQuote ? Number(latestQuote.unitPrice) : undefined,
   };
 
   const statusStyle = STATUS_STYLES[displayProject.status] ?? STATUS_STYLES["Intake in Progress"];
@@ -939,10 +1029,10 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
 
             <div className="flex-1 bg-gray-50 overflow-hidden relative">
               <TabsContent value="overview" className="h-full m-0 data-[state=inactive]:hidden">
-                <OverviewTab project={displayProject} />
+                <OverviewTab project={displayProject} checklistItems={checklistItems} />
               </TabsContent>
               <TabsContent value="requirements-blueprint" className="h-full m-0 data-[state=inactive]:hidden">
-                <BlueprintTab requirementsText={project.version?.requirementsText} />
+                <BlueprintTab requirementsText={project.version?.requirementsText} workflow={blueprint} />
               </TabsContent>
               <TabsContent value="pricing-quote" className="h-full m-0 data-[state=inactive]:hidden">
                 <PricingTab
@@ -955,7 +1045,7 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
                 />
               </TabsContent>
               <TabsContent value="build-tasks" className="h-full m-0 data-[state=inactive]:hidden">
-                <TasksTab />
+                <TasksTab tasks={project.tasks ?? []} />
               </TabsContent>
               <TabsContent value="activity" className="h-full m-0 data-[state=inactive]:hidden">
                 <ActivityTab automationVersionId={project.version?.id ?? ""} />

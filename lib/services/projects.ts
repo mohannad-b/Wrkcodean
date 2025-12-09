@@ -5,10 +5,14 @@ import {
   automationVersions,
   projects,
   quotes,
+  tasks,
+  users,
   type Automation,
   type AutomationVersion,
   type Project,
   type Quote,
+  type Task,
+  type User,
 } from "@/db/schema";
 import { fromDbAutomationStatus, toDbAutomationStatus, AutomationLifecycleStatus } from "@/lib/automations/status";
 import { canQuoteTransition, fromDbQuoteStatus, QuoteLifecycleStatus, toDbQuoteStatus } from "@/lib/quotes/status";
@@ -158,11 +162,37 @@ export async function getProjectDetail(tenantId: string, projectId: string) {
         .orderBy(desc(quotes.createdAt))
     : [];
 
+  const tasksForProject = project.automationVersionId
+    ? await db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.automationVersionId, project.automationVersionId), eq(tasks.tenantId, tenantId)))
+        .orderBy(desc(tasks.createdAt))
+    : [];
+
+  const assigneeIds = Array.from(
+    new Set(tasksForProject.map((task) => task.assigneeId).filter((id): id is string => Boolean(id)))
+  );
+  const assignees: User[] = assigneeIds.length
+    ? await db
+        .select()
+        .from(users)
+        .where(and(inArray(users.id, assigneeIds), eq(users.tenantId, tenantId)))
+    : [];
+  const assigneeMap = new Map<string, User>();
+  assignees.forEach((user) => assigneeMap.set(user.id, user));
+
+  const tasksWithAssignee: Array<Task & { assignee?: User | null }> = tasksForProject.map((task) => ({
+    ...task,
+    assignee: task.assigneeId ? assigneeMap.get(task.assigneeId) ?? null : null,
+  }));
+
   return {
     project,
     automation: automationRow && automationRow[0] ? automationRow[0] : null,
     version: versionRow && versionRow[0] ? versionRow[0] : null,
     quotes: quotesForProject,
+    tasks: tasksWithAssignee,
   };
 }
 

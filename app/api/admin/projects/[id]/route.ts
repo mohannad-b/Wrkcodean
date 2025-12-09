@@ -30,6 +30,8 @@ export async function GET(_request: Request, { params }: RouteParams) {
           id: detail.project.id,
           name: detail.project.name,
           status: fromDbAutomationStatus(detail.project.status),
+          createdAt: detail.project.createdAt,
+          updatedAt: detail.project.updatedAt,
           automation: detail.automation
             ? {
                 id: detail.automation.id,
@@ -44,6 +46,8 @@ export async function GET(_request: Request, { params }: RouteParams) {
                 status: fromDbAutomationStatus(detail.version.status),
                 intakeNotes: detail.version.intakeNotes,
                 requirementsText: detail.version.requirementsText,
+                intakeProgress: detail.version.intakeProgress,
+                workflow: detail.version.workflowJson,
               }
             : null,
           quotes: detail.quotes.map((quote) => ({
@@ -54,6 +58,22 @@ export async function GET(_request: Request, { params }: RouteParams) {
             estimatedVolume: quote.estimatedVolume,
             clientMessage: quote.clientMessage,
           })),
+          tasks:
+            detail.tasks?.map((task) => ({
+              id: task.id,
+              title: task.title,
+              status: task.status,
+              priority: task.priority,
+              dueDate: task.dueDate,
+              assignee: task.assignee
+                ? {
+                    id: task.assignee.id,
+                    name: task.assignee.name,
+                    avatarUrl: task.assignee.avatarUrl,
+                    title: task.assignee.title,
+                  }
+                : null,
+            })) ?? [],
         },
       });
     }
@@ -95,8 +115,19 @@ export async function GET(_request: Request, { params }: RouteParams) {
           status: fromDbAutomationStatus(versionDetail.version.status),
           intakeNotes: versionDetail.version.intakeNotes,
           requirementsText: versionDetail.version.requirementsText,
+          intakeProgress: versionDetail.version.intakeProgress,
+          workflow: versionDetail.version.workflowJson,
         },
         quotes: latestQuote,
+        tasks:
+          versionDetail.tasks?.map((task) => ({
+            id: task.id,
+            title: task.title,
+            status: task.status,
+            priority: task.priority,
+            dueDate: task.dueDate,
+            assignee: null,
+          })) ?? [],
       },
     });
   } catch (error) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -15,8 +15,7 @@ import {
   Loader2,
   RefreshCw,
   Send,
-  StickyNote,
-  Plus,
+  MessageSquare,
   Users,
   Play,
   Edit3,
@@ -60,14 +59,16 @@ import { VersionSelector, type VersionOption } from "@/components/ui/VersionSele
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BUILD_STATUS_ORDER, type BuildStatus } from "@/lib/build-status/types";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ChevronDown } from "lucide-react";
 import { TaskDrawer } from "@/components/automations/TaskDrawer";
+import { NeedsAttentionCard } from "@/components/automations/NeedsAttentionCard";
+import { getAttentionTasks, type AutomationTask } from "@/lib/automations/tasks";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const StudioCanvas = dynamic(
   () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
@@ -155,12 +156,7 @@ type AutomationDetail = {
   versions: AutomationVersion[];
 };
 
-type VersionTask = {
-  id: string;
-  title: string;
-  description: string | null;
-  status: "pending" | "in_progress" | "complete";
-  priority: "blocker" | "important" | "optional";
+type VersionTask = AutomationTask & {
   metadata?: {
     systemType?: string;
     relatedSteps?: string[];
@@ -286,56 +282,42 @@ type ActivityEntry = {
   iconColor: string;
 };
 
-const MOCK_ACTIVITY_ENTRIES: ActivityEntry[] = [
-  {
-    title: "Logic updated",
-    user: "Mo",
-    time: "2 hours ago",
-    description: "Changed approval threshold from $5k to $10k.",
-    icon: Edit3,
-    iconBg: "bg-blue-50",
-    iconColor: "text-blue-500",
-  },
-  {
-    title: "Execution warning",
-    user: "System",
-    time: "5 hours ago",
-    description: "PDF extraction confidence was low (45%) for Invoice #9921.",
-    icon: AlertTriangle,
-    iconBg: "bg-amber-50",
-    iconColor: "text-amber-500",
-  },
-  {
-    title: "Manual run",
-    user: "Sarah (Finance)",
-    time: "1 day ago",
-    description: "Triggered manual reconciliation for Q3 expenses.",
-    icon: Play,
-    iconBg: "bg-emerald-50",
-    iconColor: "text-emerald-500",
-  },
-];
+type ActivityApiItem = {
+  id: string;
+  action: string;
+  displayText: string;
+  category: string;
+  user: string;
+  timestamp: string;
+};
 
-const MOCK_ATTENTION_ITEMS = [
-  {
-    id: "credentials",
-    title: "Missing credentials",
-    description: "The Salesforce connector needs re-authentication.",
-    actionLabel: "Fix credentials",
-  },
-  {
-    id: "exceptions",
-    title: "Unhandled exception",
-    description: "Exception branch not defined for >$25k invoices.",
-    actionLabel: "Add exception",
-  },
-];
+const RECENT_ACTIVITY_ICON_MAP: Record<string, { icon: typeof Edit3; bg: string; color: string }> = {
+  blueprint: { icon: FileText, bg: "bg-pink-50", color: "text-pink-600" },
+  quote: { icon: DollarSign, bg: "bg-amber-50", color: "text-amber-600" },
+  task: { icon: CheckSquare, bg: "bg-blue-50", color: "text-blue-600" },
+  build: { icon: Play, bg: "bg-emerald-50", color: "text-emerald-600" },
+  message: { icon: MessageSquare, bg: "bg-gray-50", color: "text-gray-600" },
+  version: { icon: History, bg: "bg-purple-50", color: "text-purple-600" },
+  other: { icon: Edit3, bg: "bg-gray-50", color: "text-gray-500" },
+};
 
-const MOCK_SUGGESTIONS = [
-  { title: "Add error handling", description: "Add a fallback branch if Xero is down." },
-  { title: "Optimize trigger", description: "Filter emails by subject contains 'Invoice' to reduce noise." },
-];
-// TODO: replace KPI, activity, attention, and suggestion mock data with real analytics + audit feeds.
+function mapActivityToEntry(activity: ActivityApiItem): ActivityEntry {
+  const category = activity.category ?? "other";
+  const iconConfig = RECENT_ACTIVITY_ICON_MAP[category] ?? RECENT_ACTIVITY_ICON_MAP.other;
+  const parsedTime = activity.timestamp ? new Date(activity.timestamp) : new Date();
+
+  return {
+    title: activity.displayText || activity.action || "Activity update",
+    user: activity.user || "Unknown",
+    time: formatDistanceToNow(parsedTime, { addSuffix: true }),
+    description: activity.action?.replace(/\./g, " ") ?? "",
+    icon: iconConfig.icon,
+    iconBg: iconConfig.bg,
+    iconColor: iconConfig.color,
+  };
+}
+
+// TODO: replace KPI and activity mock data with real analytics + audit feeds.
 
 export default function AutomationDetailPage({ params }: AutomationDetailPageProps) {
   const router = useRouter();
@@ -346,11 +328,14 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [notes, setNotes] = useState("");
   const [blueprint, setBlueprint] = useState<Blueprint | null>(null);
   const [versionTasks, setVersionTasks] = useState<VersionTask[]>([]);
+  const [recentActivityEntries, setRecentActivityEntries] = useState<ActivityEntry[]>([]);
+  const [recentActivityLoading, setRecentActivityLoading] = useState(false);
+  const [recentActivityError, setRecentActivityError] = useState<string | null>(null);
+  const [showProceedCelebration, setShowProceedCelebration] = useState(false);
+  const [showPricingModal, setShowPricingModal] = useState(false);
   const [blueprintError, setBlueprintError] = useState<string | null>(null);
   const [isBlueprintDirty, setBlueprintDirty] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [savingNotes, setSavingNotes] = useState(false);
-  const [transitioning, setTransitioning] = useState(false);
   const [creatingVersion, setCreatingVersion] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
@@ -443,10 +428,43 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [params.automationId, selectedVersionId]
   );
 
+  const fetchRecentActivity = useCallback(
+    async (versionId: string | null) => {
+      if (!versionId) {
+        setRecentActivityEntries([]);
+        return;
+      }
+
+      setRecentActivityLoading(true);
+      setRecentActivityError(null);
+      try {
+        const response = await fetch(`/api/automation-versions/${versionId}/activity?limit=3`, { cache: "no-store" });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error ?? "Failed to load activity");
+        }
+        const data = await response.json();
+        const activities: ActivityApiItem[] = Array.isArray(data.activities) ? data.activities : [];
+        setRecentActivityEntries(activities.slice(0, 3).map(mapActivityToEntry));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to load activity";
+        setRecentActivityError(message);
+        setRecentActivityEntries([]);
+      } finally {
+        setRecentActivityLoading(false);
+      }
+    },
+    []
+  );
+
 
   useEffect(() => {
     fetchAutomation();
   }, [fetchAutomation]);
+
+  useEffect(() => {
+    void fetchRecentActivity(selectedVersionId);
+  }, [fetchRecentActivity, selectedVersionId]);
 
   const selectedVersion = useMemo(() => {
     if (!automation || !selectedVersionId) {
@@ -503,6 +521,8 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     return groups;
   }, [versionTasks]);
 
+  const attentionTasks = useMemo(() => getAttentionTasks(versionTasks), [versionTasks]);
+
   const blockersRemaining = useMemo(
     () => taskGroups.blocker.filter((task) => task.status !== "complete").length,
     [taskGroups.blocker]
@@ -523,32 +543,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     setSelectedStepId(null);
     setHasSelectedStep(false);
     setShowStepHelper(false);
-  };
-
-  const handleSaveNotes = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!selectedVersion) return;
-    setSavingNotes(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/automation-versions/${selectedVersion.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ intakeNotes: notes }),
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error ?? "Failed to save notes");
-      }
-      await fetchAutomation();
-      toast({ title: "Notes saved", description: "Intake notes updated.", variant: "success" });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unable to save notes";
-      setError(message);
-      toast({ title: "Unable to save notes", description: message, variant: "error" });
-    } finally {
-      setSavingNotes(false);
-    }
   };
 
   const handleSaveRequirements = async () => {
@@ -626,31 +620,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     },
     [blueprint, fetchAutomation, selectedVersion, toast]
   );
-
-  const handleSendForPricing = async () => {
-    if (!selectedVersion) return;
-    setTransitioning(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/automation-versions/${selectedVersion.id}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "NeedsPricing" }),
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error ?? "Failed to update status");
-      }
-      await fetchAutomation();
-      toast({ title: "Sent for pricing", description: "Version moved to Needs Pricing.", variant: "success" });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unable to send for pricing";
-      setError(message);
-      toast({ title: "Unable to send for pricing", description: message, variant: "error" });
-    } finally {
-      setTransitioning(false);
-    }
-  };
 
   const refreshAutomationPreservingSelection = useCallback(async () => {
     await fetchAutomation({ preserveSelection: true });
@@ -1143,6 +1112,13 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         variant: "success",
       });
       await fetchAutomation({ preserveSelection: true });
+      setShowProceedCelebration(true);
+      setTimeout(() => {
+        setShowProceedCelebration(false);
+        setActiveTab("Build Status");
+        setShowPricingModal(true);
+        setTimeout(() => setShowPricingModal(false), 4500);
+      }, 1200);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Proceed request failed";
       toast({ title: "Unable to proceed", description: message, variant: "error" });
@@ -1209,13 +1185,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   }
 
   const latestQuote = selectedVersion?.latestQuote ?? null;
-  const showSendForPricing =
-    selectedVersion &&
-    (selectedVersion.status === "IntakeInProgress" || selectedVersion.status === "NeedsPricing") &&
-    !latestQuote;
-  const awaitingApproval = latestQuote?.status === "SENT";
-  const buildUnderway =
-    latestQuote?.status === "SIGNED" && selectedVersion?.status === "BuildInProgress";
   const versionOptions: VersionOption[] = automation.versions.map((version) => ({
     id: version.id,
     label: version.versionLabel,
@@ -1223,14 +1192,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     updated: formatDateTime(version.updatedAt),
   }));
   const kpiStats = getKpiStats(automation.id);
-  const activityEntries = MOCK_ACTIVITY_ENTRIES.map((entry, index) =>
-    index === 0
-      ? {
-          ...entry,
-          description: `Changed approval thresholds for ${automation.name}.`,
-        }
-      : entry
-  );
 
   const handleInviteTeam = () => {
     toast({
@@ -1272,148 +1233,18 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
 
       <section className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-6">
-          <StatusStepper
-            selectedVersion={selectedVersion}
-            latestQuote={latestQuote}
-            showSendForPricing={Boolean(showSendForPricing)}
-            awaitingApproval={awaitingApproval}
-            buildUnderway={buildUnderway}
-            onSendForPricing={handleSendForPricing}
-            transitioning={transitioning}
+          <RecentActivity
+            entries={recentActivityEntries}
+            isLoading={recentActivityLoading}
+            error={recentActivityError}
+            onViewAll={() => setActiveTab("Activity")}
           />
-          <RecentActivity entries={activityEntries} onViewAll={() => handleMockAction("View all activity")} />
         </div>
 
         <div className="space-y-6">
-          <Card className="shadow-sm border-gray-100">
-            <CardHeader>
-              <CardTitle>Version history</CardTitle>
-              <CardDescription>Select a version to inspect or update.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {automation.versions.map((version) => {
-                  const isActive = version.id === selectedVersion?.id;
-                  return (
-                    <button
-                      key={version.id}
-                      type="button"
-                      onClick={() => handleVersionChange(version.id)}
-                      className={cn(
-                        "w-full text-left rounded-lg border bg-white p-4 shadow-sm transition-colors",
-                        isActive
-                          ? "border-rose-200 bg-rose-50/40"
-                          : "border-gray-100 hover:border-gray-200 hover:bg-gray-50/60"
-                      )}
-                    >
-                      <div className="flex items-center justify-between gap-3 mb-2">
-                        <div className="flex items-center gap-2">
-                          <Badge
-                            variant="outline"
-                            className={cn(
-                              "text-[10px] px-2 py-0.5 font-mono",
-                              isActive ? "bg-white text-[#E43632] border-rose-200" : "bg-gray-50 text-gray-600 border-gray-200"
-                            )}
-                          >
-                            {version.versionLabel}
-                          </Badge>
-                          <span className="text-[11px] text-gray-400">{formatDateTime(version.updatedAt)}</span>
-                        </div>
-                        <StatusBadge status={version.status} />
-                      </div>
-                      <p className="text-xs text-gray-500 line-clamp-3">
-                        {version.intakeNotes ? version.intakeNotes.slice(0, 160) : "No notes yet."}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
-
-          <NeedsAttentionCard items={MOCK_ATTENTION_ITEMS} onAction={handleMockAction} />
-          <CopilotSuggestions
-            suggestions={MOCK_SUGGESTIONS}
-            onSelectSuggestion={(title) => handleMockAction(title)}
-            onAskForMore={() => handleMockAction("Ask Copilot")}
-          />
+          <NeedsAttentionCard tasks={attentionTasks} onGoToWorkflow={() => setActiveTab("Workflow")} />
         </div>
       </section>
-
-      <Card className="shadow-sm border-gray-100">
-        <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <CardTitle>Tasks / Intake</CardTitle>
-            <CardDescription>Capture notes for this version.</CardDescription>
-          </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <Badge variant="secondary" className="bg-gray-100 text-gray-600">
-              {selectedVersion?.versionLabel ?? "Draft"}
-            </Badge>
-            {selectedVersion ? <StatusBadge status={selectedVersion.status} /> : null}
-          </div>
-        </CardHeader>
-        <CardContent>
-          <form className="space-y-4" onSubmit={handleSaveNotes}>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
-                <StickyNote className="h-4 w-4" />
-                Intake notes
-              </label>
-              <Textarea
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                rows={6}
-                placeholder="Document intake notes, requirements, and linked resources."
-              />
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <Button type="submit" disabled={savingNotes || !selectedVersion}>
-                {savingNotes ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Save notes
-              </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="outline" disabled={creatingVersion || !selectedVersion}>
-                    {creatingVersion ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Creating...
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="mr-2 h-4 w-4" />
-                        New version
-                        <ChevronDown className="ml-2 h-4 w-4" />
-                      </>
-                    )}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    onClick={() => handleCreateVersion(null)}
-                    disabled={creatingVersion}
-                  >
-                    <div className="flex flex-col">
-                      <span className="font-semibold">Start from scratch</span>
-                      <span className="text-xs text-gray-500">Create a new empty version</span>
-                    </div>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => handleCreateVersion(selectedVersion?.id ?? null)}
-                    disabled={creatingVersion || !selectedVersion}
-                  >
-                    <div className="flex flex-col">
-                      <span className="font-semibold">Copy from this version</span>
-                      <span className="text-xs text-gray-500">Duplicate the current version</span>
-                    </div>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
     </div>
   );
 
@@ -1778,6 +1609,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 latestQuote={selectedVersion?.latestQuote}
                 lastUpdated={selectedVersion?.updatedAt ?? null}
                 versionLabel={selectedVersion?.versionLabel ?? ""}
+                tasks={selectedVersion?.tasks ?? []}
               />
             ) : activeTab === "Activity" ? (
               <ActivityTab
@@ -1807,6 +1639,34 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           onSave={(patch) => handleSaveTask(selectedTask.id, patch)}
         />
       ) : null}
+
+      <Dialog open={showProceedCelebration} onOpenChange={setShowProceedCelebration}>
+        <DialogContent className="max-w-sm text-center">
+          <DialogHeader>
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 animate-bounce">
+              <CheckCircle2 className="h-8 w-8" />
+            </div>
+            <DialogTitle className="mt-3 text-xl">Submitted for build</DialogTitle>
+            <DialogDescription className="text-sm text-gray-600">
+              We’re moving your automation to the next step. Sit tight while we get pricing started.
+            </DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showPricingModal} onOpenChange={setShowPricingModal}>
+        <DialogContent className="max-w-sm text-center">
+          <DialogHeader>
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 text-blue-600 animate-pulse">
+              <Clock className="h-8 w-8" />
+            </div>
+            <DialogTitle className="mt-3 text-xl">Pricing in progress</DialogTitle>
+            <DialogDescription className="text-sm text-gray-600">
+              This should only take a couple of minutes. We’ll update the build status as soon as it’s ready.
+            </DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1878,83 +1738,6 @@ function AutomationHeader({
   );
 }
 
-interface StatusStepperProps {
-  selectedVersion: AutomationVersion | null;
-  latestQuote: QuoteSummary | null;
-  showSendForPricing: boolean;
-  awaitingApproval: boolean;
-  buildUnderway: boolean;
-  onSendForPricing: () => void;
-  transitioning: boolean;
-}
-
-function StatusStepper({
-  selectedVersion,
-  latestQuote,
-  showSendForPricing,
-  awaitingApproval,
-  buildUnderway,
-  onSendForPricing,
-  transitioning,
-}: StatusStepperProps) {
-  return (
-    <Card className="shadow-sm border-gray-100">
-      <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <CardTitle>Commercial status</CardTitle>
-          <CardDescription>Track pricing progress and quote state.</CardDescription>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {selectedVersion ? <StatusBadge status={selectedVersion.status} /> : null}
-          {latestQuote ? <StatusBadge status={latestQuote.status} /> : <Badge variant="outline">No quote</Badge>}
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {latestQuote ? (
-          <div className="rounded-lg border border-gray-100 bg-white p-4">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="text-sm font-semibold text-gray-900">Quote</p>
-                <p className="text-xs text-gray-500">Status: {latestQuote.status}</p>
-              </div>
-              <StatusBadge status={latestQuote.status} />
-            </div>
-            <div className="mt-3 grid gap-3 md:grid-cols-3 text-sm text-gray-600">
-              <div>
-                <p className="text-xs uppercase text-gray-400 mb-1">Setup fee</p>
-                <p className="font-medium text-gray-900">{currency(latestQuote.setupFee)}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase text-gray-400 mb-1">Unit price</p>
-                <p className="font-medium text-gray-900">{perUnit(latestQuote.unitPrice)}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase text-gray-400 mb-1">Estimated volume</p>
-                <p className="font-medium text-gray-900">{latestQuote.estimatedVolume ?? "—"}</p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">
-            No quote generated yet. Request pricing to send this automation to the commercial team.
-          </div>
-        )}
-
-        {showSendForPricing ? (
-          <Button type="button" onClick={onSendForPricing} disabled={transitioning}>
-            {transitioning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-            Request pricing
-          </Button>
-        ) : awaitingApproval ? (
-          <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">Quote sent—awaiting approval.</div>
-        ) : buildUnderway ? (
-          <div className="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">Signed – Build underway.</div>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
 interface OverviewMetricsProps {
   stats: KpiStat[];
 }
@@ -1995,9 +1778,11 @@ function OverviewMetrics({ stats }: OverviewMetricsProps) {
 interface RecentActivityProps {
   entries: ActivityEntry[];
   onViewAll?: () => void;
+  isLoading?: boolean;
+  error?: string | null;
 }
 
-function RecentActivity({ entries, onViewAll }: RecentActivityProps) {
+function RecentActivity({ entries, onViewAll, isLoading, error }: RecentActivityProps) {
   return (
     <Card className="shadow-sm border-gray-100">
       <CardHeader className="flex items-center justify-between">
@@ -2015,113 +1800,50 @@ function RecentActivity({ entries, onViewAll }: RecentActivityProps) {
         </Button>
       </CardHeader>
       <CardContent>
-        <div className="space-y-8 relative before:absolute before:left-2.5 before:top-2 before:h-full before:w-px before:bg-gray-100">
-          {entries.map((entry) => (
-            <div key={entry.title} className="relative pl-8">
-              <div
-                className={cn(
-                  "absolute left-0 top-0 w-5 h-5 rounded-full flex items-center justify-center border-2 border-white ring-1 ring-gray-100 shadow-sm",
-                  entry.iconBg,
-                  entry.iconColor
-                )}
-              >
-                <entry.icon size={10} />
-              </div>
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <p className="text-sm font-bold text-gray-900">{entry.title}</p>
-                <span className="text-[10px] text-gray-400">{entry.time}</span>
-              </div>
-              <p className="text-xs text-gray-600 leading-relaxed">{entry.description}</p>
-              <div className="flex items-center gap-1.5 mt-2">
-                <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-[8px] font-bold text-gray-500">
-                  {entry.user.charAt(0)}
+        {isLoading ? (
+          <div className="py-6 flex justify-center">
+            <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+          </div>
+        ) : error ? (
+          <div className="py-4 text-sm text-red-600">{error}</div>
+        ) : entries.length === 0 ? (
+          <div className="py-4 text-sm text-gray-500">No activity yet.</div>
+        ) : (
+          <div className="space-y-8 relative before:absolute before:left-2.5 before:top-2 before:h-full before:w-px before:bg-gray-100">
+            {entries.map((entry) => (
+              <div key={`${entry.title}-${entry.time}`} className="relative pl-8">
+                <div
+                  className={cn(
+                    "absolute left-0 top-0 w-5 h-5 rounded-full flex items-center justify-center border-2 border-white ring-1 ring-gray-100 shadow-sm",
+                    entry.iconBg,
+                    entry.iconColor
+                  )}
+                >
+                  <entry.icon size={10} />
                 </div>
-                <span className="text-[10px] text-gray-500 font-medium">{entry.user}</span>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <p className="text-sm font-bold text-gray-900">{entry.title}</p>
+                  <span className="text-[10px] text-gray-400">{entry.time}</span>
+                </div>
+                <p className="text-xs text-gray-600 leading-relaxed">{entry.description}</p>
+                <div className="flex items-center gap-1.5 mt-2">
+                  <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-[8px] font-bold text-gray-500">
+                    {entry.user.charAt(0)}
+                  </div>
+                  <span className="text-[10px] text-gray-500 font-medium">{entry.user}</span>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
 }
 
 interface NeedsAttentionCardProps {
-  items: typeof MOCK_ATTENTION_ITEMS;
-  onAction: (label: string) => void;
-}
-
-function NeedsAttentionCard({ items, onAction }: NeedsAttentionCardProps) {
-  return (
-    <div className="bg-amber-50/60 rounded-xl border border-amber-100 shadow-sm overflow-hidden">
-      <div className="px-5 py-4 flex items-center gap-2 border-b border-amber-100/50">
-        <AlertTriangle size={16} className="text-amber-600" />
-        <span className="text-sm font-bold text-amber-900">Needs attention</span>
-      </div>
-      <div className="p-5 space-y-3">
-        {items.map((item) => (
-          <div key={item.id} className="rounded-lg bg-white/80 border border-amber-100 p-3 space-y-2">
-            <p className="text-xs font-bold text-amber-900">{item.title}</p>
-            <p className="text-xs text-amber-800">{item.description}</p>
-            <Button
-              size="sm"
-              variant="outline"
-              className="w-full border border-amber-200 text-amber-700 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300 shadow-sm h-8 text-xs font-bold"
-              onClick={() => onAction(item.title)}
-            >
-              {item.actionLabel}
-            </Button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-interface CopilotSuggestionsProps {
-  suggestions: typeof MOCK_SUGGESTIONS;
-  onSelectSuggestion: (title: string) => void;
-  onAskForMore: () => void;
-}
-
-function CopilotSuggestions({ suggestions, onSelectSuggestion, onAskForMore }: CopilotSuggestionsProps) {
-  return (
-    <Card className="shadow-sm border-gray-100">
-      <CardHeader className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Sparkles size={16} className="text-[#E43632]" />
-          <span className="text-sm font-bold text-[#0A0A0A]">Copilot suggestions</span>
-        </div>
-        <Badge variant="secondary" className="bg-gray-100 text-gray-600 text-[10px]">
-          {suggestions.length} New
-        </Badge>
-      </CardHeader>
-      <CardContent className="divide-y divide-gray-50 p-0">
-        {suggestions.map((suggestion) => (
-          <button
-            key={suggestion.title}
-            type="button"
-            className="w-full text-left p-4 hover:bg-gray-50 transition-colors cursor-pointer group"
-            onClick={() => onSelectSuggestion(suggestion.title)}
-          >
-            <div className="flex items-start justify-between mb-1">
-              <h4 className="text-xs font-bold text-gray-700 group-hover:text-[#0A0A0A]">{suggestion.title}</h4>
-              <ArrowRight
-                size={12}
-                className="text-gray-300 group-hover:text-[#E43632] transition-colors opacity-0 group-hover:opacity-100"
-              />
-            </div>
-            <p className="text-[11px] text-gray-500 leading-relaxed">{suggestion.description}</p>
-          </button>
-        ))}
-      </CardContent>
-      <div className="p-3 bg-gray-50 border-t border-gray-100">
-        <Button variant="ghost" className="w-full text-xs text-gray-500 hover:text-[#E43632] h-auto py-1" onClick={onAskForMore}>
-          Ask Copilot for more...
-        </Button>
-      </div>
-    </Card>
-  );
+  tasks: VersionTask[];
+  onGoToWorkflow?: () => void;
 }
 
 interface AutomationTasksTabProps {
