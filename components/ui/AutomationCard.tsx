@@ -48,6 +48,13 @@ const getStatusColor = (status: string) => {
 export function AutomationCard({ automation }: AutomationCardProps) {
   const router = useRouter();
   const isBuilding = automation.status === "Build in Progress";
+  const pendingLabel = "Pending";
+  const runsDisplay =
+    typeof automation.runs === "number" && automation.runs > 0 ? automation.runs.toLocaleString() : pendingLabel;
+  const successDisplay =
+    typeof automation.success === "number" && automation.success > 0 ? `${automation.success.toFixed(1)}%` : pendingLabel;
+  const spendDisplay =
+    typeof automation.spend === "number" && automation.spend > 0 ? `$${Math.round(automation.spend).toLocaleString()}` : pendingLabel;
 
   return (
     <motion.div
@@ -136,7 +143,7 @@ export function AutomationCard({ automation }: AutomationCardProps) {
               Runs
             </p>
             <p className="text-sm font-bold text-[#0A0A0A]">
-              {automation.runs && automation.runs > 0 ? automation.runs : "-"}
+              {runsDisplay}
             </p>
           </div>
           <div>
@@ -146,10 +153,10 @@ export function AutomationCard({ automation }: AutomationCardProps) {
             <p
               className={cn(
                 "text-sm font-bold",
-                automation.success && automation.success > 90 ? "text-emerald-600" : "text-gray-600"
+                typeof automation.success === "number" && automation.success > 90 ? "text-emerald-600" : "text-gray-600"
               )}
             >
-              {automation.success && automation.success > 0 ? `${automation.success}%` : "-"}
+              {successDisplay}
             </p>
           </div>
           <div>
@@ -157,7 +164,7 @@ export function AutomationCard({ automation }: AutomationCardProps) {
               Spend
             </p>
             <p className="text-sm font-bold text-[#0A0A0A]">
-              {automation.spend && automation.spend > 0 ? `$${automation.spend}` : "-"}
+              {spendDisplay}
             </p>
           </div>
         </div>

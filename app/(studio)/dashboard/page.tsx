@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { StatCard } from "@/components/ui/StatCard";
 import { DashboardAutomationCard } from "@/components/ui/DashboardAutomationCard";
 import { ActivityFeedItem } from "@/components/ui/ActivityFeedItem";
 import { UsageChart } from "@/components/charts/UsageChart";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -14,6 +15,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  ArrowRight,
+  ArrowUpRight,
   Plus,
   Zap,
   Filter,
@@ -24,20 +27,48 @@ import {
   X,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { mockAutomations } from "@/lib/mock-automations";
-import { mockActivityFeed, mockDashboardAutomations, mockUsageData } from "@/lib/mock-dashboard";
+import { mockActivityFeed, mockUsageData } from "@/lib/mock-dashboard";
 import { currentUser } from "@/lib/mock-automations";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { summarizeCounts, toDashboardAutomation, type ApiAutomationSummary } from "@/lib/dashboard/mapper";
+import type { DashboardAutomation } from "@/lib/mock-dashboard";
+import { buildKpiStats, type KpiStat, type VersionMetric } from "@/lib/metrics/kpi";
 
 export default function DashboardPage() {
   const router = useRouter();
   const [showAlert, setShowAlert] = useState(true);
-  const totalAutomations = mockAutomations.length;
-  const liveAutomations = mockAutomations.filter((a) => a.status === "Live").length;
-  const buildingAutomations = mockAutomations.filter(
-    (a) => a.status === "Build in Progress"
-  ).length;
+  const [automations, setAutomations] = useState<DashboardAutomation[]>([]);
+  const [automationSummaries, setAutomationSummaries] = useState<ApiAutomationSummary[]>([]);
+  const [loadingAutomations, setLoadingAutomations] = useState(true);
+  const [automationsError, setAutomationsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadAutomations = async () => {
+      setLoadingAutomations(true);
+      setAutomationsError(null);
+      try {
+        const response = await fetch("/api/automations", { cache: "no-store" });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error ?? "Failed to load automations");
+        }
+        const payload = (await response.json()) as { automations: ApiAutomationSummary[] };
+        setAutomationSummaries(payload.automations);
+        setAutomations(payload.automations.map(toDashboardAutomation));
+      } catch (err) {
+        setAutomationsError(err instanceof Error ? err.message : "Unable to load automations");
+      } finally {
+        setLoadingAutomations(false);
+      }
+    };
+
+    void loadAutomations();
+  }, []);
+
+  const { total, live, building } = summarizeCounts(automations);
+  const aggregatedMetric = useMemo(() => aggregateMetrics(automationSummaries), [automationSummaries]);
+  const kpiStats = useMemo(() => buildKpiStats(aggregatedMetric, null), [aggregatedMetric]);
 
   return (
     <div className="flex-1 h-full overflow-y-auto bg-gray-50/50">
@@ -67,6 +98,19 @@ export default function DashboardPage() {
             </Link>
           </div>
         </header>
+
+        {/* KPI Bar */}
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold text-[#0A0A0A]">Automation Impact</h2>
+            <p className="text-xs text-gray-500">Aggregated across active automations</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            {kpiStats.map((kpi) => (
+              <KpiCard key={kpi.label} {...kpi} isLoading={loadingAutomations} />
+            ))}
+          </div>
+        </section>
 
         {/* Alert Bar */}
         <AnimatePresence>
@@ -135,9 +179,21 @@ export default function DashboardPage() {
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {mockDashboardAutomations.map((auto) => (
-                  <DashboardAutomationCard key={auto.id} automation={auto} />
-                ))}
+                {loadingAutomations ? (
+                  Array.from({ length: 4 }).map((_, idx) => (
+                    <div key={idx} className="h-[180px] bg-white border border-gray-200 rounded-xl animate-pulse" />
+                  ))
+                ) : automationsError ? (
+                  <div className="col-span-2 rounded-lg border border-red-200 bg-red-50 text-red-700 p-4 text-sm">
+                    {automationsError}
+                  </div>
+                ) : automations.length === 0 ? (
+                  <div className="col-span-2 rounded-lg border border-dashed border-gray-200 bg-white p-6 text-sm text-gray-600">
+                    No automations yet. Create one to see metrics here.
+                  </div>
+                ) : (
+                  automations.map((auto) => <DashboardAutomationCard key={auto.id} automation={auto} />)
+                )}
 
                 {/* Create New Card */}
                 <Link href="/automations/new">
@@ -199,11 +255,11 @@ export default function DashboardPage() {
             <div className="grid grid-cols-1 gap-6">
               <StatCard
                 label="Total Automations"
-                value={totalAutomations}
+                value={total}
                 icon={<Zap size={18} />}
               />
-              <StatCard label="Live" value={liveAutomations} />
-              <StatCard label="Building" value={buildingAutomations} />
+              <StatCard label="Live" value={live} />
+              <StatCard label="Building" value={building} />
             </div>
 
             {/* Build Activity Feed */}
@@ -230,6 +286,133 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function aggregateMetrics(automations: ApiAutomationSummary[]): VersionMetric | null {
+  const metrics = automations
+    .filter((automation) => automation.latestVersion && automation.latestVersion.status !== "Archived")
+    .map((automation) => automation.latestVersion?.latestMetrics)
+    .filter((metric): metric is NonNullable<ApiAutomationSummary["latestVersion"]>["latestMetrics"] => Boolean(metric));
+
+  if (metrics.length === 0) {
+    return null;
+  }
+
+  const normalized: VersionMetric[] = metrics.map((metric) => ({
+    asOfDate: metric?.asOfDate ?? new Date().toISOString(),
+    totalExecutions: Number(metric?.totalExecutions ?? 0),
+    successRate: Number(metric?.successRate ?? 0),
+    successCount: Number(metric?.successCount ?? 0),
+    failureCount: Number(metric?.failureCount ?? 0),
+    spendUsd: Number(metric?.spendUsd ?? 0),
+    hoursSaved: Number(metric?.hoursSaved ?? 0),
+    estimatedCostSavings: Number(metric?.estimatedCostSavings ?? 0),
+    hoursSavedDeltaPct: metric?.hoursSavedDeltaPct !== null && metric?.hoursSavedDeltaPct !== undefined ? Number(metric.hoursSavedDeltaPct) : null,
+    estimatedCostSavingsDeltaPct:
+      metric?.estimatedCostSavingsDeltaPct !== null && metric?.estimatedCostSavingsDeltaPct !== undefined
+        ? Number(metric.estimatedCostSavingsDeltaPct)
+        : null,
+    executionsDeltaPct:
+      metric?.executionsDeltaPct !== null && metric?.executionsDeltaPct !== undefined ? Number(metric.executionsDeltaPct) : null,
+    successRateDeltaPct:
+      metric?.successRateDeltaPct !== null && metric?.successRateDeltaPct !== undefined ? Number(metric.successRateDeltaPct) : null,
+    spendDeltaPct: metric?.spendDeltaPct !== null && metric?.spendDeltaPct !== undefined ? Number(metric.spendDeltaPct) : null,
+    source: metric?.source ?? "unknown",
+  }));
+
+  const sum = (fn: (m: VersionMetric) => number) => normalized.reduce((acc, metric) => acc + fn(metric), 0);
+  const latestDate = normalized.reduce<string | null>((latest, metric) => {
+    if (!metric.asOfDate) return latest;
+    return !latest || new Date(metric.asOfDate) > new Date(latest) ? metric.asOfDate : latest;
+  }, null);
+
+  const totalExecutions = sum((m) => m.totalExecutions);
+  const successCount = sum((m) =>
+    m.successCount || Math.max(0, Math.round((m.successRate / 100) * m.totalExecutions))
+  );
+  const failureCount = sum((m) =>
+    m.failureCount || Math.max(0, m.totalExecutions - (m.successCount || Math.round((m.successRate / 100) * m.totalExecutions)))
+  );
+
+  const spendUsd = sum((m) => m.spendUsd);
+  const hoursSaved = sum((m) => m.hoursSaved);
+  const estimatedCostSavings = sum((m) => m.estimatedCostSavings);
+
+  const successRate = totalExecutions > 0 ? (successCount / totalExecutions) * 100 : 0;
+  const averageDelta = (key: keyof VersionMetric) => {
+    const values = normalized
+      .map((metric) => metric?.[key])
+      .filter((value): value is number => value !== null && value !== undefined && !Number.isNaN(Number(value)));
+    return values.length ? values.reduce((acc, val) => acc + Number(val), 0) / values.length : null;
+  };
+
+  return {
+    asOfDate: latestDate ?? new Date().toISOString(),
+    totalExecutions,
+    successRate,
+    successCount,
+    failureCount,
+    spendUsd,
+    hoursSaved,
+    estimatedCostSavings,
+    hoursSavedDeltaPct: averageDelta("hoursSavedDeltaPct"),
+    estimatedCostSavingsDeltaPct: averageDelta("estimatedCostSavingsDeltaPct"),
+    executionsDeltaPct: averageDelta("executionsDeltaPct"),
+    successRateDeltaPct: averageDelta("successRateDeltaPct"),
+    spendDeltaPct: averageDelta("spendDeltaPct"),
+    source: "aggregate",
+  };
+}
+
+function KpiCard({
+  icon: Icon,
+  label,
+  value,
+  trend,
+  trendPositive,
+  subtext,
+  placeholder,
+  isLoading,
+}: KpiStat & { isLoading?: boolean }) {
+  const pillClass = placeholder
+    ? "text-gray-400 bg-gray-100"
+    : trendPositive
+      ? "text-emerald-700 bg-emerald-50"
+      : "text-amber-700 bg-amber-50";
+
+  return (
+    <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-[0_2px_8px_rgba(0,0,0,0.02)] hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)] transition-all group">
+      <div className="flex items-start justify-between mb-4 gap-2 min-w-0">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="p-2 bg-gray-50 rounded-lg group-hover:bg-red-50 group-hover:text-[#E43632] transition-colors text-gray-400">
+            <Icon size={18} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-[#0A0A0A] whitespace-nowrap">{label}</p>
+            <p className="text-[10px] text-gray-400 mt-0.5 whitespace-nowrap">{subtext}</p>
+          </div>
+        </div>
+        {!placeholder ? (
+          <div className={cn("flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full", pillClass)}>
+            {trendPositive ? <ArrowUpRight size={10} /> : <ArrowRight size={10} className="rotate-45" />}
+            {trend}
+          </div>
+        ) : null}
+      </div>
+      {placeholder ? (
+        <div className="flex flex-col items-center justify-center text-gray-400 gap-2 py-2">
+          <div className="h-6 w-6 rounded-full border-2 border-dashed border-gray-300 animate-spin" />
+          <p className="text-[11px] font-medium">populates after first live run</p>
+        </div>
+      ) : (
+        <div>
+          <h3 className={cn("text-2xl font-bold mb-1 tracking-tight", placeholder ? "text-gray-400" : "text-[#0A0A0A]")}>
+            {isLoading ? "Refreshing..." : value}
+          </h3>
+        </div>
+      )}
     </div>
   );
 }

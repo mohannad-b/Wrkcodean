@@ -35,9 +35,10 @@ import {
   GitBranch,
   CheckSquare,
   X,
+  Settings2,
 } from "lucide-react";
 import type { Connection, Node, Edge, EdgeChange, NodeChange } from "reactflow";
-import { StudioChat } from "@/components/automations/StudioChat";
+import { StudioChat, type CopilotMessage } from "@/components/automations/StudioChat";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 import { ActivityTab } from "@/components/automations/ActivityTab";
 import { BuildStatusTab } from "@/components/automations/BuildStatusTab";
@@ -69,6 +70,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { buildKpiStats, type KpiStat, type MetricConfig, type VersionMetric } from "@/lib/metrics/kpi";
 
 const StudioCanvas = dynamic(
   () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
@@ -144,6 +146,7 @@ type AutomationVersion = {
   workflowJson: Blueprint | null;
   summary: string | null;
   latestQuote: QuoteSummary | null;
+  latestMetrics?: VersionMetric | null;
   createdAt: string;
   updatedAt: string;
   tasks?: VersionTask[];
@@ -205,34 +208,6 @@ type BlueprintChecklistItem = {
 
 const cloneBlueprint = (blueprint: Blueprint | null) => (blueprint ? (JSON.parse(JSON.stringify(blueprint)) as Blueprint) : null);
 
-type KpiStatConfig = {
-  label: string;
-  subtext: string;
-  icon: typeof Clock;
-};
-
-type KpiStat = KpiStatConfig & {
-  value: string;
-  trend: string;
-  trendPositive: boolean;
-};
-
-const KPI_CONFIG: KpiStatConfig[] = [
-  { label: "Hours Saved", subtext: "vs last month", icon: Clock },
-  { label: "Est. Cost Savings", subtext: "vs last month", icon: DollarSign },
-  { label: "Total Executions", subtext: "last 30 days", icon: Zap },
-  { label: "Success Rate", subtext: "last 30 days", icon: CheckCircle2 },
-];
-
-const computeSeed = (value: string) => {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash << 5) - hash + value.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash);
-};
-
 const isAtOrBeyondBuild = (status: AutomationLifecycleStatus | null, target: BuildStatus): boolean => {
   if (!status) {
     return false;
@@ -243,33 +218,6 @@ const isAtOrBeyondBuild = (status: AutomationLifecycleStatus | null, target: Bui
     return status === "Archived";
   }
   return statusIndex >= targetIndex;
-};
-
-const getKpiStats = (automationId: string): KpiStat[] => {
-  const seed = computeSeed(automationId || "automation");
-  return KPI_CONFIG.map((config, index) => {
-    const delta = ((seed + index * 7) % 15) + 1;
-    const trendPositive = index !== 3 || delta < 8;
-    const formattedTrend = `${trendPositive ? "+" : "-"}${delta}%`;
-
-    let value = "—";
-    if (config.label === "Hours Saved") {
-      value = `${140 + (seed % 60)}h`;
-    } else if (config.label === "Est. Cost Savings") {
-      value = `$${(4000 + (seed % 2500)).toLocaleString()}`;
-    } else if (config.label === "Total Executions") {
-      value = `${1_000 + (seed % 600)}`;
-    } else {
-      value = `${(97 + (seed % 3) / 10).toFixed(1)}%`;
-    }
-
-    return {
-      ...config,
-      value,
-      trend: formattedTrend,
-      trendPositive,
-    };
-  });
 };
 
 type ActivityEntry = {
@@ -338,6 +286,14 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [loading, setLoading] = useState(true);
   const [creatingVersion, setCreatingVersion] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [versionMetrics, setVersionMetrics] = useState<Record<string, VersionMetric | null>>({});
+  const [metricConfigs, setMetricConfigs] = useState<Record<string, MetricConfig>>({});
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
+  const [showManualTimeModal, setShowManualTimeModal] = useState(false);
+  const [showHourlyRateModal, setShowHourlyRateModal] = useState(false);
+  const [metricForm, setMetricForm] = useState({ manualMinutes: "", hourlyRate: "" });
+  const [savingMetricConfig, setSavingMetricConfig] = useState(false);
   
   // Read tab from URL params, default to "Overview"
   const urlTab = searchParams?.get("tab");
@@ -405,6 +361,29 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
 
         const data = (await response.json()) as { automation: AutomationDetail };
         setAutomation(data.automation);
+        const metricMap: Record<string, VersionMetric | null> = {};
+        data.automation.versions.forEach((v) => {
+          const metric = (v as any).latestMetrics ?? null;
+          metricMap[v.id] = metric
+            ? {
+                ...metric,
+                totalExecutions: Number(metric.totalExecutions ?? 0),
+                successRate: Number(metric.successRate ?? 0),
+                successCount: Number(metric.successCount ?? 0),
+                failureCount: Number(metric.failureCount ?? 0),
+                spendUsd: Number(metric.spendUsd ?? 0),
+                hoursSaved: Number(metric.hoursSaved ?? 0),
+                estimatedCostSavings: Number(metric.estimatedCostSavings ?? 0),
+                hoursSavedDeltaPct: metric.hoursSavedDeltaPct !== null ? Number(metric.hoursSavedDeltaPct) : null,
+                estimatedCostSavingsDeltaPct:
+                  metric.estimatedCostSavingsDeltaPct !== null ? Number(metric.estimatedCostSavingsDeltaPct) : null,
+                executionsDeltaPct: metric.executionsDeltaPct !== null ? Number(metric.executionsDeltaPct) : null,
+                successRateDeltaPct: metric.successRateDeltaPct !== null ? Number(metric.successRateDeltaPct) : null,
+                spendDeltaPct: metric.spendDeltaPct !== null ? Number(metric.spendDeltaPct) : null,
+              }
+            : null;
+        });
+        setVersionMetrics(metricMap);
 
         const nextSelected = selectedVersionId ?? data.automation.versions[0]?.id ?? null;
         setSelectedVersionId(nextSelected);
@@ -426,6 +405,42 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       }
     },
     [params.automationId, selectedVersionId]
+  );
+
+  const fetchVersionMetrics = useCallback(
+    async (versionId: string | null) => {
+      if (!versionId) return;
+      setMetricsLoading(true);
+      setMetricsError(null);
+      try {
+        const response = await fetch(`/api/automation-versions/${versionId}/metrics`, { cache: "no-store" });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error ?? "Unable to load metrics");
+        }
+        const data = await response.json();
+        const normalizedConfig = data.config
+          ? {
+              ...data.config,
+              manualSecondsPerExecution: Number(data.config.manualSecondsPerExecution ?? 0),
+              hourlyRateUsd: Number(data.config.hourlyRateUsd ?? 0),
+            }
+          : null;
+        setMetricConfigs((prev) => ({
+          ...prev,
+          ...(normalizedConfig ? { [versionId]: normalizedConfig } : {}),
+        }));
+        setVersionMetrics((prev) => ({
+          ...prev,
+          [versionId]: data.latestMetric ?? prev[versionId] ?? null,
+        }));
+      } catch (err) {
+        setMetricsError(err instanceof Error ? err.message : "Unable to load metrics");
+      } finally {
+        setMetricsLoading(false);
+      }
+    },
+    []
   );
 
   const fetchRecentActivity = useCallback(
@@ -465,6 +480,10 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   useEffect(() => {
     void fetchRecentActivity(selectedVersionId);
   }, [fetchRecentActivity, selectedVersionId]);
+
+  useEffect(() => {
+    void fetchVersionMetrics(selectedVersionId);
+  }, [fetchVersionMetrics, selectedVersionId]);
 
   const selectedVersion = useMemo(() => {
     if (!automation || !selectedVersionId) {
@@ -1187,13 +1206,20 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   }
 
   const latestQuote = selectedVersion?.latestQuote ?? null;
+  const selectedMetric = selectedVersion
+    ? versionMetrics[selectedVersion.id] ?? selectedVersion.latestMetrics ?? null
+    : null;
+  const selectedMetricConfig = selectedVersion ? metricConfigs[selectedVersion.id] ?? null : null;
   const versionOptions: VersionOption[] = automation.versions.map((version) => ({
     id: version.id,
     label: version.versionLabel,
     status: version.id === selectedVersion?.id ? "active" : version.status === "IntakeInProgress" ? "draft" : "superseded",
     updated: formatDateTime(version.updatedAt),
   }));
-  const kpiStats = getKpiStats(automation.id);
+  const kpiStats = buildKpiStats(selectedMetric, selectedMetricConfig, {
+    onConfigureHours: handleOpenManualTime,
+    onConfigureCost: handleOpenHourlyRate,
+  });
 
   const handleInviteTeam = () => {
     toast({
@@ -1217,6 +1243,62 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     });
   };
 
+  function handleOpenManualTime() {
+    const minutes = selectedMetricConfig ? selectedMetricConfig.manualSecondsPerExecution / 60 : 5;
+    setMetricForm((prev) => ({
+      ...prev,
+      manualMinutes: Number.isFinite(minutes) ? minutes.toString() : "",
+    }));
+    setShowManualTimeModal(true);
+  }
+
+  function handleOpenHourlyRate() {
+    const hourly = selectedMetricConfig ? selectedMetricConfig.hourlyRateUsd : 50;
+    setMetricForm((prev) => ({
+      ...prev,
+      hourlyRate: Number.isFinite(hourly) ? hourly.toString() : "",
+    }));
+    setShowHourlyRateModal(true);
+  }
+
+  const handleSaveMetricConfig = async ({ manualMinutes, hourlyRate }: { manualMinutes?: number; hourlyRate?: number }) => {
+    if (!selectedVersion?.id) return;
+    if (manualMinutes === undefined && hourlyRate === undefined) {
+      return;
+    }
+
+    setSavingMetricConfig(true);
+    try {
+      const body: Record<string, number> = {};
+      if (manualMinutes !== undefined) body.manualMinutesPerExecution = manualMinutes;
+      if (hourlyRate !== undefined) body.hourlyRateUsd = hourlyRate;
+
+      const response = await fetch(`/api/automation-versions/${selectedVersion.id}/metrics`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Unable to save metric configuration");
+      }
+
+      toast({
+        title: "Metric configuration saved",
+        description: "We will refresh the KPI calculations on the next daily run.",
+        variant: "success",
+      });
+      await fetchVersionMetrics(selectedVersion.id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to save metric configuration";
+      toast({ title: "Unable to save", description: message, variant: "error" });
+    } finally {
+      setSavingMetricConfig(false);
+      setShowManualTimeModal(false);
+      setShowHourlyRateModal(false);
+    }
+  };
+
   const overviewContent = (
     <div className="space-y-8">
       <AutomationHeader
@@ -1231,7 +1313,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         onEditBlueprint={() => setActiveTab("Workflow")}
       />
 
-      <OverviewMetrics stats={kpiStats} />
+      <OverviewMetrics stats={kpiStats} isLoading={metricsLoading} error={metricsError} />
 
       <section className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-6">
@@ -1633,6 +1715,86 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         )}
       </div>
 
+      <Dialog open={showManualTimeModal} onOpenChange={setShowManualTimeModal}>
+        <DialogContent className="max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle>Configure manual effort per run</DialogTitle>
+            <DialogDescription>
+              This feeds Hours Saved and Est. Cost Savings. We refresh calculations daily once runs are reported.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="manualMinutes">Minutes per run (manual process)</Label>
+              <Input
+                id="manualMinutes"
+                type="number"
+                min={0}
+                step={1}
+                value={metricForm.manualMinutes}
+                onChange={(e) => setMetricForm((prev) => ({ ...prev, manualMinutes: e.target.value }))}
+              />
+              <p className="text-xs text-gray-500">Example: If a human takes 7 minutes to do this task.</p>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowManualTimeModal(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() =>
+                handleSaveMetricConfig({
+                  manualMinutes: Number(metricForm.manualMinutes || 0),
+                })
+              }
+              disabled={savingMetricConfig}
+            >
+              {savingMetricConfig ? "Saving..." : "Save"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showHourlyRateModal} onOpenChange={setShowHourlyRateModal}>
+        <DialogContent className="max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle>Configure hourly salary</DialogTitle>
+            <DialogDescription>
+              Used to translate hours saved into estimated cost savings for your team.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="hourlyRate">Hourly salary (USD)</Label>
+              <Input
+                id="hourlyRate"
+                type="number"
+                min={0}
+                step={1}
+                value={metricForm.hourlyRate}
+                onChange={(e) => setMetricForm((prev) => ({ ...prev, hourlyRate: e.target.value }))}
+              />
+              <p className="text-xs text-gray-500">Average hourly fully-loaded cost of the role doing this work.</p>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowHourlyRateModal(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() =>
+                handleSaveMetricConfig({
+                  hourlyRate: Number(metricForm.hourlyRate || 0),
+                })
+              }
+              disabled={savingMetricConfig}
+            >
+              {savingMetricConfig ? "Saving..." : "Save"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {selectedTask ? (
         <TaskDrawer
           task={selectedTask}
@@ -1742,38 +1904,89 @@ function AutomationHeader({
 
 interface OverviewMetricsProps {
   stats: KpiStat[];
+  isLoading?: boolean;
+  error?: string | null;
 }
 
-function OverviewMetrics({ stats }: OverviewMetricsProps) {
+function OverviewMetrics({ stats, isLoading, error }: OverviewMetricsProps) {
   return (
-    <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      {stats.map((kpi) => (
-        <div
-          key={kpi.label}
-          className="bg-white p-5 rounded-xl border border-gray-200 shadow-[0_2px_8px_rgba(0,0,0,0.02)] hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)] transition-all group"
-        >
-          <div className="flex items-start justify-between mb-4">
-            <div className="p-2 bg-gray-50 rounded-lg group-hover:bg-red-50 group-hover:text-[#E43632] transition-colors text-gray-400">
-              <kpi.icon size={18} />
-            </div>
-            <div
-              className={cn(
-                "flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full",
-                kpi.trendPositive ? "text-emerald-700 bg-emerald-50" : "text-amber-700 bg-amber-50"
-              )}
-            >
-              {kpi.trendPositive ? <ArrowUpRight size={10} /> : <ArrowRight size={10} className="rotate-45" />}
-              {kpi.trend}
-            </div>
+    <section className="space-y-2">
+      {error ? <p className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">Metrics unavailable right now: {error}</p> : null}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+        {stats.map((kpi) => (
+          <KpiCard key={kpi.label} {...kpi} isLoading={isLoading} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function KpiCard({
+  icon: Icon,
+  label,
+  value,
+  trend,
+  trendPositive,
+  subtext,
+  placeholder,
+  onConfigure,
+  isLoading,
+}: KpiStat & { isLoading?: boolean }) {
+  const pillClass = placeholder
+    ? "text-gray-400 bg-gray-100"
+    : trendPositive
+      ? "text-emerald-700 bg-emerald-50"
+      : "text-amber-700 bg-amber-50";
+
+  return (
+    <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-[0_2px_8px_rgba(0,0,0,0.02)] hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)] transition-all group">
+      <div className="flex items-start justify-between mb-4 gap-2 min-w-0">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="p-2 bg-gray-50 rounded-lg group-hover:bg-red-50 group-hover:text-[#E43632] transition-colors text-gray-400">
+            <Icon size={18} />
           </div>
-          <div>
-            <h3 className="text-2xl font-bold text-[#0A0A0A] mb-1 tracking-tight">{kpi.value}</h3>
-            <p className="text-xs text-gray-500 font-medium">{kpi.label}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">{kpi.subtext}</p>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-[#0A0A0A] whitespace-nowrap">{label}</p>
+            <p className="text-[10px] text-gray-400 mt-0.5 whitespace-nowrap">{subtext}</p>
           </div>
         </div>
-      ))}
-    </section>
+        {onConfigure || !placeholder ? (
+          <div className="flex items-center gap-1">
+            {onConfigure ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-gray-400 hover:text-[#0A0A0A] relative -top-5 translate-x-[10px]"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onConfigure();
+                }}
+              >
+                <Settings2 size={14} />
+              </Button>
+            ) : null}
+            {!placeholder ? (
+              <div className={cn("flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full", pillClass)}>
+                {trendPositive ? <ArrowUpRight size={10} /> : <ArrowRight size={10} className="rotate-45" />}
+                {trend}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      {placeholder ? (
+        <div className="flex flex-col items-center justify-center text-gray-400 gap-2 py-2">
+          <div className="h-6 w-6 rounded-full border-2 border-dashed border-gray-300 animate-spin" />
+          <p className="text-[11px] font-medium">populates after first live run</p>
+        </div>
+      ) : (
+        <div>
+          <h3 className={cn("text-2xl font-bold mb-1 tracking-tight", placeholder ? "text-gray-400" : "text-[#0A0A0A]")}>
+            {isLoading ? "Refreshing..." : value}
+          </h3>
+        </div>
+      )}
+    </div>
   );
 }
 

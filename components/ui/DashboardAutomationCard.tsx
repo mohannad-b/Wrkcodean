@@ -13,6 +13,15 @@ interface DashboardAutomationCardProps {
 }
 
 export function DashboardAutomationCard({ automation }: DashboardAutomationCardProps) {
+  const pendingLabel = "Pending";
+  const runsDisplay = automation.runs ? automation.runs.toLocaleString() : pendingLabel;
+  const successDisplay =
+    typeof automation.success === "number" && automation.success > 0 ? `${automation.success.toFixed(1)}%` : pendingLabel;
+  const spendDisplay =
+    typeof automation.spend === "number" && automation.spend > 0
+      ? `$${Math.round(automation.spend).toLocaleString()}`
+      : pendingLabel;
+
   return (
     <Link href={`/automations/${automation.id}`}>
       <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm hover:border-gray-300 transition-colors relative">
@@ -106,7 +115,7 @@ export function DashboardAutomationCard({ automation }: DashboardAutomationCardP
               <p className="text-xs text-gray-400 uppercase font-bold tracking-wider mb-1">
                 Runs (30d)
               </p>
-              <p className="text-lg font-bold text-[#0A0A0A]">{automation.runs}</p>
+              <p className="text-lg font-bold text-[#0A0A0A]">{runsDisplay}</p>
             </div>
             <div>
               <p className="text-xs text-gray-400 uppercase font-bold tracking-wider mb-1">
@@ -115,15 +124,15 @@ export function DashboardAutomationCard({ automation }: DashboardAutomationCardP
               <p
                 className={cn(
                   "text-lg font-bold",
-                  automation.success < 99 ? "text-amber-600" : "text-emerald-600"
+                  typeof automation.success === "number" && automation.success < 99 ? "text-amber-600" : "text-emerald-600"
                 )}
               >
-                {automation.success}%
+                {successDisplay}
               </p>
             </div>
             <div>
               <p className="text-xs text-gray-400 uppercase font-bold tracking-wider mb-1">Spend</p>
-              <p className="text-lg font-bold text-[#0A0A0A]">${automation.spend}</p>
+              <p className="text-lg font-bold text-[#0A0A0A]">{spendDisplay}</p>
             </div>
           </div>
         )}

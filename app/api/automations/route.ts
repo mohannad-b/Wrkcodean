@@ -158,6 +158,9 @@ export async function GET() {
                     updatedAt: automation.latestVersion.latestQuote.updatedAt,
                   }
                 : null,
+              latestMetrics: automation.latestVersion.latestMetrics
+                ? presentMetric(automation.latestVersion.latestMetrics)
+                : null,
             }
           : null,
       })),
@@ -274,6 +277,26 @@ export async function POST(request: Request) {
   } catch (error) {
     return handleApiError(error);
   }
+}
+
+function presentMetric(metric: { [key: string]: any }) {
+  return {
+    asOfDate: metric.asOfDate,
+    totalExecutions: Number(metric.totalExecutions ?? 0),
+    successRate: Number(metric.successRate ?? 0),
+    successCount: Number(metric.successCount ?? 0),
+    failureCount: Number(metric.failureCount ?? 0),
+    spendUsd: Number(metric.spendUsd ?? 0),
+    hoursSaved: Number(metric.hoursSaved ?? 0),
+    estimatedCostSavings: Number(metric.estimatedCostSavings ?? 0),
+    hoursSavedDeltaPct: metric.hoursSavedDeltaPct !== null ? Number(metric.hoursSavedDeltaPct) : null,
+    estimatedCostSavingsDeltaPct:
+      metric.estimatedCostSavingsDeltaPct !== null ? Number(metric.estimatedCostSavingsDeltaPct) : null,
+    executionsDeltaPct: metric.executionsDeltaPct !== null ? Number(metric.executionsDeltaPct) : null,
+    successRateDeltaPct: metric.successRateDeltaPct !== null ? Number(metric.successRateDeltaPct) : null,
+    spendDeltaPct: metric.spendDeltaPct !== null ? Number(metric.spendDeltaPct) : null,
+    source: metric.source ?? "unknown",
+  };
 }
 
 

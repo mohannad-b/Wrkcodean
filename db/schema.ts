@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uuid, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { date, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uuid, uniqueIndex, index } from "drizzle-orm/pg-core";
 import type { Workflow } from "@/lib/blueprint/types";
 import type { CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
 
@@ -154,6 +154,66 @@ export const automationVersions = pgTable(
     ),
     tenantIdx: index("automation_versions_tenant_idx").on(table.tenantId),
     statusIdx: index("automation_versions_status_idx").on(table.status),
+  })
+);
+
+export const automationMetricConfigs = pgTable(
+  "automation_metric_configs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    automationVersionId: uuid("automation_version_id")
+      .notNull()
+      .references(() => automationVersions.id, { onDelete: "cascade" }),
+    manualSecondsPerExecution: integer("manual_seconds_per_execution").notNull().default(300),
+    hourlyRateUsd: numeric("hourly_rate_usd", { precision: 10, scale: 2 }).notNull().default("50"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    uniqueVersionConfig: uniqueIndex("automation_metric_configs_version_unique").on(table.automationVersionId),
+    tenantIdx: index("automation_metric_configs_tenant_idx").on(table.tenantId),
+    versionIdx: index("automation_metric_configs_version_idx").on(table.automationVersionId),
+  })
+);
+
+export const automationVersionMetrics = pgTable(
+  "automation_version_metrics",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    automationVersionId: uuid("automation_version_id")
+      .notNull()
+      .references(() => automationVersions.id, { onDelete: "cascade" }),
+    asOfDate: date("as_of_date").notNull(),
+    totalExecutions: integer("total_executions").notNull().default(0),
+    successCount: integer("success_count").notNull().default(0),
+    failureCount: integer("failure_count").notNull().default(0),
+    successRate: numeric("success_rate", { precision: 6, scale: 3 }).notNull().default("0"),
+    spendUsd: numeric("spend_usd", { precision: 14, scale: 4 }).notNull().default("0"),
+    hoursSaved: numeric("hours_saved", { precision: 14, scale: 4 }).notNull().default("0"),
+    estimatedCostSavings: numeric("estimated_cost_savings", { precision: 14, scale: 2 }).notNull().default("0"),
+    hoursSavedDeltaPct: numeric("hours_saved_delta_pct", { precision: 6, scale: 2 }),
+    estimatedCostSavingsDeltaPct: numeric("estimated_cost_savings_delta_pct", { precision: 6, scale: 2 }),
+    executionsDeltaPct: numeric("executions_delta_pct", { precision: 6, scale: 2 }),
+    successRateDeltaPct: numeric("success_rate_delta_pct", { precision: 6, scale: 2 }),
+    spendDeltaPct: numeric("spend_delta_pct", { precision: 6, scale: 2 }),
+    source: text("source").notNull().default("wrk_platform"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    uniqueVersionDate: uniqueIndex("automation_version_metrics_version_date_unique").on(
+      table.automationVersionId,
+      table.asOfDate
+    ),
+    tenantIdx: index("automation_version_metrics_tenant_idx").on(table.tenantId),
+    versionIdx: index("automation_version_metrics_version_idx").on(table.automationVersionId),
+    asOfIdx: index("automation_version_metrics_asof_idx").on(table.asOfDate),
   })
 );
 
@@ -376,6 +436,8 @@ export type CopilotMessage = typeof copilotMessages.$inferSelect;
 export type CopilotAnalysis = typeof copilotAnalyses.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Task = typeof tasks.$inferSelect;
+export type AutomationMetricConfig = typeof automationMetricConfigs.$inferSelect;
+export type AutomationVersionMetric = typeof automationVersionMetrics.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type MembershipRole = typeof membershipRoleEnum.enumValues[number];
 export type NotificationPreference = typeof notificationPreferenceEnum.enumValues[number];

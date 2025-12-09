@@ -37,7 +37,17 @@ type ApiAutomationSummary = {
       unitPrice: string | null;
       updatedAt: string | null;
     } | null;
+    latestMetrics?: ApiVersionMetrics | null;
   } | null;
+};
+
+type ApiVersionMetrics = {
+  asOfDate: string;
+  totalExecutions: number;
+  successRate: number;
+  spendUsd: number;
+  hoursSaved: number;
+  estimatedCostSavings: number;
 };
 
 type QuoteFilter = "ALL" | "NO_QUOTE" | "DRAFT" | "SENT" | "SIGNED";
@@ -203,8 +213,13 @@ export default function AutomationsPage() {
   const presentationData: LegacyAutomationSummary[] = filteredAutomations.map((automation) => {
     const version = automation.latestVersion;
     const status = mapStatusForCards(version?.status ?? "IntakeInProgress");
-    const metrics = getMockAutomationMetrics(automation.id);
-    const spend = version?.latestQuote?.setupFee ? Number(version.latestQuote.setupFee) : metrics.spend;
+    const metrics = version?.latestMetrics ?? null;
+    const fallbackMetrics = getMockAutomationMetrics(automation.id);
+    const spend = metrics
+      ? Math.round(metrics.spendUsd ?? 0)
+      : version?.latestQuote?.setupFee
+        ? Number(version.latestQuote.setupFee)
+        : undefined;
 
     // Use real creator data if available, otherwise fall back to mock data
     const creator = automation.creator;
@@ -225,11 +240,11 @@ export default function AutomationsPage() {
       owner,
       version: version?.versionLabel ?? "v1.0",
       status,
-      runs: metrics.runs,
-      success: metrics.success,
+      runs: metrics?.totalExecutions ?? undefined,
+      success: metrics?.successRate ?? undefined,
       spend,
       updated: version?.updatedAt ?? automation.updatedAt ?? new Date().toISOString(),
-      progress: status === "Build in Progress" ? metrics.progress : undefined,
+      progress: status === "Build in Progress" ? fallbackMetrics.progress : undefined,
     };
   });
 

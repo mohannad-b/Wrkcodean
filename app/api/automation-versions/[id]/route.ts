@@ -128,6 +128,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
             updatedAt: detail.latestQuote.updatedAt,
           }
         : null,
+      latestMetrics: detail.latestMetrics ? presentMetric(detail.latestMetrics) : null,
     });
   } catch (error) {
     return handleApiError(error);
@@ -216,6 +217,26 @@ function presentTask(task: Task) {
     priority: task.priority,
     metadata: task.metadata,
     updatedAt: task.updatedAt,
+  };
+}
+
+function presentMetric(metric: { [key: string]: any }) {
+  return {
+    asOfDate: metric.asOfDate,
+    totalExecutions: Number(metric.totalExecutions ?? 0),
+    successRate: Number(metric.successRate ?? 0),
+    successCount: Number(metric.successCount ?? 0),
+    failureCount: Number(metric.failureCount ?? 0),
+    spendUsd: Number(metric.spendUsd ?? 0),
+    hoursSaved: Number(metric.hoursSaved ?? 0),
+    estimatedCostSavings: Number(metric.estimatedCostSavings ?? 0),
+    hoursSavedDeltaPct: metric.hoursSavedDeltaPct !== null ? Number(metric.hoursSavedDeltaPct) : null,
+    estimatedCostSavingsDeltaPct:
+      metric.estimatedCostSavingsDeltaPct !== null ? Number(metric.estimatedCostSavingsDeltaPct) : null,
+    executionsDeltaPct: metric.executionsDeltaPct !== null ? Number(metric.executionsDeltaPct) : null,
+    successRateDeltaPct: metric.successRateDeltaPct !== null ? Number(metric.successRateDeltaPct) : null,
+    spendDeltaPct: metric.spendDeltaPct !== null ? Number(metric.spendDeltaPct) : null,
+    source: metric.source ?? "unknown",
   };
 }
 

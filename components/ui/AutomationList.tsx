@@ -93,14 +93,18 @@ export function AutomationList({ automations }: AutomationListProps) {
 
           <div className="w-[100px] shrink-0 text-right">
             <p className="text-xs font-bold text-[#0A0A0A]">
-              {automation.runs ? automation.runs : "-"}
+              {typeof automation.runs === "number" && automation.runs > 0
+                ? automation.runs.toLocaleString()
+                : "Pending"}
             </p>
             <p className="text-[10px] text-gray-400">runs</p>
           </div>
 
           <div className="w-[100px] shrink-0 text-right">
             <p className="text-xs font-bold text-[#0A0A0A]">
-              {automation.spend ? `$${automation.spend}` : "-"}
+              {typeof automation.spend === "number" && automation.spend > 0
+                ? `$${Math.round(automation.spend).toLocaleString()}`
+                : "Pending"}
             </p>
             <p className="text-[10px] text-gray-400">spend</p>
           </div>

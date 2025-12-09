@@ -9,6 +9,7 @@ import {
   users,
   type Automation,
   type AutomationVersion,
+  type AutomationVersionMetric,
   type Project,
   type Quote,
   type Task,
@@ -23,9 +24,10 @@ import {
 } from "@/lib/automations/status";
 import type { Workflow } from "@/lib/blueprint/types";
 import { createEmptyWorkflow } from "@/lib/blueprint/factory";
+import { getLatestMetricForVersion, getLatestMetricsForVersions } from "@/lib/services/automation-metrics";
 
 type AutomationWithLatestVersion = Automation & {
-  latestVersion: (AutomationVersion & { latestQuote: Quote | null }) | null;
+  latestVersion: (AutomationVersion & { latestQuote: Quote | null; latestMetrics: AutomationVersionMetric | null }) | null;
   creator: User | null;
 };
 
@@ -75,6 +77,7 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
     .filter(Boolean)
     .map((version) => version.id);
 
+  const latestMetricMap = await getLatestMetricsForVersions(tenantId, latestVersionIds);
   const quoteRows = latestVersionIds.length
     ? await db
         .select()
@@ -95,7 +98,13 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
     const creator = automation.createdBy ? creatorMap.get(automation.createdBy) ?? null : null;
     return {
       ...automation,
-      latestVersion: version ? { ...version, latestQuote: latestQuoteMap.get(version.id) ?? null } : null,
+      latestVersion: version
+        ? {
+            ...version,
+            latestQuote: latestQuoteMap.get(version.id) ?? null,
+            latestMetrics: latestMetricMap.get(version.id) ?? null,
+          }
+        : null,
       creator,
     };
   });
@@ -147,6 +156,7 @@ export async function getAutomationDetail(tenantId: string, automationId: string
     }
     tasksByVersion.get(task.automationVersionId)!.push(task);
   }
+  const metricsByVersion = await getLatestMetricsForVersions(tenantId, versionIds);
 
   return {
     automation: automationRow[0],
@@ -154,6 +164,7 @@ export async function getAutomationDetail(tenantId: string, automationId: string
       ...version,
       latestQuote: latestQuoteMap.get(version.id) ?? null,
       tasks: tasksByVersion.get(version.id) ?? [],
+      latestMetrics: metricsByVersion.get(version.id) ?? null,
     })),
   };
 }
@@ -374,6 +385,7 @@ export async function getAutomationVersionDetail(tenantId: string, automationVer
     .select()
     .from(tasks)
     .where(and(eq(tasks.automationVersionId, version.id), eq(tasks.tenantId, tenantId)));
+  const latestMetric = await getLatestMetricForVersion(tenantId, version.id);
 
   return {
     version,
@@ -381,6 +393,7 @@ export async function getAutomationVersionDetail(tenantId: string, automationVer
     project: projectRows[0] ?? null,
     latestQuote: quoteRows[0] ?? null,
     tasks: taskRows,
+    latestMetrics: latestMetric,
   };
 }
 
