@@ -10,6 +10,7 @@ Newest updates appear first. Each entry includes the timestamp (Pacific Time) wh
 - ✅ Added `POST /api/automation-versions/{id}/estimate-actions` (LLM) to map workflows to Wrk Actions with counts, with safe fallbacks and debug logs.
 - ✅ Wired “Proceed to Build” to run status change → estimate actions → price-and-quote, reordered modals (build progress then pricing) and kept pricing modal open until API completes; UI refreshes DB-backed pricing.
 - ✅ Added Vitest coverage for the estimator route (OpenAI happy path + no-key fallback).
+- ✅ Fixed unit price to use per-outcome action cost (no division by volume) and added a pricing unit test.
 
 ### Next Steps
 - [ ] Tighten estimator prompt/output validation and set a deterministic minimum unit price when actions are sparse.

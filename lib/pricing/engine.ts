@@ -88,7 +88,8 @@ export function priceWorkflow(input: PricingInput): PricingResult {
   );
 
   const estimatedVolume = input.estimatedVolume && input.estimatedVolume > 0 ? input.estimatedVolume : DEFAULT_VOLUME;
-  const unitPrice = roundToPlaces(estimatedActionCost / estimatedVolume, 4);
+  // Counts are per-outcome; unit price should reflect per-outcome cost (no division by estimated volume).
+  const unitPrice = roundToPlaces(estimatedActionCost, 4);
 
   return {
     setupFee,

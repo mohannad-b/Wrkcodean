@@ -58,10 +58,15 @@ function selectCandidateActions(catalog: Record<string, { listPrice: number }>, 
   return (nonZero.length > 0 ? nonZero : entries).slice(0, 60);
 }
 
+function stripJsonComments(input: string) {
+  return input.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+}
+
 function parseOpenAiJson(content: string, catalog: Record<string, { listPrice: number }>): EstimateResult {
   try {
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(content);
+    const cleaned = stripJsonComments(content);
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(cleaned);
     const rawActions = Array.isArray(parsed.actions) ? parsed.actions : [];
     const estimatedVolume =
       typeof parsed.estimatedVolume === "number" && parsed.estimatedVolume > 0 ? parsed.estimatedVolume : 1000;
@@ -117,7 +122,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       messages: [
         {
           role: "system",
-          content: `You are a pricing assistant. Select relevant Wrk Actions from the provided list (by id) and estimate how many times each must run to produce ONE successful outcome of the described workflow. Return JSON only in this shape:
+      content: `You are a pricing assistant. Select relevant Wrk Actions from the provided list (by id) and estimate how many times each must run to produce ONE successful outcome of the described workflow. Do NOT include comments. Return JSON only in this shape:
 {
   "actions": [
     { "actionType": "wrkaction-<id>", "count": <integer> }
