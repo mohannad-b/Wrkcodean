@@ -1116,9 +1116,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setTimeout(() => {
         setShowProceedCelebration(false);
         setActiveTab("Build Status");
-        setShowPricingModal(true);
-        setTimeout(() => setShowPricingModal(false), 4500);
-      }, 1200);
+        setTimeout(() => {
+          setShowPricingModal(true);
+          setTimeout(() => setShowPricingModal(false), 4500);
+        }, 1000);
+      }, 5000);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Proceed request failed";
       toast({ title: "Unable to proceed", description: message, variant: "error" });
@@ -1641,7 +1643,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       ) : null}
 
       <Dialog open={showProceedCelebration} onOpenChange={setShowProceedCelebration}>
-        <DialogContent className="max-w-sm text-center">
+        <DialogContent className="max-w-sm text-center bg-white">
           <DialogHeader>
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 animate-bounce">
               <CheckCircle2 className="h-8 w-8" />
@@ -1655,7 +1657,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       </Dialog>
 
       <Dialog open={showPricingModal} onOpenChange={setShowPricingModal}>
-        <DialogContent className="max-w-sm text-center">
+        <DialogContent className="max-w-sm text-center bg-white">
           <DialogHeader>
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 text-blue-600 animate-pulse">
               <Clock className="h-8 w-8" />
