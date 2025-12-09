@@ -2,6 +2,19 @@
 
 Newest updates appear first. Each entry includes the timestamp (Pacific Time) when the work was logged.
 
+## 2025-12-04 · 18:10 PT
+
+### Phase 1 – Pricing & Quote Generation (Flow 11/16 hooks)
+- ✅ Cached Wrk Actions catalog loader (remote + disk) and pricing service now auto-load the catalog for quotes.
+- ✅ Added `POST /api/automation-versions/{id}/price-and-quote` to price + create a `sent` quote and mark project pricing status.
+- ✅ Added `POST /api/automation-versions/{id}/estimate-actions` (LLM) to map workflows to Wrk Actions with counts, with safe fallbacks and debug logs.
+- ✅ Wired “Proceed to Build” to run status change → estimate actions → price-and-quote, reordered modals (build progress then pricing) and kept pricing modal open until API completes; UI refreshes DB-backed pricing.
+- ✅ Added Vitest coverage for the estimator route (OpenAI happy path + no-key fallback).
+
+### Next Steps
+- [ ] Tighten estimator prompt/output validation and set a deterministic minimum unit price when actions are sparse.
+- [ ] Surface computed quote details inline in Build Status and support discounts/ops overrides in pricing.
+
 ## 2025-12-04 · 17:45 PT
 
 ### Phase 1 – Copilot Blueprint UX Hardening
