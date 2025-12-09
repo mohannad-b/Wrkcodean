@@ -2,17 +2,18 @@
 /* eslint-disable react/no-unescaped-entities */
 
 import React, { useEffect, useMemo, useState } from "react";
-import Image from "next/image";
 import { AnimatePresence, motion } from "motion/react";
 import { CheckCircle2, Download, Printer, ShieldCheck, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { WrkLogo } from "@/components/brand/WrkLogo";
 
 interface QuoteSignatureModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSign: () => void;
+  onSigned?: (result?: { automationStatus?: string | null; quoteStatus?: string | null }) => void;
+  quoteId?: string | null;
   volume: number;
   unitPrice: number;
   monthlyCost: number;
@@ -22,7 +23,8 @@ interface QuoteSignatureModalProps {
 export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
   open,
   onOpenChange,
-  onSign,
+  onSigned,
+  quoteId,
   volume,
   unitPrice,
   monthlyCost,
@@ -33,36 +35,74 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
   const [signature, setSignature] = useState("");
   const [agreed, setAgreed] = useState(false);
   const [celebrating, setCelebrating] = useState(false);
+  const [showCheckmark, setShowCheckmark] = useState(false);
+  const [signing, setSigning] = useState(false);
+  const [signError, setSignError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       setStep("review");
       // reset any transient visuals on open
       setCelebrating(false);
+      setShowCheckmark(false);
+      setSignError(null);
+      setSigning(false);
     }
   }, [open]);
 
   useEffect(() => {
     if (step === "success") {
       setCelebrating(true);
-      const timer = setTimeout(() => setCelebrating(false), 3000);
+      setShowCheckmark(false);
+      const timer = setTimeout(() => {
+        setCelebrating(false);
+        setShowCheckmark(true);
+      }, 3000);
       return () => clearTimeout(timer);
     }
     return undefined;
   }, [step]);
 
   const handleClose = () => {
-    if (step === "success") {
-      onSign();
-    }
     onOpenChange(false);
   };
 
   const handleAdvance = (next: "review" | "payment" | "sign" | "success") => {
-    if (next === "success") {
-      onSign();
-    }
     setStep(next);
+  };
+
+  const handleSignAndApprove = async () => {
+    if (signing) return;
+    setSignError(null);
+    setSigning(true);
+    if (!quoteId) {
+      onSigned?.({ quoteStatus: "SIGNED" });
+      setStep("success");
+      setSigning(false);
+      return;
+    }
+    try {
+      const response = await fetch(`/api/quotes/${quoteId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "SIGNED" }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Unable to sign quote");
+      }
+      const data = await response.json().catch(() => ({}));
+      onSigned?.({
+        automationStatus: data?.automationVersion?.status ?? null,
+        quoteStatus: data?.quote?.status ?? null,
+      });
+      setStep("success");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to sign quote";
+      setSignError(message);
+    } finally {
+      setSigning(false);
+    }
   };
 
   const referenceId = useMemo(() => `QT-${Date.now().toString().slice(-6)}`, []);
@@ -73,12 +113,20 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
   const handlePrint = () => window.print();
   const handleDownload = () => window.print();
 
-  const particles = Array.from({ length: 50 }).map((_, i) => ({
-    id: i,
-    x: Math.random() * 100 - 50,
-    y: Math.random() * 100 - 50,
-    color: ["#E43632", "#22c55e", "#3b82f6", "#f59e0b"][Math.floor(Math.random() * 4)],
-  }));
+  const particles = useMemo(
+    () =>
+      Array.from({ length: 120 }).map((_, i) => ({
+        id: i,
+        x: Math.random() * 100,
+        y: Math.random() * 100,
+        dx: (Math.random() - 0.5) * 500,
+        dy: (Math.random() - 0.5) * 400,
+        size: 24 + Math.random() * 28,
+        color: ["#E43632", "#22c55e", "#3b82f6", "#f59e0b"][Math.floor(Math.random() * 4)],
+        delay: Math.random() * 0.4,
+      })),
+    []
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -118,20 +166,27 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
                 particles.map((p) => (
                   <motion.div
                     key={p.id}
-                    initial={{ opacity: 0, scale: 0.8, y: 10 }}
-                    animate={{ opacity: 1, scale: 1.1, y: -10 }}
+                    initial={{ opacity: 0.9, scale: 0.5, x: 0, y: 0 }}
+                    animate={{ opacity: 0, scale: 2.6, x: p.dx, y: p.dy }}
                     exit={{ opacity: 0 }}
-                    transition={{ duration: 0.8, delay: p.id * 0.01 }}
+                    transition={{ duration: 1.2, delay: p.delay }}
                     className="absolute"
-                    style={{ left: "50%", top: "40%", transform: `translate(${p.x}px, ${p.y}px)`, color: p.color }}
+                    style={{
+                      left: `${p.x}%`,
+                      top: `${p.y}%`,
+                      color: p.color,
+                      pointerEvents: "none",
+                    }}
                   >
-                    <Sparkles size={14} />
+                    <Sparkles size={p.size} />
                   </motion.div>
                 ))}
             </AnimatePresence>
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 shadow-inner">
-              <CheckCircle2 className="h-10 w-10" />
-            </div>
+            {showCheckmark ? (
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 shadow-inner transition-opacity duration-300">
+                <CheckCircle2 className="h-10 w-10" />
+              </div>
+            ) : null}
             <div className="text-center space-y-2">
               <h3 className="text-2xl font-bold text-[#0A0A0A]">Build Authorized</h3>
               <p className="text-sm text-gray-600">Your quote is locked and your build is now officially in progress.</p>
@@ -139,7 +194,7 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
             <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 w-full max-w-md shadow-sm">
               <div className="flex items-center justify-between">
                 <span>Reference ID</span>
-                <span className="font-semibold">QT-7418</span>
+                <span className="font-semibold">{quoteId ?? referenceId}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span>Billed Today</span>
@@ -180,7 +235,9 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
                   <div className="p-8 pt-10 space-y-8">
                     <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
-                      <Image src="/wrk-logo.svg" alt="WRK logo" width={120} height={60} className="h-12 w-auto" priority />
+                      <div className="h-12 w-auto">
+                        <WrkLogo />
+                      </div>
                       <div>
                         <p className="text-lg font-bold text-[#0A0A0A]">Wrk.com</p>
                         <p className="text-sm text-gray-500">Automate Everything.</p>
@@ -558,12 +615,13 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
                             </Button>
                             <Button
                               className="flex-1 h-10 text-sm bg-[#E43632] hover:bg-[#d12f2c] text-white"
-                              onClick={() => handleAdvance("success")}
-                              disabled={!signature || !agreed}
+                              onClick={handleSignAndApprove}
+                              disabled={!signature || !agreed || signing}
                             >
-                              Sign &amp; Approve Quote
+                              {signing ? "Signing..." : "Sign & Approve Quote"}
                             </Button>
                           </div>
+                          {signError ? <p className="text-xs text-red-600">{signError}</p> : null}
                         </>
                       )}
                     </motion.div>

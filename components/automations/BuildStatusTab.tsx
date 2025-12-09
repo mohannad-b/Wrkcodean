@@ -27,11 +27,12 @@ import {
   Sparkles,
   Rocket,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 interface BuildStatusTabProps {
   status?: AutomationLifecycleStatus | null;
   latestQuote?: {
+    id?: string | null;
     status: string;
     setupFee: string | null;
     unitPrice: string | null;
@@ -90,7 +91,11 @@ const STAGE_ICONS: Record<BuildStatus, React.ComponentType<{ size?: number | str
 };
 
 export function BuildStatusTab({ status, latestQuote, lastUpdated, versionLabel, tasks = [] }: BuildStatusTabProps) {
-  const currentStatus = resolveBuildStatus(status);
+  const [localStatus, setLocalStatus] = useState<BuildStatus>(resolveBuildStatus(status));
+  useEffect(() => {
+    setLocalStatus(resolveBuildStatus(status));
+  }, [status]);
+  const currentStatus = localStatus;
   const currentIndex = BUILD_STATUS_ORDER.indexOf(currentStatus);
   const attentionTasks = getAttentionTasks(tasks);
   const onTrack = currentIndex >= BUILD_STATUS_ORDER.indexOf("BuildInProgress");
@@ -332,7 +337,10 @@ export function BuildStatusTab({ status, latestQuote, lastUpdated, versionLabel,
       <QuoteSignatureModal
         open={showQuoteModal}
         onOpenChange={setShowQuoteModal}
-        onSign={() => setShowQuoteModal(false)}
+        onSigned={() => {
+          setLocalStatus("BuildInProgress");
+        }}
+        quoteId={latestQuote?.id ?? undefined}
         volume={sliderVolume}
         unitPrice={unitPriceValue}
         monthlyCost={monthlyCost}
