@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { TaskDrawer } from "@/app/(studio)/automations/[automationId]/page";
+import { TaskDrawer } from "@/components/automations/TaskDrawer";
 import type { VersionTask } from "@/db/schema";
 
 const baseTask: VersionTask = {

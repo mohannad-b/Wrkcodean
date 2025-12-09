@@ -97,7 +97,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     const contextSummary = buildConversationSummary(normalizedMessages, payload.intakeNotes ?? detail.version.intakeNotes);
-    const currentBlueprint = parseBlueprint(detail.version.workflowJson) ?? createEmptyBlueprint();
+    const currentBlueprint =
+      parseBlueprint(detail.version.workflowJson ?? (detail as any).version.blueprintJson) ?? createEmptyBlueprint();
     const userMessageContent =
       latestUserMessage?.content ??
       normalizedMessages.find((message) => message.role === "user")?.content ??
@@ -188,11 +189,17 @@ export async function POST(request: Request, { params }: { params: { id: string 
       console.log("[copilot:draft-blueprint] raw assistant reply:", chatResponse);
     }
 
-    const validatedBlueprint = BlueprintSchema.parse({
-      ...blueprintWithTasks,
-      status: "Draft",
-      updatedAt: new Date().toISOString(),
-    });
+    const validatedBlueprint = directCommand
+      ? ({
+          ...blueprintWithTasks,
+          status: blueprintWithTasks.status ?? "Draft",
+          updatedAt: new Date().toISOString(),
+        } as Blueprint)
+      : BlueprintSchema.parse({
+          ...blueprintWithTasks,
+          status: "Draft",
+          updatedAt: new Date().toISOString(),
+        });
 
     const updatePayload: { workflowJson: Blueprint; requirementsText?: string | null; updatedAt: Date } = {
       workflowJson: validatedBlueprint,

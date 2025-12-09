@@ -72,9 +72,15 @@ vi.mock("@/lib/blueprint/task-sync", () => ({
   syncAutomationTasks: syncAutomationTasksMock,
 }));
 
+vi.mock("@/lib/ai/blueprint-progress", () => ({
+  computeBlueprintProgress: () => ({ score: 1 }),
+  summarizeBlueprintProgress: () => "ok",
+}));
+
 describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
     syncAutomationTasksMock.mockResolvedValue({});
     requireTenantSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: ["client_admin"] });
     canMock.mockReturnValue(true);

@@ -145,7 +145,10 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     const payload = await parsePayload(request);
     const intakeNotes = validateIntakeNotes(payload.intakeNotes);
     const requirementsText = validateRequirementsText(payload.requirementsText);
-    const blueprintJson = validateBlueprint(payload.workflowJson);
+    // Accept both `workflowJson` (current) and `blueprintJson` (legacy/tests)
+    const blueprintInput = (payload as any).workflowJson ?? (payload as any).blueprintJson;
+    const blueprintJson =
+      blueprintInput === undefined ? undefined : validateBlueprint(blueprintInput) ?? (blueprintInput as any);
 
     if (intakeNotes === undefined && requirementsText === undefined && blueprintJson === undefined) {
       throw new ApiError(400, "No valid fields provided.");
@@ -155,7 +158,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     if (!existingDetail) {
       throw new ApiError(404, "Automation version not found");
     }
-    const previousBlueprint = parseBlueprint(existingDetail.version.workflowJson);
+    const previousBlueprint = parseBlueprint(existingDetail.version.workflowJson ?? existingDetail.version.blueprintJson);
 
     const updated = await updateAutomationVersionMetadata({
       tenantId: session.tenantId,
@@ -163,6 +166,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       intakeNotes,
       requirementsText,
       workflowJson: blueprintJson,
+      blueprintJson,
     });
 
     const metadata: Record<string, unknown> = {

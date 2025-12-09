@@ -25,7 +25,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
       throw new ApiError(404, "Automation version not found.");
     }
 
-    const currentBlueprint = parseBlueprint(detail.version.workflowJson);
+    const currentBlueprint = parseBlueprint(detail.version.workflowJson ?? detail.version.blueprintJson);
     if (!currentBlueprint) {
       throw new ApiError(400, "Workflow is empty.");
     }

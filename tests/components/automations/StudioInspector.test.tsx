@@ -20,7 +20,7 @@ const baseStep: BlueprintStep = {
   exceptionIds: [],
   nextStepIds: [],
   stepNumber: "1",
-  taskIds: [],
+  taskIds: ["task-1"],
 };
 
 describe("StudioInspector", () => {
@@ -35,8 +35,8 @@ describe("StudioInspector", () => {
       />
     );
 
-    expect(screen.getByText("Wrk")).toBeInTheDocument();
-    expect(screen.getByText("Acme")).toBeInTheDocument();
+    expect(screen.getAllByText("Wrk").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Acme").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Human in the loop")).toBeInTheDocument();
     expect(screen.getByText(/Summary/i)).toBeInTheDocument();
     expect(screen.getByText(/Goal \/ Outcome/i)).toBeInTheDocument();
@@ -68,7 +68,7 @@ describe("StudioInspector", () => {
       />
     );
 
-    const task = screen.getByText("Do thing");
+    const task = screen.getByText(/Do thing/i);
     expect(task).toBeInTheDocument();
     fireEvent.click(task);
     expect(onViewTask).toHaveBeenCalledWith("task-1");

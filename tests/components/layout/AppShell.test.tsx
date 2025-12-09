@@ -13,6 +13,12 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
+// Mock user profile provider to avoid network fetch
+vi.mock("@/components/providers/user-profile-provider", () => ({
+  UserProfileProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useUserProfile: () => ({ profile: null, isHydrating: false }),
+}));
+
 // Mock next/link
 vi.mock("next/link", () => ({
   default: ({ children, href }: { children: React.ReactNode; href: string }) => (
@@ -22,7 +28,23 @@ vi.mock("next/link", () => ({
 
 describe("AppShellClient", () => {
   beforeEach(() => {
-    window.localStorage.clear();
+    const store: Record<string, string> = {};
+    const mockStorage = {
+      getItem: vi.fn((key: string) => store[key] ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        store[key] = String(value);
+      }),
+      removeItem: vi.fn((key: string) => {
+        delete store[key];
+      }),
+      clear: vi.fn(() => {
+        Object.keys(store).forEach((key) => delete store[key]);
+      }),
+    };
+    Object.defineProperty(window, "localStorage", {
+      value: mockStorage,
+      writable: true,
+    });
     pushMock.mockClear();
   });
 
@@ -72,7 +94,7 @@ describe("AppShellClient", () => {
   });
 
   it("persists sidebar state changes to localStorage", async () => {
-    const setItemSpy = vi.spyOn(window.localStorage.__proto__, "setItem");
+    const setItemSpy = vi.spyOn(window.localStorage, "setItem");
     const user = userEvent.setup();
 
     render(
