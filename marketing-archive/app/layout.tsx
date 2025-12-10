@@ -28,11 +28,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="min-h-screen bg-[#F9FAFB] text-[#0A0A0A]">{children}</body>
+      <body className="min-h-screen bg-[#F9FAFB] text-[#0A0A0A]">
+        {children}
+      </body>
     </html>
   );
 }
-
-
-
 

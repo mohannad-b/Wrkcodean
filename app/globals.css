@@ -43,6 +43,11 @@
   h6 {
     @apply tracking-tight;
   }
+
+::selection {
+  background: #E43632;
+  color: white;
+}
 }
 
 /* Custom Scrollbar */

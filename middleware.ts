@@ -1,7 +1,25 @@
 import { NextResponse, type NextRequest } from "next/server";
 import auth0 from "@/lib/auth/auth0";
 
-const PUBLIC_PATH_PREFIXES = ["/auth/login", "/auth/logout", "/auth/callback", "/auth/profile"];
+const PUBLIC_PATH_PREFIXES = [
+  "/",
+  "/assets",
+  "/wrk-logo.svg",
+  "/blueprints",
+  "/contact",
+  "/ops-teams",
+  "/pricing",
+  "/privacy",
+  "/product",
+  "/resources",
+  "/terms",
+  "/trust",
+  "/use-cases",
+  "/auth/login",
+  "/auth/logout",
+  "/auth/callback",
+  "/auth/profile",
+];
 
 function isPublicRoute(pathname: string) {
   return PUBLIC_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
@@ -16,6 +34,11 @@ export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
   if (isPublicRoute(pathname)) {
+    const session = await auth0.getSession(request);
+    if (session && pathname === "/") {
+      const dashboardUrl = new URL("/dashboard", request.url);
+      return NextResponse.redirect(dashboardUrl);
+    }
     return authResponse;
   }
 
@@ -37,6 +60,8 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|assets|wrk-logo.svg).*)",
+  ],
 };
 

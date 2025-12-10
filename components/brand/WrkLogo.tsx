@@ -1,9 +1,13 @@
 import React from "react";
 import svgPaths from "./wrkLogoPaths";
 
-export const WrkLogo: React.FC<{ className?: string }> = ({ className }) => {
+export const WrkLogo: React.FC<{ className?: string; width?: number; height?: number }> = ({
+  className,
+  width = 118,
+  height = 76,
+}) => {
   return (
-    <div className={className} style={{ width: 118, height: 76 }}>
+    <div className={className} style={{ width, height }}>
       <svg className="block size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 118 76">
         <g id="Wrk_Logo_Primary 1">
           <path d={svgPaths.p126e5080} fill="#FF2450" id="Vector" />
