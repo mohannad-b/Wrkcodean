@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -23,7 +24,6 @@ import { cn } from "@/lib/utils";
 import { PricingOverridePanel } from "@/components/admin/PricingOverridePanel";
 import { ConversationThread } from "@/components/admin/ConversationThread";
 import dynamic from "next/dynamic";
-import { useNodesState, useEdgesState } from "reactflow";
 import { blueprintToEdges, blueprintToNodes } from "@/lib/blueprint/canvas-utils";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
@@ -42,21 +42,13 @@ const StudioCanvas = dynamic(
     ssr: false, // ReactFlow requires client-side only
   }
 );
+const ReactFlowHooks = dynamic(
+  () => import("reactflow").then((mod) => ({ default: { useNodesState: mod.useNodesState, useEdgesState: mod.useEdgesState } })),
+  { ssr: false }
+);
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
-
-const STATUS_STYLES: Record<ProjectStatus, { bg: string; text: string; border: string }> = {
-  "Intake in Progress": { bg: "bg-gray-50", text: "text-gray-600", border: "border-gray-200" },
-  "Needs Pricing": { bg: "bg-yellow-50", text: "text-yellow-700", border: "border-yellow-200" },
-  "Awaiting Client Approval": { bg: "bg-blue-50", text: "text-blue-700", border: "border-blue-200" },
-  "Build in Progress": { bg: "bg-red-50", text: "text-[#E43632]", border: "border-red-200" },
-  "QA & Testing": { bg: "bg-purple-50", text: "text-purple-700", border: "border-purple-200" },
-  "Ready to Launch": { bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200" },
-  Live: { bg: "bg-emerald-100", text: "text-emerald-800", border: "border-emerald-300" },
-  Blocked: { bg: "bg-orange-50", text: "text-orange-700", border: "border-orange-200" },
-  Archived: { bg: "bg-gray-100", text: "text-gray-500", border: "border-gray-200" },
-};
 
 // TODO: replace with real pricing analytics once backend exposes per-run cost metrics.
 const ANALYSIS_STATS = [
@@ -304,7 +296,6 @@ function OverviewTab({ project, checklistItems }: { project: AdminProject; check
 interface ProjectHeaderProps {
   displayProject: AdminProject;
   projectName: string;
-  statusStyle: { bg: string; text: string; border: string };
   canMarkLive: boolean;
   markingLive: boolean;
   onMarkLive: () => void;
@@ -316,7 +307,6 @@ interface ProjectHeaderProps {
 function ProjectHeader({
   displayProject,
   projectName,
-  statusStyle,
   canMarkLive,
   markingLive,
   onMarkLive,
@@ -338,7 +328,7 @@ function ProjectHeader({
         </div>
 
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          <CommercialSummary displayProject={displayProject} projectName={projectName} statusStyle={statusStyle} />
+          <CommercialSummary displayProject={displayProject} projectName={projectName} />
           <AdminActions
             canMarkLive={canMarkLive}
             markingLive={markingLive}
@@ -356,10 +346,9 @@ function ProjectHeader({
 interface CommercialSummaryProps {
   displayProject: AdminProject;
   projectName: string;
-  statusStyle: { bg: string; text: string; border: string };
 }
 
-function CommercialSummary({ displayProject, projectName, statusStyle }: CommercialSummaryProps) {
+function CommercialSummary({ displayProject, projectName }: CommercialSummaryProps) {
   return (
     <div className="flex items-center gap-4">
       <Link
@@ -375,9 +364,7 @@ function CommercialSummary({ displayProject, projectName, statusStyle }: Commerc
           <Badge variant="outline" className="text-sm bg-blue-50 text-blue-700 border-blue-200 font-mono">
             {displayProject.version}
           </Badge>
-          <Badge className={cn("border font-medium px-2.5 py-0.5 rounded-full shadow-none", statusStyle.bg, statusStyle.text, statusStyle.border)}>
-            {displayProject.status}
-          </Badge>
+          <StatusBadge status={displayProject.status} className="text-sm" />
         </div>
         <p className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
           <Link href={`/admin/clients/${displayProject.clientId}`} className="hover:text-[#0A0A0A] hover:underline transition-colors">
@@ -434,8 +421,34 @@ function BlueprintTab({ requirementsText, workflow }: { requirementsText?: strin
   const blueprint = useMemo(() => workflow ?? createEmptyBlueprint(), [workflow]);
   const initialNodes = useMemo(() => blueprintToNodes(blueprint), [blueprint]);
   const initialEdges = useMemo(() => blueprintToEdges(blueprint), [blueprint]);
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  const [rfHooks, setRfHooks] = useState<null | {
+    useNodesState: typeof import("reactflow").useNodesState;
+    useEdgesState: typeof import("reactflow").useEdgesState;
+  }>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    void import("reactflow").then((mod) => {
+      if (mounted) {
+        setRfHooks({ useNodesState: mod.useNodesState, useEdgesState: mod.useEdgesState });
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  if (!rfHooks) {
+    return (
+      <div className="flex h-full items-center justify-center bg-gray-50 text-xs text-gray-500 border-t border-gray-200">
+        Loading canvas…
+      </div>
+    );
+  }
+
+  const [nodes, setNodes, onNodesChange] = rfHooks.useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = rfHooks.useEdgesState(initialEdges);
 
   useEffect(() => {
     setNodes(blueprintToNodes(blueprint));
@@ -913,7 +926,6 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
     effectiveUnitPrice: latestQuote ? Number(latestQuote.unitPrice) : undefined,
   };
 
-  const statusStyle = STATUS_STYLES[displayProject.status] ?? STATUS_STYLES["Intake in Progress"];
   const messages = mockProjectMessages[displayProject.id] || [];
 
   const handleQuoteStatus = async (nextStatus: "SENT" | "SIGNED") => {
@@ -989,7 +1001,6 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
       <ProjectHeader
         displayProject={displayProject}
         projectName={project.name}
-        statusStyle={statusStyle}
         canMarkLive={project.version?.status === "BuildInProgress"}
         markingLive={markingLive}
         onMarkLive={handleMarkLive}

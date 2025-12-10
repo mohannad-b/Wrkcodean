@@ -64,6 +64,13 @@
       "when": 1765225074771,
       "tag": "0008_hesitant_arachne",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "0009",
+      "when": 1765325074771,
+      "tag": "add_automation_version_tags",
+      "breakpoints": true
     }
   ]
 }

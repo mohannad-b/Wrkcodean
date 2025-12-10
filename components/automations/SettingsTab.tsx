@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Settings,
   Users,
@@ -12,6 +12,7 @@ import {
   HardDrive,
   Plus,
   XCircle,
+  X,
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
@@ -19,20 +20,15 @@ import {
   CreditCard as CardIcon,
   ExternalLink,
   FileText,
+  Archive as ArchiveIcon,
+  Trash2,
   Slack,
   Mail,
   Loader2,
+  Sparkles,
 } from "lucide-react";
 import { motion } from "motion/react";
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -54,7 +50,19 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/components/ui/use-toast";
 
 // Mock Data
 const USAGE_DATA = Array.from({ length: 30 }, (_, i) => ({
@@ -132,7 +140,26 @@ interface SettingsTabProps {
   onManageCredentials?: (systemName: string) => void;
   onNavigateToTab?: (tab: string) => void;
   onNavigateToSettings?: () => void;
+  automationId?: string | null;
+  automationName?: string;
+  automationDescription?: string | null;
+  tags?: string[];
+  automationCreatedAt?: string | null;
+  automationUpdatedAt?: string | null;
+  onGeneralSaved?: () => void;
   currentVersionId?: string | null;
+  versions?: Array<{
+    id: string;
+    versionLabel?: string | null;
+    status?: string;
+    summary?: string | null;
+    updatedAt?: string | null;
+    latestQuote?: { status?: string | null } | null;
+  }>;
+  onArchiveVersion?: (versionId: string) => Promise<void> | void;
+  onDeleteVersion?: (versionId: string) => Promise<void> | void;
+  archivingVersionId?: string | null;
+  deletingVersionId?: string | null;
 }
 
 export function SettingsTab({
@@ -142,9 +169,125 @@ export function SettingsTab({
   onManageCredentials,
   onNavigateToTab,
   onNavigateToSettings,
+  automationId,
+  automationName,
+  automationDescription,
+  tags,
+  automationCreatedAt,
+  automationUpdatedAt,
+  onGeneralSaved,
   currentVersionId,
+  versions = [],
+  onArchiveVersion,
+  onDeleteVersion,
+  archivingVersionId,
+  deletingVersionId,
 }: SettingsTabProps = {}) {
   const [activeTab, setActiveTab] = useState<SettingsTabType>("general");
+  const toast = useToast();
+
+  const [name, setName] = useState<string>(automationName ?? "");
+  const [description, setDescription] = useState<string>(automationDescription ?? "");
+  const [tagList, setTagList] = useState<string[]>(tags ?? []);
+  const [savingGeneral, setSavingGeneral] = useState(false);
+  const [generatingTags, setGeneratingTags] = useState(false);
+
+  const initialState = useMemo(
+    () => ({
+      name: automationName ?? "",
+      description: automationDescription ?? "",
+      tags: (tags ?? []).filter(Boolean),
+    }),
+    [automationName, automationDescription, tags]
+  );
+
+  useEffect(() => {
+    setName(initialState.name);
+    setDescription(initialState.description);
+    setTagList(initialState.tags);
+  }, [initialState]);
+
+  const tagsEqual = useCallback((a: string[], b: string[]) => {
+    const normalize = (arr: string[]) => Array.from(new Set(arr.map((tag) => tag.trim()).filter(Boolean))).sort();
+    const left = normalize(a);
+    const right = normalize(b);
+    if (left.length !== right.length) return false;
+    return left.every((value, idx) => value === right[idx]);
+  }, []);
+
+  const generalDirty = useMemo(() => {
+    return (
+      name.trim() !== initialState.name.trim() ||
+      (description ?? "").trim() !== (initialState.description ?? "").trim() ||
+      !tagsEqual(tagList, initialState.tags)
+    );
+  }, [description, initialState.description, initialState.name, initialState.tags, name, tagList, tagsEqual]);
+
+  const handleSaveGeneral = useCallback(async () => {
+    if (!currentVersionId) {
+      toast({ title: "Select a version", description: "Choose a version before saving settings.", variant: "error" });
+      return;
+    }
+    setSavingGeneral(true);
+    try {
+      const response = await fetch(`/api/automation-versions/${currentVersionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          automationName: name.trim(),
+          automationDescription: description?.trim() ?? null,
+          tags: tagList,
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Unable to save settings");
+      }
+      toast({ title: "Settings saved", description: "General details updated.", variant: "success" });
+      onGeneralSaved?.();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to save settings";
+      toast({ title: "Save failed", description: message, variant: "error" });
+    } finally {
+      setSavingGeneral(false);
+    }
+  }, [currentVersionId, description, name, onGeneralSaved, tagList, toast]);
+
+  const handleGenerateTags = useCallback(async () => {
+    if (!currentVersionId) {
+      toast({ title: "Select a version", description: "Choose a version before generating tags.", variant: "error" });
+      return;
+    }
+    setGeneratingTags(true);
+    try {
+      const response = await fetch(`/api/automation-versions/${currentVersionId}/copilot/tags`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Unable to generate tags");
+      }
+      const data = await response.json();
+      const generated = Array.isArray(data.tags) ? data.tags : [];
+      setTagList(generated);
+      toast({ title: "Tags generated", description: "LLM tags were applied.", variant: "success" });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to generate tags";
+      toast({ title: "Generation failed", description: message, variant: "error" });
+    } finally {
+      setGeneratingTags(false);
+    }
+  }, [currentVersionId, toast]);
+
+  const handleAddTag = useCallback((tag: string) => {
+    const trimmed = tag.trim();
+    if (!trimmed) return;
+    setTagList((prev) => Array.from(new Set([...prev, trimmed])).slice(0, 12));
+  }, []);
+
+  const handleRemoveTag = useCallback((tag: string) => {
+    setTagList((prev) => prev.filter((t) => t !== tag));
+  }, []);
 
   const tabs = [
     { id: "general", label: "General", icon: Settings },
@@ -198,7 +341,25 @@ export function SettingsTab({
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2 }}
           >
-            {activeTab === "general" && <GeneralSettings />}
+            {activeTab === "general" && (
+              <GeneralSettings
+                name={name}
+                description={description}
+                tags={tagList}
+                createdAt={automationCreatedAt}
+                updatedAt={automationUpdatedAt}
+                saving={savingGeneral}
+                generatingTags={generatingTags}
+                dirty={generalDirty}
+                versionPresent={Boolean(currentVersionId)}
+                onNameChange={setName}
+                onDescriptionChange={setDescription}
+                onAddTag={handleAddTag}
+                onRemoveTag={handleRemoveTag}
+                onGenerateTags={handleGenerateTags}
+                onSave={handleSaveGeneral}
+              />
+            )}
             {activeTab === "notifications" && <NotificationsSettings />}
             {activeTab === "permissions" && <PermissionsSettings onInvite={onInviteUser} />}
             {activeTab === "systems" && (
@@ -214,6 +375,11 @@ export function SettingsTab({
                 currentVersionId={currentVersionId}
                 onNavigateToOverview={() => onNavigateToTab?.("Overview")}
                 onNavigateToTab={onNavigateToTab}
+                versions={versions}
+                onArchiveVersion={onArchiveVersion}
+                onDeleteVersion={onDeleteVersion}
+                archivingVersionId={archivingVersionId}
+                deletingVersionId={deletingVersionId}
               />
             )}
             {activeTab === "data" && <DataSettings />}
@@ -225,13 +391,67 @@ export function SettingsTab({
 }
 
 // General Settings
-function GeneralSettings() {
+function GeneralSettings({
+  name,
+  description,
+  tags,
+  createdAt,
+  updatedAt,
+  saving,
+  generatingTags,
+  dirty,
+  versionPresent,
+  onNameChange,
+  onDescriptionChange,
+  onAddTag,
+  onRemoveTag,
+  onGenerateTags,
+  onSave,
+}: {
+  name: string;
+  description: string;
+  tags: string[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  saving: boolean;
+  generatingTags: boolean;
+  dirty: boolean;
+  versionPresent: boolean;
+  onNameChange: (value: string) => void;
+  onDescriptionChange: (value: string) => void;
+  onAddTag: (value: string) => void;
+  onRemoveTag: (value: string) => void;
+  onGenerateTags: () => void;
+  onSave: () => void;
+}) {
+  const [tagInput, setTagInput] = useState("");
+
+  const handleAdd = () => {
+    if (!tagInput.trim()) return;
+    onAddTag(tagInput);
+    setTagInput("");
+  };
+
+  const formatDate = (value?: string | null) => {
+    if (!value) return "—";
+    try {
+      return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+    } catch {
+      return value;
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center mb-2">
         <h3 className="text-xl font-bold text-[#0A0A0A]">General Information</h3>
-        <Button className="bg-[#0A0A0A] hover:bg-gray-800 text-white">
-          <Save size={16} className="mr-2" /> Save Changes
+        <Button
+          className="bg-[#0A0A0A] hover:bg-gray-800 text-white"
+          disabled={saving || !dirty || !versionPresent}
+          onClick={onSave}
+        >
+          {saving ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Save size={16} className="mr-2" />} Save
+          Changes
         </Button>
       </div>
 
@@ -239,59 +459,76 @@ function GeneralSettings() {
         <div className="grid gap-6">
           <div className="space-y-2">
             <Label className="text-sm font-bold text-gray-700">Automation Name</Label>
-            <Input defaultValue="Invoice Processing v1" className="font-medium" />
+            <Input value={name} onChange={(e) => onNameChange(e.target.value)} className="font-medium" />
           </div>
 
           <div className="space-y-2">
             <Label className="text-sm font-bold text-gray-700">Description</Label>
             <Textarea
               className="min-h-[100px] resize-none"
-              defaultValue="Automates the ingestion of PDF invoices from email, extracts key data points using OCR, and creates draft bills in Xero for approval."
+              value={description}
+              onChange={(e) => onDescriptionChange(e.target.value)}
+              placeholder="Describe the automation goal and scope."
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <Label className="text-sm font-bold text-gray-700">Business Owner</Label>
-              <Select defaultValue="sarah">
-                <SelectTrigger>
-                  <SelectValue placeholder="Select owner" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="sarah">Sarah Chen</SelectItem>
-                  <SelectItem value="mike">Mike Ross</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-sm font-bold text-gray-700">Tags</Label>
-              <div className="flex flex-wrap gap-2 p-2 border border-gray-200 rounded-md min-h-[42px]">
-                <Badge variant="secondary" className="bg-gray-100 hover:bg-gray-200 text-gray-700">
-                  Finance
-                </Badge>
-                <Badge variant="secondary" className="bg-gray-100 hover:bg-gray-200 text-gray-700">
-                  Accounts Payable
-                </Badge>
-                <button className="text-xs text-gray-400 hover:text-[#E43632] px-2 font-medium">
-                  + Add
-                </button>
+          <div className="space-y-2">
+            <Label className="text-sm font-bold text-gray-700 flex items-center justify-between">
+              Tags
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs gap-1 text-gray-600"
+                onClick={onGenerateTags}
+                disabled={generatingTags || !versionPresent}
+              >
+                {generatingTags ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                Generate
+              </Button>
+            </Label>
+            <div className="flex flex-wrap gap-2 p-2 border border-gray-200 rounded-md min-h-[42px]">
+              {tags.length === 0 ? (
+                <span className="text-xs text-gray-400">No tags yet.</span>
+              ) : (
+                tags.map((tag) => (
+                  <Badge key={tag} variant="secondary" className="bg-gray-100 text-gray-700 flex items-center gap-1">
+                    {tag}
+                    <button
+                      type="button"
+                      className="text-gray-400 hover:text-[#E43632]"
+                      onClick={() => onRemoveTag(tag)}
+                      aria-label={`Remove ${tag}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))
+              )}
+              <div className="flex items-center gap-2">
+                <Input
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAdd();
+                    }
+                  }}
+                  placeholder="Add tag"
+                  className="h-8 w-28 text-xs"
+                />
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={handleAdd}
+                  className="text-xs bg-[#0A0A0A] hover:bg-gray-800 text-white"
+                >
+                  Add
+                </Button>
               </div>
             </div>
           </div>
 
-          <Separator className="my-2" />
-
-          <div className="grid grid-cols-2 gap-6 text-sm text-gray-500">
-            <div>
-              <span className="block text-xs font-medium text-gray-400 mb-1">Created on</span>
-              Oct 24, 2023 by Sarah Chen
-            </div>
-            <div>
-              <span className="block text-xs font-medium text-gray-400 mb-1">Last updated</span>
-              Nov 12, 2023 at 2:40 PM
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -516,7 +753,7 @@ function BillingSettings({ onUpdatePayment }: { onUpdatePayment?: () => void } =
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
                 <XAxis dataKey="day" hide />
                 <YAxis axisLine={false} tickLine={false} fontSize={12} tick={{ fill: "#9ca3af" }} />
-                <Tooltip
+                <RechartsTooltip
                   contentStyle={{
                     borderRadius: "8px",
                     border: "none",
@@ -577,36 +814,96 @@ function VersionsSettings({
   onNavigateToTab,
   currentVersionId,
   creatingVersion,
+  versions = [],
+  onArchiveVersion,
+  onDeleteVersion,
+  archivingVersionId,
+  deletingVersionId,
 }: {
   onNewVersion?: (copyFromVersionId?: string | null) => void;
   onNavigateToOverview?: () => void;
   onNavigateToTab?: (tab: string) => void;
   currentVersionId?: string | null;
   creatingVersion?: boolean;
+  versions?: Array<{
+    id: string;
+    versionLabel?: string | null;
+    status?: string;
+    summary?: string | null;
+    updatedAt?: string | null;
+    latestQuote?: { status?: string | null } | null;
+  }>;
+  onArchiveVersion?: (versionId: string) => void;
+  onDeleteVersion?: (versionId: string) => void;
+  archivingVersionId?: string | null;
+  deletingVersionId?: string | null;
 } = {}) {
-  const getStatusBadge = (status: string) => {
+  const [confirmAction, setConfirmAction] = useState<{ type: "archive" | "delete"; versionId: string } | null>(
+    null
+  );
+  const statusLabel = (status?: string | null) => {
     switch (status) {
-      case "active":
-        return (
-          <Badge className="bg-emerald-500 hover:bg-emerald-600 text-white border-none">
-            Active Version
-          </Badge>
-        );
-      case "building":
-        return (
-          <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-            Build in Progress
-          </Badge>
-        );
-      case "superseded":
-        return (
-          <Badge variant="outline" className="bg-gray-100 text-gray-400 border-gray-200">
-            Superseded
-          </Badge>
-        );
+      case "IntakeInProgress":
+        return "Draft";
+      case "NeedsPricing":
+        return "Needs Pricing";
+      case "AwaitingClientApproval":
+        return "Awaiting Approval";
+      case "ReadyForBuild":
+        return "Ready for Build";
+      case "BuildInProgress":
+        return "Build in Progress";
+      case "QATesting":
+        return "QA & Testing";
+      case "Live":
+        return "Active";
+      case "Archived":
+        return "Archived";
       default:
-        return null;
+        return "Draft";
     }
+  };
+
+  const getStatusBadge = (status?: string | null, signedContract?: boolean) => {
+    if (status === "Live" && signedContract) {
+      return (
+        <Badge className="bg-emerald-500 hover:bg-emerald-600 text-white border-none">
+          Active Version
+        </Badge>
+      );
+    }
+    if (status === "Live") {
+      return (
+        <Badge className="bg-emerald-500 hover:bg-emerald-600 text-white border-none">
+          Active
+        </Badge>
+      );
+    }
+    if (status === "Archived") {
+      return (
+        <Badge variant="outline" className="bg-gray-100 text-gray-500 border-gray-200">
+          Archived
+        </Badge>
+      );
+    }
+    return (
+      <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+        {statusLabel(status)}
+      </Badge>
+    );
+  };
+
+  const canDelete = (status?: string | null) => status === "IntakeInProgress";
+  const hasSignedContract = (quoteStatus?: string | null) => (quoteStatus ?? "").toLowerCase() === "accepted";
+  const canArchive = (status?: string | null, quoteStatus?: string | null) => {
+    if (!status) return true;
+    if (status === "Live" && hasSignedContract(quoteStatus)) {
+      return false;
+    }
+    if (status === "BuildInProgress") {
+      return false;
+    }
+    return status !== "Archived";
   };
 
   return (
@@ -655,57 +952,168 @@ function VersionsSettings({
       </div>
 
       <div className="space-y-4">
-        {VERSIONS.map((version) => (
-          <div
-            key={version.id}
-            className={cn(
-              "bg-white rounded-xl border p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all",
-              version.status === "active"
-                ? "border-emerald-200 shadow-emerald-500/5 shadow-sm ring-1 ring-emerald-100"
-                : "border-gray-200 shadow-sm opacity-90 hover:opacity-100"
-            )}
-          >
-            <div className="space-y-1">
-              <div className="flex items-center gap-3">
-                <h4 className="text-lg font-bold text-[#0A0A0A]">{version.id}</h4>
-                {getStatusBadge(version.status)}
-              </div>
-              <p className="text-sm text-gray-600">{version.summary}</p>
-              <div className="flex items-center gap-4 text-xs text-gray-400 mt-2">
-                <span>Created {version.date}</span>
-                <span>•</span>
-                <span>by {version.author}</span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {version.status !== "superseded" && (
-                <Button variant="outline" size="sm" className="border-gray-200">
-                  View Signed Quote
-                </Button>
-              )}
-              <Button
-                size="sm"
-                className={cn(
-                  version.status === "active"
-                    ? "bg-emerald-600 hover:bg-emerald-700"
-                    : "bg-[#0A0A0A] hover:bg-gray-800"
-                )}
-                onClick={() => {
-                  if (version.status === "building") {
-                    onNavigateToTab?.("Build Status");
-                  } else {
-                    onNavigateToOverview?.();
-                  }
-                }}
-              >
-                {version.status === "building" ? "Open Build Status" : "View Configuration"}{" "}
-                <ChevronRight size={14} className="ml-1" />
-              </Button>
-            </div>
+        {versions.length === 0 ? (
+          <div className="text-sm text-gray-500 border border-dashed border-gray-200 rounded-lg p-4">
+            No versions yet. Create a new version to get started.
           </div>
-        ))}
+        ) : (
+          versions.map((version) => {
+            const status = version.status;
+            const quoteStatus = version.latestQuote?.status ?? null;
+            const deletable = canDelete(status);
+            const archivable = canArchive(status, quoteStatus);
+            const archiveTooltip = archivable
+              ? "Archive version"
+              : status === "Live" && hasSignedContract(quoteStatus)
+                ? "Active with signed contract; cancel or pause before archiving."
+                : status === "BuildInProgress"
+                  ? "Cannot archive while build is in progress."
+                  : "Archive not allowed.";
+            const deleteTooltip = deletable ? "Delete draft version" : "Only draft versions can be deleted";
+            const archiving = archivingVersionId === version.id;
+            const deleting = deletingVersionId === version.id;
+            const signedContract = hasSignedContract(quoteStatus) && version.status === "Live";
+            const archiveDisabled = !archivable || archiving;
+            const deleteDisabled = !deletable || deleting;
+
+            return (
+              <div
+                key={version.id}
+                className={cn(
+                  "bg-white rounded-xl border p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all",
+                  version.status === "Live"
+                    ? "border-emerald-200 shadow-emerald-500/5 shadow-sm ring-1 ring-emerald-100"
+                    : "border-gray-200 shadow-sm opacity-90 hover:opacity-100"
+                )}
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center gap-3">
+                    <h4 className="text-lg font-bold text-[#0A0A0A]">
+                      {version.versionLabel ?? version.id}
+                    </h4>
+                    {getStatusBadge(version.status, signedContract)}
+                  </div>
+                  <p className="text-sm text-gray-600">{version.summary ?? "No summary yet."}</p>
+                  {version.updatedAt ? (
+                    <div className="flex items-center gap-2 text-xs text-gray-400 mt-2">
+                      <span>Updated</span>
+                      <span>{new Date(version.updatedAt).toLocaleDateString()}</span>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-gray-200"
+                    onClick={() => {
+                      if (version.status === "BuildInProgress") {
+                        onNavigateToTab?.("Build Status");
+                      } else {
+                        onNavigateToOverview?.();
+                      }
+                    }}
+                  >
+                    View <ChevronRight size={14} className="ml-1" />
+                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={archiveDisabled}
+                          onClick={() => {
+                            if (archiveDisabled) return;
+                            setConfirmAction({ type: "archive", versionId: version.id });
+                          }}
+                          className="border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                        >
+                          {archiving ? (
+                            <Loader2 size={14} className="mr-1 animate-spin" />
+                          ) : (
+                            <ArchiveIcon size={14} className="mr-1" />
+                          )}
+                          Archive
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <span>{archiveDisabled ? archiveTooltip : "Archive version"}</span>
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          disabled={deleteDisabled}
+                          onClick={() => {
+                            if (deleteDisabled) return;
+                            setConfirmAction({ type: "delete", versionId: version.id });
+                          }}
+                          title={deleteTooltip}
+                          className="bg-red-600 hover:bg-red-700 text-white"
+                        >
+                          {deleting ? (
+                            <Loader2 size={14} className="mr-1 animate-spin" />
+                          ) : (
+                            <Trash2 size={14} className="mr-1" />
+                          )}
+                          Delete
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <span>{deleteDisabled ? deleteTooltip : "Delete draft version"}</span>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
+
+      <AlertDialog open={Boolean(confirmAction)} onOpenChange={(open) => !open && setConfirmAction(null)}>
+        <AlertDialogContent className="bg-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction?.type === "delete" ? "Delete version?" : "Archive version?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction?.type === "delete"
+                ? "This will permanently delete this draft version. This cannot be undone."
+                : "Archive this version? Live versions with signed contracts cannot be archived until cancelled or paused."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setConfirmAction(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={
+                confirmAction?.type === "delete"
+                  ? "bg-red-600 hover:bg-red-700 text-white"
+                  : "bg-amber-500 hover:bg-amber-600 text-white"
+              }
+              onClick={() => {
+                const versionId = confirmAction?.versionId;
+                const type = confirmAction?.type;
+                setConfirmAction(null);
+                if (!versionId || !type) return;
+                if (type === "delete") {
+                  onDeleteVersion?.(versionId);
+                } else {
+                  onArchiveVersion?.(versionId);
+                }
+              }}
+            >
+              {confirmAction?.type === "delete" ? "Delete" : "Archive"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

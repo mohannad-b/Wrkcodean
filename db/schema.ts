@@ -123,7 +123,9 @@ export const automationVersions = pgTable(
     versionLabel: text("version_label").notNull().default("v1.0"),
     status: automationStatusEnum("status").notNull().default("IntakeInProgress"),
     summary: text("summary"),
+    businessOwner: text("business_owner"),
     intakeNotes: text("intake_notes"),
+    tags: jsonb("tags").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
     requirementsText: text("requirements_text"),
     requirementsJson: jsonb("requirements_json")
       .$type<Record<string, unknown>>()

@@ -142,6 +142,9 @@ export async function POST(_request: Request, { params }: { params: { id: string
       resourceId: params.id,
       metadata: {
         source: "suggest_next_steps",
+        versionLabel: detail.version.versionLabel,
+        sanitizationSummary: result.sanitizationSummary,
+        stepCount: result.blueprint.steps.length,
       },
     });
 

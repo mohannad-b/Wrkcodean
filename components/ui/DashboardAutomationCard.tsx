@@ -7,6 +7,7 @@ import { Progress } from "./progress";
 import { MoreHorizontal, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DashboardAutomation } from "@/lib/mock-dashboard";
+import { cardClasses } from "@/components/ui/card-shell";
 
 interface DashboardAutomationCardProps {
   automation: DashboardAutomation;
@@ -24,7 +25,7 @@ export function DashboardAutomationCard({ automation }: DashboardAutomationCardP
 
   return (
     <Link href={`/automations/${automation.id}`}>
-      <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm hover:border-gray-300 transition-colors relative">
+      <div className={cardClasses("p-6 relative hover:border-gray-300 transition-colors")}>
         {automation.needsApproval && (
           <div className="absolute -top-3 right-4">
             <Badge className="bg-[#E43632] hover:bg-[#C12E2A] text-white shadow-md border-none px-3 py-1">

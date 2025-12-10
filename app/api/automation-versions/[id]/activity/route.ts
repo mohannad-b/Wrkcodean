@@ -81,9 +81,79 @@ function formatActivityText(action: string, userName: string, metadata: Record<s
   const statusMeta = (metadata?.status as { from?: string; to?: string }) ?? undefined;
   const stepName = toText(metadata?.stepName);
   const stepNumber = toText(metadata?.stepNumber);
+  const versionLabel = toText(metadata?.versionLabel);
+
+  const describeBlueprintChanges = () => {
+    const changes =
+      (metadata?.blueprintChanges as Record<string, number> | undefined) ??
+      (metadata?.changes as Record<string, number> | undefined);
+    const diff = metadata?.diff as {
+      stepsAdded?: unknown[];
+      stepsRemoved?: unknown[];
+      stepsRenamed?: unknown[];
+      branchesAdded?: unknown[];
+      branchesRemoved?: unknown[];
+    } | null;
+    const sanitization = metadata?.sanitizationSummary as
+      | {
+          removedDuplicateEdges?: number;
+          reparentedBranches?: number;
+          removedCycles?: number;
+          trimmedConnections?: number;
+          attachedOrphans?: number;
+        }
+      | undefined;
+
+    const counts = {
+      stepsAdded: Number(changes?.stepsAdded ?? diff?.stepsAdded?.length ?? 0),
+      stepsRemoved: Number(changes?.stepsRemoved ?? diff?.stepsRemoved?.length ?? 0),
+      stepsRenamed: Number(changes?.stepsRenamed ?? diff?.stepsRenamed?.length ?? 0),
+      branchesAdded: Number(changes?.branchesAdded ?? diff?.branchesAdded?.length ?? 0),
+      branchesRemoved: Number(changes?.branchesRemoved ?? diff?.branchesRemoved?.length ?? 0),
+    };
+
+    const parts: string[] = [];
+    if (counts.stepsAdded) parts.push(`added ${counts.stepsAdded} step${counts.stepsAdded === 1 ? "" : "s"}`);
+    if (counts.stepsRemoved) parts.push(`removed ${counts.stepsRemoved} step${counts.stepsRemoved === 1 ? "" : "s"}`);
+    if (counts.stepsRenamed) parts.push(`renamed ${counts.stepsRenamed} step${counts.stepsRenamed === 1 ? "" : "s"}`);
+    if (counts.branchesAdded) parts.push(`created ${counts.branchesAdded} branch${counts.branchesAdded === 1 ? "" : "es"}`);
+    if (counts.branchesRemoved) {
+      parts.push(`removed ${counts.branchesRemoved} branch${counts.branchesRemoved === 1 ? "" : "es"}`);
+    }
+
+    const total =
+      counts.stepsAdded +
+      counts.stepsRemoved +
+      counts.stepsRenamed +
+      counts.branchesAdded +
+      counts.branchesRemoved;
+
+    if (total === 0) {
+      if (sanitization) {
+        const saniParts = [
+          sanitization.reparentedBranches ? `${sanitization.reparentedBranches} branches reparented` : null,
+          sanitization.removedDuplicateEdges ? `${sanitization.removedDuplicateEdges} duplicate edges removed` : null,
+          sanitization.trimmedConnections ? `${sanitization.trimmedConnections} extra links trimmed` : null,
+          sanitization.attachedOrphans ? `${sanitization.attachedOrphans} orphan steps attached` : null,
+          sanitization.removedCycles ? `${sanitization.removedCycles} cycles removed` : null,
+        ].filter(Boolean) as string[];
+        if (saniParts.length) {
+          const versionText = versionLabel ? ` in version ${versionLabel}` : "";
+          return `Workflow cleaned${versionText} (${saniParts.slice(0, 3).join(", ")}) by ${user}`;
+        }
+      }
+      if (Array.isArray(metadata?.summary) && metadata?.summary.length) {
+        return `${metadata.summary[0]}${versionLabel ? ` in version ${versionLabel}` : ""} by ${user}`;
+      }
+    }
+
+    const details = parts.slice(0, 3).join(", ");
+    const versionText = versionLabel ? ` in version ${versionLabel}` : "";
+    return `${total} change${total === 1 ? "" : "s"}${versionText}${details ? ` (${details})` : ""} by ${user}`;
+  };
 
   const actionMap: Record<string, string | ((m: Record<string, unknown> | null) => string)> = {
-    "automation.blueprint.drafted": `Blueprint updated by ${user}`,
+    "automation.blueprint.drafted": describeBlueprintChanges,
     "automation.blueprint.step.added": () =>
       stepNumber || stepName
         ? `Step ${stepNumber ? `${stepNumber} ` : ""}${stepName ?? ""} added by ${user}`.trim()
@@ -107,13 +177,21 @@ function formatActivityText(action: string, userName: string, metadata: Record<s
       const target = toText(m?.targetStep) ?? stepNumber ?? "step";
       return `Step ${target} updated by ${user}`;
     },
-    "automation.version.created": `Version created by ${user}`,
+    "automation.blueprint.optimized": describeBlueprintChanges,
+    "automation.blueprint.suggested": describeBlueprintChanges,
+    "automation.version.created": () => {
+      const label = versionLabel ? ` ${versionLabel}` : "";
+      return `Version${label} created by ${user}`;
+    },
     "automation.version.status.changed": () => {
       const from = statusMeta?.from ?? "unknown";
       const to = statusMeta?.to ?? "unknown";
-      return `Version status changed from ${from} to ${to} by ${user}`;
+      const label = versionLabel ? ` ${versionLabel}` : "";
+      return `Version${label} status changed from ${from} to ${to} by ${user}`;
     },
-    "automation.version.update": `Version details updated by ${user}`,
+    "automation.version.update": () => {
+      return describeBlueprintChanges();
+    },
     "automation.quote.generated": `Quote generated by ${user}`,
     "automation.quote.sent": `Quote sent to client by ${user}`,
     "automation.quote.accepted": `Quote accepted`,
@@ -133,14 +211,16 @@ function formatActivityText(action: string, userName: string, metadata: Record<s
     "automation.message.sent": (m) => {
       const role = (m?.role as string) ?? "system";
       const source = (m?.source as string) ?? "copilot";
+      const preview = toText(m?.preview);
       if (source === "admin_note") {
         return `Admin note added by ${user}`;
       }
       if (role === "assistant") {
-        return "Copilot replied";
+        return preview ? `Copilot replied: “${preview}”` : "Copilot replied";
       }
       if (role === "user") {
-        return `${user} chatted with Copilot`;
+        const suffix = preview ? ` — “${preview}”` : "";
+        return `${user} chatted with Copilot${suffix}`;
       }
       return `Message sent by ${user}`;
     },

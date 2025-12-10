@@ -1,6 +1,4 @@
 "use client";
-
-import "reactflow/dist/style.css";
 import { useState, useEffect, useRef, useCallback } from "react";
 import ReactFlow, {
   Background,
@@ -64,6 +62,11 @@ export function StudioCanvas({
   isSynthesizing = false,
   emptyState,
 }: StudioCanvasProps) {
+  // Load ReactFlow styles client-side to avoid pulling CSS into server bundles
+  useEffect(() => {
+    void import("reactflow/dist/style.css");
+  }, []);
+
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
   const [renderNodes, setRenderNodes] = useState<Node[]>(nodes);
   const previousNodeMap = useRef<Map<string, Node>>(new Map());

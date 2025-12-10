@@ -21,9 +21,20 @@ vi.mock("@/lib/auth/rbac", () => ({
   can: canMock,
 }));
 
+class MockSigningError extends Error {
+  status: number;
+  code: string;
+  constructor(status: number, code: string) {
+    super(code);
+    this.status = status;
+    this.code = code;
+  }
+}
+
 vi.mock("@/lib/services/projects", () => ({
   updateQuoteStatus: updateQuoteStatusMock,
   signQuoteAndPromote: signQuoteAndPromoteMock,
+  SigningError: MockSigningError,
 }));
 
 vi.mock("@/lib/audit/log", () => ({
@@ -91,7 +102,7 @@ describe("PATCH /api/quotes/[id]/status", () => {
 
   it("returns 400 when quote is not sent", async () => {
     limitMock.mockResolvedValue([{ id: "quote-1", tenantId: "tenant-1", automationVersionId: "ver-1", status: "draft" }]);
-    signQuoteAndPromoteMock.mockRejectedValue(new Error("Quote must be SENT before signing"));
+    signQuoteAndPromoteMock.mockRejectedValue(new MockSigningError(400, "Quote must be SENT before signing"));
     const { PATCH } = await import("@/app/api/quotes/[id]/status/route");
 
     const response = await PATCH(

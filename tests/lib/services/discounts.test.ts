@@ -1,21 +1,20 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const insertValuesMock = vi.fn();
-const insertMock = vi.fn(() => ({ values: insertValuesMock }));
-const selectWhereMock = vi.fn();
-const selectFromMock = vi.fn(() => ({ where: selectWhereMock }));
-const updateWhereMock = vi.fn();
-const updateSetMock = vi.fn(() => ({ where: updateWhereMock }));
+const mocks = vi.hoisted(() => {
+  const insertValuesMock = vi.fn();
+  const insertMock = vi.fn(() => ({ values: insertValuesMock }));
 
-vi.mock("@/db", () => ({
-  db: {
-    select: () => ({ from: selectFromMock }),
-    insert: insertMock,
-    update: () => ({ set: updateSetMock }),
-  },
-}));
+  const limitMock = vi.fn(async () => []);
+  const selectWhereMock = vi.fn(async () => []);
+  const selectFromMock = vi.fn(() => ({ where: selectWhereMock }));
 
-vi.mock("@/db/schema", () => ({
+  const updateWhereMock = vi.fn();
+  const updateSetMock = vi.fn(() => ({ where: updateWhereMock }));
+
+  return { insertValuesMock, insertMock, selectWhereMock, selectFromMock, updateWhereMock, updateSetMock, limitMock };
+});
+
+const schema = vi.hoisted(() => ({
   projects: { id: "projects.id", tenantId: "projects.tenantId" },
   discountOffers: {
     id: "discountOffers.id",
@@ -30,6 +29,26 @@ vi.mock("@/db/schema", () => ({
   },
 }));
 
+vi.mock("@/db", () => ({
+  db: {
+    select: () => ({
+      from: (table: unknown) => ({
+        where: () => {
+          const thenable = {
+            then: (resolve: (value: unknown) => void) => Promise.resolve(mocks.selectWhereMock(table)).then(resolve),
+            limit: mocks.limitMock,
+          };
+          return thenable as any;
+        },
+      }),
+    }),
+    insert: mocks.insertMock,
+    update: () => ({ set: mocks.updateSetMock }),
+  },
+}));
+
+vi.mock("@/db/schema", () => schema);
+
 import { ensureDiscountOffersForVersion, findActiveDiscountByCode } from "@/lib/services/discounts";
 
 describe("discounts service", () => {
@@ -38,33 +57,33 @@ describe("discounts service", () => {
   });
 
   it("creates first-workflow offers (10% + 25%) when no projects exist", async () => {
-    selectWhereMock.mockResolvedValueOnce([]); // isFirstWorkflow: projects empty
-    selectWhereMock.mockResolvedValueOnce([]); // existing offers for this version
-    insertValuesMock.mockResolvedValue(undefined);
+    mocks.limitMock.mockResolvedValueOnce([]); // isFirstWorkflow: projects empty
+    mocks.selectWhereMock.mockResolvedValueOnce([]); // existing offers for this version
+    mocks.insertValuesMock.mockResolvedValue(undefined);
 
     await ensureDiscountOffersForVersion("t1", "v1");
 
-    expect(insertValuesMock).toHaveBeenCalled();
-    const rows = insertValuesMock.mock.calls[0][0];
+    expect(mocks.insertValuesMock).toHaveBeenCalled();
+    const rows = mocks.insertValuesMock.mock.calls[0][0];
     const percents = rows.map((r: any) => Number(r.percent)).sort();
     expect(percents).toEqual([0.1, 0.25]);
   });
 
   it("creates followup offers (5% + 10%) when projects exist", async () => {
-    selectWhereMock.mockResolvedValueOnce([{ id: "p1" }]); // isFirstWorkflow: one project exists
-    selectWhereMock.mockResolvedValueOnce([]); // existing offers for this version
-    insertValuesMock.mockResolvedValue(undefined);
+    mocks.limitMock.mockResolvedValueOnce([{ id: "p1" }]); // isFirstWorkflow: one project exists
+    mocks.selectWhereMock.mockResolvedValueOnce([]); // existing offers for this version
+    mocks.insertValuesMock.mockResolvedValue(undefined);
 
     await ensureDiscountOffersForVersion("t1", "v1");
 
-    const rows = insertValuesMock.mock.calls[0][0];
+    const rows = mocks.insertValuesMock.mock.calls[0][0];
     const percents = rows.map((r: any) => Number(r.percent)).sort();
     expect(percents).toEqual([0.05, 0.1]);
   });
 
   it("finds an active discount by code when not expired or used", async () => {
     const now = new Date();
-    selectWhereMock.mockResolvedValueOnce([
+    mocks.limitMock.mockResolvedValueOnce([
       {
         id: "d1",
         tenantId: "t1",

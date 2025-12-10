@@ -442,11 +442,24 @@
           "primaryKey": false,
           "notNull": false
         },
+        "business_owner": {
+          "name": "business_owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "intake_notes": {
           "name": "intake_notes",
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "tags": {
+          "name": "tags",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
         },
         "requirements_text": {
           "name": "requirements_text",

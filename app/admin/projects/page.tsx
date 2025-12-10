@@ -43,6 +43,10 @@ import { cn } from "@/lib/utils";
 import { ProjectStatus, PricingStatus } from "@/lib/types";
 import { useToast } from "@/components/ui/use-toast";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { SectionCard } from "@/components/ui/SectionCard";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { SectionCard } from "@/components/ui/SectionCard";
 
 type ProjectListItem = {
   id: string;
@@ -746,30 +750,27 @@ export default function AdminProjectsPage() {
     </Card>
   );
 
-return (
+  return (
     <>
       <div className="flex flex-col h-full bg-gray-50 text-[#1A1A1A] font-sans">
-      <div className="bg-white border-b border-gray-200 px-8 py-5 shrink-0 z-10">
-        <div className="flex flex-col gap-6">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div>
-              <h1 className="text-2xl font-bold text-[#0A0A0A]">Automation Requests</h1>
-              <p className="text-xs text-gray-500 mt-1">
-                Tracking {presentationProjects.length} client-submitted versions
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <Button className="bg-[#0A0A0A] text-white hover:bg-gray-800 gap-2" onClick={handleNewProject}>
-                <span className="text-lg leading-none mb-0.5">+</span> New Project
-              </Button>
-              <Button variant="outline" onClick={fetchProjects} disabled={loading}>
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Refresh
-              </Button>
-            </div>
-          </div>
+        <div className="max-w-[1600px] mx-auto px-6 md:px-8 py-6 space-y-4">
+          <PageHeader
+            title="Automation Requests"
+            subtitle={`Tracking ${presentationProjects.length} client-submitted versions`}
+            actions={
+              <div className="flex items-center gap-3">
+                <Button className="bg-[#0A0A0A] text-white hover:bg-gray-800 gap-2" onClick={handleNewProject}>
+                  <span className="text-lg leading-none mb-0.5">+</span> New Project
+                </Button>
+                <Button variant="outline" onClick={fetchProjects} disabled={loading}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Refresh
+                </Button>
+              </div>
+            }
+          />
 
-          <div className="flex flex-col gap-4">
+          <SectionCard title="Filters" description="Refine the project list" className="space-y-3">
             <div className="flex items-center gap-3 overflow-x-auto pb-2">
               <div className="relative w-64 shrink-0">
                 <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
@@ -918,11 +919,11 @@ return (
                 </button>
               </div>
             </div>
-          </div>
+          </SectionCard>
         </div>
 
         {error ? (
-          <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 mt-4">
+          <div className="max-w-[1600px] mx-auto px-6 md:px-8 flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
             <AlertCircle size={16} />
             <span>{error}</span>
           </div>

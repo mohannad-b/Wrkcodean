@@ -251,8 +251,16 @@ export async function POST(request: Request, { params }: { params: { id: string 
         resourceId: params.id,
         metadata: {
           source: "copilot",
+          versionLabel: detail.version.versionLabel,
           summary: diff.summary,
           diff,
+          changes: {
+            stepsAdded: diff.stepsAdded?.length ?? 0,
+            stepsRemoved: diff.stepsRemoved?.length ?? 0,
+            stepsRenamed: diff.stepsRenamed?.length ?? 0,
+            branchesAdded: diff.branchesAdded?.length ?? 0,
+            branchesRemoved: diff.branchesRemoved?.length ?? 0,
+          },
         },
       });
     }

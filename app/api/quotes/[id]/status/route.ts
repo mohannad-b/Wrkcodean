@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
+import { z } from "zod";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { parseQuoteStatus, fromDbQuoteStatus } from "@/lib/quotes/status";
@@ -7,8 +8,6 @@ import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { signQuoteAndPromote, SigningError } from "@/lib/services/projects";
 import { logAudit } from "@/lib/audit/log";
 import { verifySigningToken } from "@/lib/auth/signing-token";
-import { db } from "@/db";
-import { quotes } from "@/db/schema";
 import { db } from "@/db";
 import { quotes } from "@/db/schema";
 
@@ -23,6 +22,12 @@ type StatusPayload = {
   last_known_updated_at?: string | null;
   signature_metadata?: Record<string, unknown> | null;
 };
+
+const PayloadSchema = z.object({
+  status: z.string(),
+  last_known_updated_at: z.string().optional().nullable(),
+  signature_metadata: z.record(z.unknown()).optional().nullable(),
+});
 
 async function parsePayload(request: Request): Promise<StatusPayload> {
   try {
@@ -54,13 +59,22 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       }
     }
 
-    const canUpdateQuote = can(session, "admin:quote:update");
-    const canSignAsMember = can(session, "automation:read", { type: "quote", tenantId: session.tenantId });
+    const tenantId = session?.tenantId ?? tokenPayload?.tenantId ?? "";
+
+    // If we have a signed token but no session, allow the token path to proceed without RBAC.
+    const canUpdateQuote = session ? can(session, "admin:quote:update") : Boolean(tokenPayload);
+    const canSignAsMember = session ? can(session, "automation:read", { type: "quote", tenantId }) : Boolean(tokenPayload);
     if (!canUpdateQuote && !canSignAsMember) {
       throw new ApiError(403, "Forbidden");
     }
 
-    const payload = await parsePayload(request);
+    const rawPayload = await parsePayload(request);
+    const parsedPayload = PayloadSchema.safeParse(rawPayload);
+    if (!parsedPayload.success) {
+      throw new ApiError(400, "invalid_payload");
+    }
+
+    const payload = parsedPayload.data;
     const nextStatus = parseQuoteStatus(payload.status);
 
     if (!nextStatus) {
@@ -71,7 +85,6 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       throw new ApiError(409, "invalid_quote_status");
     }
 
-    const tenantId = session?.tenantId ?? tokenPayload?.tenantId ?? "";
     const quoteRows = await db
       .select()
       .from(quotes)

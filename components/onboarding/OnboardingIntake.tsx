@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useNodesState, useEdgesState, Node, Edge, Connection, addEdge } from "reactflow";
 import {
   Send,
   Paperclip,
@@ -27,7 +26,7 @@ import { cn } from "@/lib/utils";
 import dynamic from "next/dynamic";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 
-// Dynamically import StudioCanvas to reduce initial bundle size
+// Dynamically import StudioCanvas and ReactFlow hooks to keep initial bundle light
 const StudioCanvas = dynamic(
   () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
   {
@@ -38,6 +37,11 @@ const StudioCanvas = dynamic(
     ),
     ssr: false,
   }
+);
+
+const ReactFlowHooks = dynamic(
+  () => import("reactflow").then((mod) => ({ default: { useNodesState: mod.useNodesState, useEdgesState: mod.useEdgesState, addEdge: mod.addEdge } })),
+  { ssr: false }
 );
 
 // --- TYPES ---
@@ -70,9 +74,27 @@ export function OnboardingIntake({ onNext }: { onNext: () => void }) {
   const [inputValue, setInputValue] = useState("");
   const [status, setStatus] = useState<"empty" | "building" | "complete">("empty");
 
-  // ReactFlow State
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  // ReactFlow State (loaded lazily)
+  const [rfHooks, setRfHooks] = useState<null | {
+    useNodesState: typeof import("reactflow").useNodesState;
+    useEdgesState: typeof import("reactflow").useEdgesState;
+    addEdge: typeof import("reactflow").addEdge;
+  }>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    void import("reactflow").then((mod) => {
+      if (mounted) {
+        setRfHooks({ useNodesState: mod.useNodesState, useEdgesState: mod.useEdgesState, addEdge: mod.addEdge });
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const [nodes, setNodes, onNodesChange] = rfHooks?.useNodesState ?? (() => [[], () => {}, () => {}]);
+  const [edges, setEdges, onEdgesChange] = rfHooks?.useEdgesState ?? (() => [[], () => {}, () => {}]);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
 
@@ -91,14 +113,15 @@ export function OnboardingIntake({ onNext }: { onNext: () => void }) {
 
   // Connector Handler
   const onConnect = useCallback(
-    (params: Connection) => {
-      setEdges((eds) => addEdge({ ...params, type: "default" }, eds));
+    (params: any) => {
+      if (!rfHooks) return;
+      setEdges((eds: any) => rfHooks.addEdge({ ...params, type: "default" }, eds));
     },
-    [setEdges]
+    [setEdges, rfHooks]
   );
 
   // Derived selected step data for inspector
-  const selectedNode = nodes.find((n) => n.id === selectedStepId);
+  const selectedNode = Array.isArray(nodes) ? nodes.find((n) => n.id === selectedStepId) : null;
   const selectedStepData = selectedNode
     ? {
         id: selectedNode.id,

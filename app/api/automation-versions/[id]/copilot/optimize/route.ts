@@ -61,6 +61,8 @@ export async function POST(_request: Request, { params }: { params: { id: string
       resourceId: params.id,
       metadata: {
         source: "optimize_flow",
+        versionLabel: detail.version.versionLabel,
+        sanitizationSummary: summary,
       },
     });
 

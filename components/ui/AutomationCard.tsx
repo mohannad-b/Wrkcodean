@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "./dropdown-menu";
 import { cn } from "@/lib/utils";
+import { cardClasses } from "@/components/ui/card-shell";
 import { motion } from "motion/react";
 import { useRouter } from "next/navigation";
 
@@ -62,7 +63,7 @@ export function AutomationCard({ automation }: AutomationCardProps) {
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       onClick={() => router.push(`/automations/${automation.id}`)}
-      className="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-gray-300 transition-all group flex flex-col cursor-pointer w-full"
+      className={cardClasses("group flex flex-col cursor-pointer w-full")}
     >
       <div className="p-6 flex-1">
         <div className="flex justify-between items-start mb-4">

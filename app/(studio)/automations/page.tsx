@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { SectionCard } from "@/components/ui/SectionCard";
 import { AutomationGrid } from "@/components/ui/AutomationGrid";
 import { AutomationList } from "@/components/ui/AutomationList";
 import type { AutomationSummary as LegacyAutomationSummary, AutomationStatus } from "@/lib/types";
@@ -257,25 +259,25 @@ export default function AutomationsPage() {
 
   return (
     <div className="flex-1 h-full overflow-y-auto bg-gray-50/50">
-      <div className="max-w-[1600px] mx-auto p-6 md:p-10 space-y-8">
-        <header className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-[#0A0A0A] tracking-tight mb-1">Automations</h1>
-            <p className="text-gray-500 text-sm font-medium">Manage your organization&apos;s workflows and bots.</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button variant="outline" onClick={fetchAutomations} disabled={loading}>
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Refresh
-            </Button>
-            <Link href="/automations/new">
-              <Button className="bg-[#E43632] hover:bg-[#C12E2A] text-white shadow-lg shadow-red-500/20 font-semibold">
-                <Plus className="mr-2 h-4 w-4" />
-                New Automation
+      <div className="max-w-[1600px] mx-auto p-6 md:p-10 space-y-6 md:space-y-8">
+        <PageHeader
+          title="Automations"
+          subtitle="Manage your organization&apos;s workflows and bots."
+          actions={
+            <div className="flex items-center gap-3">
+              <Button variant="outline" onClick={fetchAutomations} disabled={loading}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Refresh
               </Button>
-            </Link>
-          </div>
-        </header>
+              <Link href="/automations/new">
+                <Button className="bg-[#E43632] hover:bg-[#C12E2A] text-white shadow-lg shadow-red-500/20 font-semibold">
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Automation
+                </Button>
+              </Link>
+            </div>
+          }
+        />
 
         {error ? (
           <div className="flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -284,7 +286,7 @@ export default function AutomationsPage() {
           </div>
         ) : null}
 
-        <div className="space-y-4">
+        <SectionCard className="space-y-4">
           <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
             <div className="flex items-center gap-3 w-full md:w-auto">
               <div className="relative flex-1 md:w-80">
@@ -357,7 +359,7 @@ export default function AutomationsPage() {
               </button>
             ))}
           </div>
-        </div>
+        </SectionCard>
 
         {loading ? (
           <div className="space-y-4">

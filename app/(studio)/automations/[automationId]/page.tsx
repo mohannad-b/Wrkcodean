@@ -146,6 +146,8 @@ type AutomationVersion = {
   requirementsText: string | null;
   workflowJson: Blueprint | null;
   summary: string | null;
+  businessOwner?: string | null;
+  tags?: string[];
   latestQuote: QuoteSummary | null;
   latestMetrics?: VersionMetric | null;
   createdAt: string;
@@ -157,6 +159,8 @@ type AutomationDetail = {
   id: string;
   name: string;
   description: string | null;
+  createdAt?: string;
+  updatedAt?: string;
   versions: AutomationVersion[];
 };
 
@@ -294,6 +298,8 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [showManualTimeModal, setShowManualTimeModal] = useState(false);
   const [showHourlyRateModal, setShowHourlyRateModal] = useState(false);
   const [metricForm, setMetricForm] = useState({ manualMinutes: "", hourlyRate: "" });
+  const [archivingVersionId, setArchivingVersionId] = useState<string | null>(null);
+  const [deletingVersionId, setDeletingVersionId] = useState<string | null>(null);
   const [savingMetricConfig, setSavingMetricConfig] = useState(false);
   
   // Read tab from URL params, default to "Overview"
@@ -666,6 +672,77 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setCreatingVersion(false);
     }
   };
+
+  const handleArchiveVersion = useCallback(
+    async (versionId: string) => {
+      const version = automation?.versions.find((v) => v.id === versionId);
+      if (!version) return;
+      const quoteStatus = version.latestQuote?.status ?? null;
+      const hasSignedContract = (quoteStatus ?? "").toLowerCase() === "accepted";
+      if (version.status === "Live" && hasSignedContract) {
+        toast({
+          title: "Cannot archive",
+          description: "Active version with a signed contract must be cancelled or paused first.",
+          variant: "error",
+        });
+        return;
+      }
+      if (version.status === "Archived") {
+        return;
+      }
+      setArchivingVersionId(versionId);
+      try {
+        const response = await fetch(`/api/automation-versions/${versionId}/status`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "Archived" }),
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error ?? "Unable to archive version");
+        }
+        toast({ title: "Version archived", description: version.versionLabel ?? version.id, variant: "success" });
+        await fetchAutomation({ preserveSelection: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to archive version";
+        toast({ title: "Archive failed", description: message, variant: "error" });
+      } finally {
+        setArchivingVersionId(null);
+      }
+    },
+    [automation?.versions, fetchAutomation, toast]
+  );
+
+  const handleDeleteVersion = useCallback(
+    async (versionId: string) => {
+      const version = automation?.versions.find((v) => v.id === versionId);
+      if (!version) return;
+      if (version.status !== "IntakeInProgress") {
+        toast({
+          title: "Cannot delete",
+          description: "Only draft versions can be deleted.",
+          variant: "error",
+        });
+        return;
+      }
+      setDeletingVersionId(versionId);
+      try {
+        const response = await fetch(`/api/automation-versions/${versionId}`, { method: "DELETE" });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error ?? "Unable to delete version");
+        }
+        toast({ title: "Version deleted", description: version.versionLabel ?? version.id, variant: "success" });
+        await fetchAutomation({ preserveSelection: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to delete version";
+        toast({ title: "Delete failed", description: message, variant: "error" });
+      } finally {
+        setDeletingVersionId(null);
+      }
+    },
+    [automation?.versions, fetchAutomation, toast]
+  );
 
   const applyBlueprintUpdate = useCallback(
     (updater: (current: Blueprint) => Blueprint) => {
@@ -1736,8 +1813,20 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 onManageCredentials={(system) => handleMockAction(`Manage ${system}`)}
                 onNavigateToTab={(tab) => handleMockAction(`Navigate to ${tab}`)}
                 onNavigateToSettings={() => handleMockAction("Workspace settings")}
+                automationId={automation.id}
+                automationName={automation.name}
+                automationDescription={automation.description}
+                tags={selectedVersion?.tags ?? []}
+                automationCreatedAt={automation.createdAt ?? null}
+                automationUpdatedAt={selectedVersion?.updatedAt ?? automation.updatedAt ?? null}
+                onGeneralSaved={() => fetchAutomation({ preserveSelection: true })}
                 currentVersionId={selectedVersion?.id ?? null}
                 creatingVersion={creatingVersion}
+                versions={automation.versions}
+                onArchiveVersion={handleArchiveVersion}
+                onDeleteVersion={handleDeleteVersion}
+                archivingVersionId={archivingVersionId}
+                deletingVersionId={deletingVersionId}
               />
             ) : null}
           </div>

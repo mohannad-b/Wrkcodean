@@ -58,6 +58,7 @@ export async function POST(request: Request, { params }: RouteParams) {
         automationId: params.id,
         versionLabel: version.versionLabel,
         summary: [`Created version ${version.versionLabel}`],
+        copyFromVersionId,
       },
     });
 

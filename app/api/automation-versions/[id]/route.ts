@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
-import { getAutomationVersionDetail, updateAutomationVersionMetadata } from "@/lib/services/automations";
+import { deleteAutomationVersion, getAutomationVersionDetail, updateAutomationVersionMetadata } from "@/lib/services/automations";
 import { logAudit } from "@/lib/audit/log";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
@@ -17,6 +17,10 @@ type RouteParams = {
 };
 
 type UpdatePayload = {
+  automationName?: unknown;
+  automationDescription?: unknown;
+  businessOwner?: unknown;
+  tags?: unknown;
   intakeNotes?: unknown;
   requirementsText?: unknown;
   workflowJson?: unknown;
@@ -69,6 +73,65 @@ function validateBlueprint(value: unknown): Blueprint | null | undefined {
   return result.data;
 }
 
+function validateAutomationName(value: unknown) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new ApiError(400, "automationName must be a string.");
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new ApiError(400, "automationName cannot be empty.");
+  }
+  if (trimmed.length > 200) {
+    throw new ApiError(400, "automationName must be 200 characters or fewer.");
+  }
+  return trimmed;
+}
+
+function validateAutomationDescription(value: unknown) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new ApiError(400, "automationDescription must be a string.");
+  }
+  if (value.length > 5000) {
+    throw new ApiError(400, "automationDescription must be 5000 characters or fewer.");
+  }
+  return value;
+}
+
+function validateBusinessOwner(value: unknown) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new ApiError(400, "businessOwner must be a string.");
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > 200) {
+    throw new ApiError(400, "businessOwner must be 200 characters or fewer.");
+  }
+  return trimmed || null;
+}
+
+function validateTags(value: unknown) {
+  if (value === undefined) return undefined;
+  if (value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new ApiError(400, "tags must be an array of strings.");
+  }
+  const tags = value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0)
+    .slice(0, 12);
+
+  if (tags.length === 0) {
+    return [];
+  }
+
+  return Array.from(new Set(tags));
+}
+
 async function parsePayload(request: Request): Promise<UpdatePayload> {
   try {
     return (await request.json()) as UpdatePayload;
@@ -100,6 +163,8 @@ export async function GET(_request: Request, { params }: RouteParams) {
         requirementsText: detail.version.requirementsText,
         blueprintJson: parseBlueprint(detail.version.workflowJson),
         summary: detail.version.summary,
+        businessOwner: detail.version.businessOwner ?? null,
+        tags: Array.isArray((detail.version as any).tags) ? (detail.version as any).tags : [],
         createdAt: detail.version.createdAt,
         updatedAt: detail.version.updatedAt,
         tasks: (detail.tasks ?? []).map(presentTask),
@@ -144,6 +209,12 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     }
 
     const payload = await parsePayload(request);
+    const automationName = validateAutomationName((payload as any).automationName ?? (payload as any).name);
+    const automationDescription = validateAutomationDescription(
+      (payload as any).automationDescription ?? (payload as any).description
+    );
+    const businessOwner = validateBusinessOwner((payload as any).businessOwner);
+    const tags = validateTags((payload as any).tags);
     const intakeNotes = validateIntakeNotes(payload.intakeNotes);
     const requirementsText = validateRequirementsText(payload.requirementsText);
     // Accept both `workflowJson` (current) and `blueprintJson` (legacy/tests)
@@ -151,7 +222,15 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     const blueprintJson =
       blueprintInput === undefined ? undefined : validateBlueprint(blueprintInput) ?? (blueprintInput as any);
 
-    if (intakeNotes === undefined && requirementsText === undefined && blueprintJson === undefined) {
+    if (
+      automationName === undefined &&
+      automationDescription === undefined &&
+      businessOwner === undefined &&
+      tags === undefined &&
+      intakeNotes === undefined &&
+      requirementsText === undefined &&
+      blueprintJson === undefined
+    ) {
       throw new ApiError(400, "No valid fields provided.");
     }
 
@@ -164,6 +243,10 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     const updated = await updateAutomationVersionMetadata({
       tenantId: session.tenantId,
       automationVersionId: params.id,
+      automationName,
+      automationDescription,
+      businessOwner,
+      tags,
       intakeNotes,
       requirementsText,
       workflowJson: blueprintJson,
@@ -176,13 +259,21 @@ export async function PATCH(request: Request, { params }: RouteParams) {
         requirementsText: requirementsText !== undefined,
         workflowJson: blueprintJson !== undefined,
       },
+      versionLabel: existingDetail.version.versionLabel,
     };
 
     if (blueprintJson !== undefined) {
-      const nextBlueprint = parseBlueprint(updated.blueprintJson);
+      const nextBlueprint = parseBlueprint(updated.version.workflowJson);
       const blueprintDiff = diffBlueprint(previousBlueprint, nextBlueprint);
       metadata.blueprintSummary = blueprintDiff.summary;
       metadata.blueprintDiff = blueprintDiff;
+      metadata.blueprintChanges = {
+        stepsAdded: blueprintDiff.stepsAdded?.length ?? 0,
+        stepsRemoved: blueprintDiff.stepsRemoved?.length ?? 0,
+        stepsRenamed: blueprintDiff.stepsRenamed?.length ?? 0,
+        branchesAdded: blueprintDiff.branchesAdded?.length ?? 0,
+        branchesRemoved: blueprintDiff.branchesRemoved?.length ?? 0,
+      };
     }
 
     await logAudit({
@@ -196,13 +287,61 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
     return NextResponse.json({
       version: {
-        id: updated.id,
-        intakeNotes: updated.intakeNotes,
-        requirementsText: updated.requirementsText,
-        blueprintJson: updated.workflowJson,
-        updatedAt: updated.updatedAt,
+        id: updated.version.id,
+        intakeNotes: updated.version.intakeNotes,
+        requirementsText: updated.version.requirementsText,
+        blueprintJson: updated.version.workflowJson,
+        businessOwner: updated.version.businessOwner ?? null,
+        tags: Array.isArray((updated.version as any).tags) ? (updated.version as any).tags : [],
+        updatedAt: updated.version.updatedAt,
+      },
+      automation: updated.automation
+        ? {
+            id: updated.automation.id,
+            name: updated.automation.name,
+            description: updated.automation.description,
+            updatedAt: updated.automation.updatedAt,
+          }
+        : null,
+    });
+  } catch (error) {
+    return handleApiError(error);
+  }
+}
+
+export async function DELETE(_request: Request, { params }: RouteParams) {
+  try {
+    const session = await requireTenantSession();
+
+    if (!can(session, "automation:version:transition", { type: "automation_version", tenantId: session.tenantId })) {
+      throw new ApiError(403, "Forbidden");
+    }
+
+    const detail = await getAutomationVersionDetail(session.tenantId, params.id);
+    if (!detail) {
+      throw new ApiError(404, "Automation version not found");
+    }
+
+    const status = fromDbAutomationStatus(detail.version.status);
+    if (status !== "IntakeInProgress") {
+      throw new ApiError(400, "Only draft versions can be deleted.");
+    }
+
+    const deleted = await deleteAutomationVersion({ tenantId: session.tenantId, automationVersionId: params.id });
+
+    await logAudit({
+      tenantId: session.tenantId,
+      userId: session.userId,
+      action: "automation.version.deleted",
+      resourceType: "automation_version",
+      resourceId: params.id,
+      metadata: {
+        versionLabel: detail.version.versionLabel,
+        automationId: detail.version.automationId,
       },
     });
+
+    return NextResponse.json({ id: deleted.id });
   } catch (error) {
     return handleApiError(error);
   }

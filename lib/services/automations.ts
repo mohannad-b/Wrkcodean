@@ -25,6 +25,7 @@ import {
 import type { Workflow } from "@/lib/blueprint/types";
 import { createEmptyWorkflow } from "@/lib/blueprint/factory";
 import { getLatestMetricForVersion, getLatestMetricsForVersions } from "@/lib/services/automation-metrics";
+import { ApiError } from "@/lib/api/context";
 
 type AutomationWithLatestVersion = Automation & {
   latestVersion: (AutomationVersion & { latestQuote: Quote | null; latestMetrics: AutomationVersionMetric | null }) | null;
@@ -337,44 +338,89 @@ async function nextVersionLabel(automationId: string, tenantId: string) {
 type UpdateMetadataParams = {
   tenantId: string;
   automationVersionId: string;
+  automationName?: string;
+  automationDescription?: string | null;
+  businessOwner?: string | null;
+  tags?: string[] | null;
   intakeNotes?: string | null;
   requirementsText?: string | null;
   workflowJson?: Workflow | null;
 };
 
 export async function updateAutomationVersionMetadata(params: UpdateMetadataParams) {
-  const versionRow = await db
-    .select()
-    .from(automationVersions)
-    .where(and(eq(automationVersions.id, params.automationVersionId), eq(automationVersions.tenantId, params.tenantId)))
-    .limit(1);
+  return db.transaction(async (tx) => {
+    const versionRow = await tx
+      .select()
+      .from(automationVersions)
+      .where(and(eq(automationVersions.id, params.automationVersionId), eq(automationVersions.tenantId, params.tenantId)))
+      .limit(1);
 
-  if (versionRow.length === 0) {
-    throw new Error("Automation version not found");
-  }
+    if (versionRow.length === 0) {
+      throw new Error("Automation version not found");
+    }
 
-  const updatePayload: Partial<typeof automationVersions.$inferInsert> = {};
-  if (params.intakeNotes !== undefined) {
-    updatePayload.intakeNotes = params.intakeNotes;
-  }
-  if (params.requirementsText !== undefined) {
-    updatePayload.requirementsText = params.requirementsText;
-  }
-  if (params.workflowJson !== undefined) {
-    updatePayload.workflowJson = params.workflowJson ?? undefined;
-  }
+    const automationRow = await tx
+      .select()
+      .from(automations)
+      .where(and(eq(automations.id, versionRow[0].automationId), eq(automations.tenantId, params.tenantId)))
+      .limit(1);
 
-  if (Object.keys(updatePayload).length === 0) {
-    return versionRow[0];
-  }
+    if (automationRow.length === 0) {
+      throw new Error("Automation not found");
+    }
 
-  const [updated] = await db
-    .update(automationVersions)
-    .set(updatePayload)
-    .where(eq(automationVersions.id, params.automationVersionId))
-    .returning();
+    const automationUpdate: Partial<typeof automations.$inferInsert> = {};
+    if (params.automationName !== undefined) {
+      automationUpdate.name = params.automationName;
+    }
+    if (params.automationDescription !== undefined) {
+      automationUpdate.description = params.automationDescription;
+    }
+    let updatedAutomation = automationRow[0];
+    if (Object.keys(automationUpdate).length > 0) {
+      automationUpdate.updatedAt = new Date();
+      const [patchedAutomation] = await tx
+        .update(automations)
+        .set(automationUpdate)
+        .where(eq(automations.id, automationRow[0].id))
+        .returning();
+      if (patchedAutomation) {
+        updatedAutomation = patchedAutomation;
+      }
+    }
 
-  return updated;
+    const updatePayload: Partial<typeof automationVersions.$inferInsert> = {};
+    if (params.intakeNotes !== undefined) {
+      updatePayload.intakeNotes = params.intakeNotes;
+    }
+    if (params.requirementsText !== undefined) {
+      updatePayload.requirementsText = params.requirementsText;
+    }
+    if (params.workflowJson !== undefined) {
+      updatePayload.workflowJson = params.workflowJson ?? undefined;
+    }
+    if (params.businessOwner !== undefined) {
+      updatePayload.businessOwner = params.businessOwner ?? null;
+    }
+    if (params.tags !== undefined) {
+      updatePayload.tags = params.tags ?? [];
+    }
+
+    let updatedVersion = versionRow[0];
+    if (Object.keys(updatePayload).length > 0) {
+      updatePayload.updatedAt = new Date();
+      const [patchedVersion] = await tx
+        .update(automationVersions)
+        .set(updatePayload)
+        .where(eq(automationVersions.id, params.automationVersionId))
+        .returning();
+      if (patchedVersion) {
+        updatedVersion = patchedVersion;
+      }
+    }
+
+    return { version: updatedVersion, automation: updatedAutomation };
+  });
 }
 
 export async function getAutomationVersionDetail(tenantId: string, automationVersionId: string) {
@@ -474,6 +520,32 @@ export async function updateAutomationVersionStatus(params: UpdateStatusParams):
   }
 
   return { version: updated, previousStatus: currentStatus };
+}
+
+export async function deleteAutomationVersion(params: { tenantId: string; automationVersionId: string }) {
+  return db.transaction(async (tx) => {
+    const versionRow = await tx
+      .select()
+      .from(automationVersions)
+      .where(and(eq(automationVersions.id, params.automationVersionId), eq(automationVersions.tenantId, params.tenantId)))
+      .limit(1);
+
+    if (versionRow.length === 0) {
+      throw new ApiError(404, "Automation version not found");
+    }
+
+    const status = fromDbAutomationStatus(versionRow[0].status);
+    if (status !== "IntakeInProgress") {
+      throw new ApiError(400, "Only draft versions can be deleted.");
+    }
+
+    const [deleted] = await tx
+      .delete(automationVersions)
+      .where(and(eq(automationVersions.id, params.automationVersionId), eq(automationVersions.tenantId, params.tenantId)))
+      .returning();
+
+    return deleted;
+  });
 }
 
 export async function ensureProjectForVersion(version: AutomationVersion) {

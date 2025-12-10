@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { parseAutomationStatus, fromDbAutomationStatus } from "@/lib/automations/status";
@@ -12,6 +13,10 @@ type Params = {
 type StatusPayload = {
   status?: unknown;
 };
+
+const PayloadSchema = z.object({
+  status: z.string(),
+});
 
 async function parsePayload(request: Request): Promise<StatusPayload> {
   try {
@@ -29,8 +34,13 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
       throw new ApiError(403, "Forbidden");
     }
 
-    const payload = await parsePayload(request);
-    const nextStatus = parseAutomationStatus(payload.status);
+    const rawPayload = await parsePayload(request);
+    const parsedPayload = PayloadSchema.safeParse(rawPayload);
+    if (!parsedPayload.success) {
+      throw new ApiError(400, "invalid_payload");
+    }
+
+    const nextStatus = parseAutomationStatus(parsedPayload.data.status);
 
     if (!nextStatus) {
       throw new ApiError(400, "Invalid status");
@@ -58,7 +68,11 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
       action: "automation.version.status.changed",
       resourceType: "automation_version",
       resourceId: params.id,
-      metadata: { from: previousStatus, to: nextStatus },
+      metadata: {
+        from: previousStatus,
+        to: nextStatus,
+        versionLabel: updated.versionLabel,
+      },
     });
 
     return NextResponse.json({

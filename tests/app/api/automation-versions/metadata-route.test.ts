@@ -74,7 +74,16 @@ describe("PATCH /api/automation-versions/[id]", () => {
     vi.clearAllMocks();
     requireTenantSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: [] });
     canMock.mockReturnValue(true);
-    updateMetadataMock.mockResolvedValue({ id: "version-1", intakeNotes: "notes", blueprintJson: validBlueprint });
+    updateMetadataMock.mockResolvedValue({
+      version: {
+        id: "version-1",
+        intakeNotes: "notes",
+        blueprintJson: validBlueprint,
+        businessOwner: "Owner",
+        tags: ["Tag"],
+      },
+      automation: { id: "automation-1", name: "Automation", description: "Desc", updatedAt: new Date().toISOString() },
+    });
     getDetailMock.mockResolvedValue({
       version: {
         id: "version-1",
@@ -83,6 +92,8 @@ describe("PATCH /api/automation-versions/[id]", () => {
         intakeNotes: "notes",
         summary: "Summary",
         blueprintJson: validBlueprint,
+        businessOwner: "Owner",
+        tags: ["Tag"],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       },
