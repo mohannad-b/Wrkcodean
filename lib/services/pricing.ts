@@ -5,6 +5,8 @@ import { priceWorkflow, PricingInput, PricingResult } from "@/lib/pricing/engine
 import { loadWrkActionCatalog } from "@/lib/pricing/wrkactions-catalog";
 import { toDbQuoteStatus } from "@/lib/quotes/status";
 import { ensureProjectForVersion } from "@/lib/services/automations";
+import { fromDbAutomationStatus, toDbAutomationStatus } from "@/lib/automations/status";
+import { ensureDiscountOffersForVersion, findActiveDiscountByCode, markDiscountUsed } from "@/lib/services/discounts";
 
 export type PriceAndCreateQuoteParams = {
   tenantId: string;
@@ -12,6 +14,7 @@ export type PriceAndCreateQuoteParams = {
   pricing: PricingInput;
   clientMessage?: string | null;
   notes?: string | null;
+  discountCode?: string | null;
 };
 
 export type PriceAndCreateQuoteResult = {
@@ -38,7 +41,27 @@ export async function priceAndCreateQuoteForVersion(
   const project = await ensureProjectForVersion(versionRow[0]);
 
   const actionCatalog = params.pricing.actionCatalog ?? (await loadWrkActionCatalog());
-  const pricingResult = priceWorkflow({ ...params.pricing, actionCatalog });
+  await ensureDiscountOffersForVersion(params.tenantId, params.automationVersionId);
+
+  let discounts = params.pricing.discounts ?? [];
+  if (params.discountCode) {
+    const offer = await findActiveDiscountByCode(params.tenantId, params.discountCode);
+    if (!offer) {
+      throw new Error("Invalid discount code");
+    }
+    discounts = [
+      ...discounts,
+      {
+        code: offer.code,
+        percent: Number(offer.percent),
+        source: "code",
+        appliesTo: "setup_fee" as const,
+      },
+    ];
+    await markDiscountUsed(offer.id);
+  }
+
+  const pricingResult = priceWorkflow({ ...params.pricing, discounts, actionCatalog });
 
   const [quote] = await db
     .insert(quotes)
@@ -54,18 +77,29 @@ export async function priceAndCreateQuoteForVersion(
       estimatedVolume: pricingResult.estimatedVolume,
       notes: params.notes ?? null,
       clientMessage: params.clientMessage ?? null,
+    discountsJson: pricingResult.discountsApplied,
     })
     .returning();
 
   // Mark project pricing status as Sent (pricing generated).
-  await db
+  const projectUpdate = await db
     .update(projects)
-    .set({ pricingStatus: "Sent" })
-    .where(and(eq(projects.id, project.id), eq(projects.tenantId, params.tenantId)));
+    .set({ pricingStatus: "Sent", status: toDbAutomationStatus("AwaitingClientApproval") })
+    .where(and(eq(projects.id, project.id), eq(projects.tenantId, params.tenantId)))
+    .returning();
+
+  // Ensure automation version moves to AwaitingClientApproval if not already further along.
+  const currentVersionStatus = fromDbAutomationStatus(versionRow[0].status);
+  if (currentVersionStatus !== "AwaitingClientApproval" && currentVersionStatus !== "BuildInProgress" && currentVersionStatus !== "ReadyForBuild") {
+    await db
+      .update(automationVersions)
+      .set({ status: toDbAutomationStatus("AwaitingClientApproval") })
+      .where(and(eq(automationVersions.id, params.automationVersionId), eq(automationVersions.tenantId, params.tenantId)));
+  }
 
   return {
     quoteId: quote.id,
-    projectId: project.id,
+    projectId: projectUpdate[0]?.id ?? project.id,
     automationVersionId: params.automationVersionId,
     pricing: pricingResult,
   };

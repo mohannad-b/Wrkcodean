@@ -28,6 +28,7 @@ type PricePayload = {
   currency?: unknown;
   clientMessage?: unknown;
   notes?: unknown;
+  discountCode?: unknown;
 };
 
 function parseComplexity(value: unknown): "basic" | "medium" | "complex_rpa" {
@@ -98,12 +99,14 @@ export async function POST(request: Request, { params }: RouteParams) {
     const currency = typeof payload.currency === "string" && payload.currency.trim() ? payload.currency.trim() : undefined;
     const clientMessage = typeof payload.clientMessage === "string" ? payload.clientMessage : undefined;
     const notes = typeof payload.notes === "string" ? payload.notes : undefined;
+    const discountCode = typeof payload.discountCode === "string" ? payload.discountCode.trim() : undefined;
 
     const result = await priceAndCreateQuoteForVersion({
       tenantId: session.tenantId,
       automationVersionId: params.id,
       clientMessage,
       notes,
+      discountCode,
       pricing: {
         complexity,
         estimatedVolume,
@@ -125,6 +128,9 @@ export async function POST(request: Request, { params }: RouteParams) {
       { status: 201 }
     );
   } catch (error) {
+    if (error instanceof Error && error.message === "Invalid discount code") {
+      return NextResponse.json({ error: "Invalid discount code" }, { status: 400 });
+    }
     return handleApiError(error);
   }
 }

@@ -6,6 +6,9 @@ import { parseQuoteStatus, fromDbQuoteStatus } from "@/lib/quotes/status";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { signQuoteAndPromote, SigningError } from "@/lib/services/projects";
 import { logAudit } from "@/lib/audit/log";
+import { verifySigningToken } from "@/lib/auth/signing-token";
+import { db } from "@/db";
+import { quotes } from "@/db/schema";
 import { db } from "@/db";
 import { quotes } from "@/db/schema";
 
@@ -31,9 +34,29 @@ async function parsePayload(request: Request): Promise<StatusPayload> {
 
 export async function PATCH(request: Request, { params }: RouteParams) {
   try {
-    const session = await requireTenantSession();
+    // Try session first; if unavailable, try signing token.
+    let session: Awaited<ReturnType<typeof requireTenantSession>> | null = null;
+    let tokenPayload = null;
+    try {
+      session = await requireTenantSession();
+    } catch {
+      // ignore
+    }
 
-    if (!can(session, "admin:quote:update")) {
+    if (!session) {
+      const auth = request.headers.get("authorization") ?? "";
+      const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : null;
+      if (token) {
+        tokenPayload = verifySigningToken(token);
+      }
+      if (!tokenPayload) {
+        throw new ApiError(401, "Unauthorized");
+      }
+    }
+
+    const canUpdateQuote = can(session, "admin:quote:update");
+    const canSignAsMember = can(session, "automation:read", { type: "quote", tenantId: session.tenantId });
+    if (!canUpdateQuote && !canSignAsMember) {
       throw new ApiError(403, "Forbidden");
     }
 
@@ -48,10 +71,11 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       throw new ApiError(409, "invalid_quote_status");
     }
 
+    const tenantId = session?.tenantId ?? tokenPayload?.tenantId ?? "";
     const quoteRows = await db
       .select()
       .from(quotes)
-      .where(and(eq(quotes.id, params.id), eq(quotes.tenantId, session.tenantId)))
+      .where(and(eq(quotes.id, params.id), eq(quotes.tenantId, tenantId)))
       .limit(1);
 
     if (quoteRows.length === 0) {
@@ -59,7 +83,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     }
 
     const result = await signQuoteAndPromote({
-      tenantId: session.tenantId,
+      tenantId,
       quoteId: params.id,
       lastKnownUpdatedAt: payload.last_known_updated_at,
       signatureMetadata: payload.signature_metadata,
@@ -76,8 +100,8 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     });
 
     await logAudit({
-      tenantId: session.tenantId,
-      userId: session.userId,
+      tenantId,
+      userId: session?.userId ?? null,
       action: "automation.quote.accepted",
       resourceType: "quote",
       resourceId: params.id,

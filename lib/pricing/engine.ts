@@ -18,6 +18,7 @@ export type DiscountInput = {
   code?: string | null;
   percent?: number | null; // 0-1
   source: "code" | "ops";
+  appliesTo?: "setup_fee" | "unit_price" | "both";
 };
 
 export type PricingInput = {
@@ -49,16 +50,24 @@ const BASE_BUILD_FEES: Record<WorkflowComplexity, number> = {
 
 const DEFAULT_VOLUME = 1000;
 const DEFAULT_CURRENCY = "USD";
+const MIN_UNIT_PRICE_BY_COMPLEXITY: Record<WorkflowComplexity, number> = {
+  basic: 0.5,
+  medium: 1.5,
+  complex_rpa: 3.0,
+};
 
 function normalizePercent(value?: number | null) {
   if (typeof value !== "number" || Number.isNaN(value)) return 0;
   return Math.min(Math.max(value, 0), 1);
 }
 
-function applyDiscounts(base: number, discounts: DiscountInput[] = []) {
+function applyDiscounts(base: number, discounts: DiscountInput[] = [], appliesTo: "setup_fee" | "unit_price" | "both" = "both") {
   let running = base;
   const applied: Array<Required<DiscountInput> & { amount: number }> = [];
   for (const d of discounts) {
+    if (d.appliesTo && d.appliesTo !== appliesTo && d.appliesTo !== "both") {
+      continue;
+    }
     const pct = normalizePercent(d.percent);
     if (pct <= 0) continue;
     const amount = roundToPlaces(running * pct, 2);
@@ -67,6 +76,7 @@ function applyDiscounts(base: number, discounts: DiscountInput[] = []) {
       code: d.code ?? null,
       percent: pct,
       source: d.source,
+      appliesTo: d.appliesTo ?? "both",
       amount,
     });
   }
@@ -76,7 +86,7 @@ function applyDiscounts(base: number, discounts: DiscountInput[] = []) {
 export function priceWorkflow(input: PricingInput): PricingResult {
   const baseSetupFee = BASE_BUILD_FEES[input.complexity] ?? BASE_BUILD_FEES.basic;
   const discounts = input.discounts ?? [];
-  const { value: setupFee, applied: discountsApplied } = applyDiscounts(baseSetupFee, discounts);
+  const { value: setupFee, applied: setupDiscounts } = applyDiscounts(baseSetupFee, discounts, "setup_fee");
 
   const catalog = input.actionCatalog ?? {};
   const estimatedActionCost = roundToPlaces(
@@ -89,7 +99,11 @@ export function priceWorkflow(input: PricingInput): PricingResult {
 
   const estimatedVolume = input.estimatedVolume && input.estimatedVolume > 0 ? input.estimatedVolume : DEFAULT_VOLUME;
   // Counts are per-outcome; unit price should reflect per-outcome cost (no division by estimated volume).
-  const unitPrice = roundToPlaces(estimatedActionCost, 4);
+  const unitDiscounted = applyDiscounts(estimatedActionCost, discounts, "unit_price");
+  const rawUnitPrice = roundToPlaces(unitDiscounted.value, 4);
+  const minUnit = MIN_UNIT_PRICE_BY_COMPLEXITY[input.complexity] ?? MIN_UNIT_PRICE_BY_COMPLEXITY.basic;
+  const unitPrice = rawUnitPrice > 0 ? Math.max(rawUnitPrice, minUnit) : minUnit;
+  const discountsApplied = [...setupDiscounts, ...unitDiscounted.applied];
 
   return {
     setupFee,

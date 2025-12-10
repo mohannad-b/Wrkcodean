@@ -21,6 +21,7 @@ import {
   FileText,
   Slack,
   Mail,
+  Loader2,
 } from "lucide-react";
 import { motion } from "motion/react";
 import {
@@ -575,11 +576,13 @@ function VersionsSettings({
   onNavigateToOverview,
   onNavigateToTab,
   currentVersionId,
+  creatingVersion,
 }: {
   onNewVersion?: (copyFromVersionId?: string | null) => void;
   onNavigateToOverview?: () => void;
   onNavigateToTab?: (tab: string) => void;
   currentVersionId?: string | null;
+  creatingVersion?: boolean;
 } = {}) {
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -615,19 +618,33 @@ function VersionsSettings({
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button className="bg-[#0A0A0A] hover:bg-gray-800 text-white">
-              <Plus size={16} className="mr-2" /> Start New Version
-              <ChevronDown size={16} className="ml-2" />
+            <Button className="bg-[#0A0A0A] hover:bg-gray-800 text-white" disabled={creatingVersion}>
+              {creatingVersion ? (
+                <>
+                  <Loader2 size={16} className="mr-2 animate-spin" /> Creating new version...
+                </>
+              ) : (
+                <>
+                  <Plus size={16} className="mr-2" /> Start New Version
+                  <ChevronDown size={16} className="ml-2" />
+                </>
+              )}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-64">
-            <DropdownMenuItem onClick={() => onNewVersion?.(null)}>
+            <DropdownMenuItem
+              onClick={() => onNewVersion?.(null)}
+              className="cursor-pointer data-[highlighted]:bg-gray-50 data-[highlighted]:text-gray-900 focus:bg-gray-50 focus:text-gray-900"
+            >
               <div className="flex flex-col">
                 <span className="font-semibold">Start from scratch</span>
                 <span className="text-xs text-gray-500">Create a new empty version</span>
               </div>
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onNewVersion?.(currentVersionId ?? null)}>
+            <DropdownMenuItem
+              onClick={() => onNewVersion?.(currentVersionId ?? null)}
+              className="cursor-pointer data-[highlighted]:bg-gray-50 data-[highlighted]:text-gray-900 focus:bg-gray-50 focus:text-gray-900"
+            >
               <div className="flex flex-col">
                 <span className="font-semibold">Copy from this version</span>
                 <span className="text-xs text-gray-500">Duplicate the current version</span>

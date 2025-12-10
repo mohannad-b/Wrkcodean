@@ -28,6 +28,8 @@ const quoteStatusEnum = pgEnum("quote_status", ["draft", "sent", "accepted", "re
 const quoteTypeEnum = pgEnum("quote_type", ["initial_commitment", "change_order"]);
 const invoiceStatusEnum = pgEnum("invoice_status", ["pending", "paid", "failed"]);
 const invoiceTypeEnum = pgEnum("invoice_type", ["setup_fee"]);
+const discountAppliesEnum = pgEnum("discount_applies", ["setup_fee", "unit_price", "both"]);
+const discountKindEnum = pgEnum("discount_kind", ["first_congrats", "first_incentive", "followup_5", "followup_10"]);
 const fileStatusEnum = pgEnum("file_status", ["pending", "uploaded", "failed"]);
 const aiJobStatusEnum = pgEnum("ai_job_status", ["pending", "processing", "succeeded", "failed"]);
 const messageTypeEnum = pgEnum("message_type", ["client", "ops"]);
@@ -318,6 +320,7 @@ export const quotes = pgTable(
     estimatedVolume: integer("estimated_volume"),
     notes: text("notes"),
     clientMessage: text("client_message"),
+    discountsJson: jsonb("discounts_json").$type<Record<string, unknown>>().notNull().default(sql`'[]'::jsonb`),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     signedAt: timestamp("signed_at", { withTimezone: true }),
     signatureMetadata: jsonb("signature_metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
@@ -352,6 +355,31 @@ export const invoices = pgTable(
     tenantIdx: index("invoices_tenant_idx").on(table.tenantId),
     quoteIdx: index("invoices_quote_idx").on(table.quoteId),
     projectIdx: index("invoices_project_idx").on(table.projectId),
+  })
+);
+
+export const discountOffers = pgTable(
+  "discount_offers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    automationVersionId: uuid("automation_version_id")
+      .notNull()
+      .references(() => automationVersions.id, { onDelete: "cascade" }),
+    code: text("code").notNull(),
+    percent: numeric("percent", { precision: 5, scale: 4 }).notNull().default("0"),
+    appliesTo: discountAppliesEnum("applies_to").notNull().default("setup_fee"),
+    kind: discountKindEnum("kind").notNull().default("followup_5"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantIdx: index("discount_offers_tenant_idx").on(table.tenantId),
+    versionIdx: index("discount_offers_version_idx").on(table.automationVersionId),
+    codeIdx: uniqueIndex("discount_offers_code_unique").on(table.code),
   })
 );
 

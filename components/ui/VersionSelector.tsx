@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Check, GitBranch, Plus, Clock, ChevronDown as ChevronDownIcon } from "lucide-react";
+import { ChevronDown, Check, GitBranch, Plus, Clock, ChevronDown as ChevronDownIcon, Loader2 } from "lucide-react";
 import { Button } from "./button";
 import {
   DropdownMenu,
@@ -25,9 +25,16 @@ interface VersionSelectorProps {
   versions: VersionOption[];
   onChange: (versionId: string) => void;
   onNewVersion?: (copyFromVersionId?: string | null) => void;
+  creatingVersion?: boolean;
 }
 
-export function VersionSelector({ currentVersionId, versions, onChange, onNewVersion }: VersionSelectorProps) {
+export function VersionSelector({
+  currentVersionId,
+  versions,
+  onChange,
+  onNewVersion,
+  creatingVersion = false,
+}: VersionSelectorProps) {
   const hasVersions = versions.length > 0;
   const selectedVersion = hasVersions
     ? versions.find((version) => version.id === currentVersionId) ?? versions[0]
@@ -138,19 +145,36 @@ export function VersionSelector({ currentVersionId, versions, onChange, onNewVer
           <div className="p-3 border-t border-gray-100 bg-gray-50">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button className="w-full bg-[#E43632] hover:bg-[#C12E2A] text-white h-8 text-xs">
-                  <Plus size={14} className="mr-2" /> Start New Version
-                  <ChevronDownIcon size={14} className="ml-2" />
+                <Button
+                  className="w-full bg-[#E43632] hover:bg-[#C12E2A] text-white h-8 text-xs"
+                  disabled={creatingVersion}
+                >
+                  {creatingVersion ? (
+                    <>
+                      <Loader2 size={14} className="mr-2 animate-spin" /> Creating new version...
+                    </>
+                  ) : (
+                    <>
+                      <Plus size={14} className="mr-2" /> Start New Version
+                      <ChevronDownIcon size={14} className="ml-2" />
+                    </>
+                  )}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-64">
-                <DropdownMenuItem onClick={() => onNewVersion(null)}>
+                <DropdownMenuItem
+                  onClick={() => onNewVersion(null)}
+                  className="cursor-pointer data-[highlighted]:bg-gray-50 data-[highlighted]:text-gray-900 focus:bg-gray-50 focus:text-gray-900"
+                >
                   <div className="flex flex-col">
                     <span className="font-semibold">Start from scratch</span>
                     <span className="text-xs text-gray-500">Create a new empty version</span>
                   </div>
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => onNewVersion(currentVersionId)}>
+                <DropdownMenuItem
+                  onClick={() => onNewVersion(currentVersionId)}
+                  className="cursor-pointer data-[highlighted]:bg-gray-50 data-[highlighted]:text-gray-900 focus:bg-gray-50 focus:text-gray-900"
+                >
                   <div className="flex flex-col">
                     <span className="font-semibold">Copy from this version</span>
                     <span className="text-xs text-gray-500">Duplicate the current version</span>

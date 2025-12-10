@@ -71,6 +71,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { buildKpiStats, type KpiStat, type MetricConfig, type VersionMetric } from "@/lib/metrics/kpi";
+import { createVersionWithRedirect } from "./create-version";
 
 const StudioCanvas = dynamic(
   () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
@@ -645,30 +646,17 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   }, [fetchAutomation]);
 
   const handleCreateVersion = async (copyFromVersionId?: string | null) => {
-    // Handle case where event object might be passed instead of version ID
-    const versionId = typeof copyFromVersionId === "string" ? copyFromVersionId : null;
-    
     setCreatingVersion(true);
     setError(null);
     try {
-      const response = await fetch(`/api/automations/${params.automationId}/versions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          summary: selectedVersion?.summary ?? "",
-          intakeNotes: versionId ? selectedVersion?.intakeNotes ?? notes : notes,
-          copyFromVersionId: versionId,
-        }),
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error ?? "Unable to create version");
-      }
-      await fetchAutomation();
-      toast({
-        title: "New version created",
-        description: versionId ? "A new version copied from the current version is ready." : "A draft version is ready.",
-        variant: "success",
+      await createVersionWithRedirect({
+        automationId: params.automationId,
+        copyFromVersionId,
+        notes,
+        selectedVersion,
+        fetchAutomation,
+        setSelectedVersionId,
+        toast,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to create version";
@@ -1673,6 +1661,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
               <VersionSelector
                 currentVersionId={selectedVersion?.id ?? versionOptions[0]?.id ?? null}
                 versions={versionOptions}
+                creatingVersion={creatingVersion}
                 onChange={handleVersionChange}
                 onNewVersion={handleCreateVersion}
               />
@@ -1732,6 +1721,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 tasks={selectedVersion?.tasks ?? []}
                 onViewTasks={goToTasksView}
                 automationVersionId={selectedVersion?.id}
+                onPricingRefresh={() => fetchAutomation({ preserveSelection: true })}
               />
             ) : activeTab === "Activity" ? (
               <ActivityTab
@@ -1747,6 +1737,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 onNavigateToTab={(tab) => handleMockAction(`Navigate to ${tab}`)}
                 onNavigateToSettings={() => handleMockAction("Workspace settings")}
                 currentVersionId={selectedVersion?.id ?? null}
+                creatingVersion={creatingVersion}
               />
             ) : null}
           </div>

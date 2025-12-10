@@ -25,6 +25,7 @@ interface BuildStatusTabProps {
     setupFee: string | null;
     unitPrice: string | null;
     estimatedVolume: number | null;
+    discountsJson?: Array<{ code: string | null; percent: number; source: string; appliesTo?: string; amount: number }> | null;
     updatedAt: string;
   } | null;
   lastUpdated?: string | null;
@@ -32,6 +33,7 @@ interface BuildStatusTabProps {
   tasks?: AutomationTask[];
   onViewTasks?: () => void;
   automationVersionId?: string | null;
+  onPricingRefresh?: () => void;
 }
 
 const formatCurrency = (value?: string | null) => {
@@ -80,6 +82,7 @@ export function BuildStatusTab({
   tasks = [],
   onViewTasks,
   automationVersionId,
+  onPricingRefresh,
 }: BuildStatusTabProps) {
   const [localStatus, setLocalStatus] = useState<BuildStatus>(resolveBuildStatus(status));
   useEffect(() => {
@@ -114,6 +117,31 @@ export function BuildStatusTab({
   const redFillPercent = Math.min(100, Math.ceil(sliderPercent / 25) * 25);
   const [showQuoteModal, setShowQuoteModal] = useState(false);
   const monthlyCost = unitPriceValue * sliderVolume;
+  const [discountCode, setDiscountCode] = useState("");
+  const [applyingDiscount, setApplyingDiscount] = useState(false);
+
+  const applyDiscountCode = async () => {
+    if (!automationVersionId || !discountCode.trim()) return;
+    setApplyingDiscount(true);
+    try {
+      await fetch(`/api/automation-versions/${automationVersionId}/price-and-quote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          complexity: "medium",
+          estimatedVolume: sliderVolume,
+          estimatedActions: [],
+          discounts: [],
+          discountCode: discountCode.trim(),
+        }),
+      });
+      // Consumer should refetch automation data; here we rely on parent refresh side-effects.
+    } catch (err) {
+      console.error("Failed to apply discount code", err);
+    } finally {
+      setApplyingDiscount(false);
+    }
+  };
 
   const advanceAutomationStatus = async () => {
     if (!automationVersionId) return;
@@ -207,6 +235,9 @@ export function BuildStatusTab({
                     Refundable
                   </Badge>
                   <p className="text-3xl font-extrabold text-[#0A0A0A]">{formatCurrency(oneTimeFee)}</p>
+                  <p className="text-xs text-gray-500">
+                    {latestQuote?.status ? `Quote status: ${latestQuote.status}` : "Quote not generated"}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
@@ -215,7 +246,78 @@ export function BuildStatusTab({
                   Includes <span className="font-bold">$100 in free credits</span> for your first runs.
                 </span>
               </div>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm text-gray-600">Have a discount code? Apply it to your build fee.</div>
+              <div className="flex gap-2 w-full sm:w-auto">
+                <input
+                  className="flex-1 rounded-md border border-gray-200 px-3 py-2 text-sm"
+                  placeholder="Enter code"
+                  value={discountCode}
+                  onChange={(e) => setDiscountCode(e.target.value)}
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={applyDiscountCode}
+                  disabled={applyingDiscount || !discountCode.trim()}
+                  className="min-w-[90px]"
+                >
+                  {applyingDiscount ? "Applying…" : "Apply"}
+                </Button>
+              </div>
+            </div>
             </Card>
+
+            {latestQuote ? (
+              <Card className="p-6 space-y-4 border border-gray-200 shadow-sm">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="text-xl font-bold text-[#0A0A0A]">Latest Quote</h3>
+                    <p className="text-sm text-gray-600">Pricing generated from the latest workflow.</p>
+                  </div>
+                  <Badge variant="secondary" className="text-xs bg-gray-100 text-gray-700">
+                    {latestQuote.status ?? "Sent"}
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                  <div className="space-y-1">
+                    <p className="text-gray-500">Setup fee</p>
+                    <p className="text-base font-semibold text-[#0A0A0A]">{formatCurrency(latestQuote.setupFee)}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-gray-500">Unit price</p>
+                    <p className="text-base font-semibold text-[#0A0A0A]">
+                      {formatUnitPrice(latestQuote.unitPrice)} / result
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-gray-500">Est. volume</p>
+                    <p className="text-base font-semibold text-[#0A0A0A]">
+                      {latestQuote.estimatedVolume?.toLocaleString() ?? "—"} / mo
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-gray-500">Last priced</p>
+                    <p className="text-base font-semibold text-[#0A0A0A]">{formatTimestamp(latestQuote.updatedAt)}</p>
+                  </div>
+                </div>
+                {latestQuote.discountsJson && latestQuote.discountsJson.length > 0 ? (
+                  <div className="border-t border-gray-200 pt-3 space-y-2 text-sm">
+                    <p className="text-gray-600 font-semibold">Discounts applied</p>
+                    <div className="space-y-1">
+                      {latestQuote.discountsJson.map((d, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-gray-700">
+                          <span>
+                            {(d.code ?? "Discount")} · {(d.appliesTo ?? "both").replace("_", " ")} · {d.source}
+                          </span>
+                          <span className="font-semibold">-{(d.percent * 100).toFixed(0)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </Card>
+            ) : null}
 
             <Card className="p-0 overflow-hidden border border-gray-200 shadow-sm">
               <div className="flex flex-col gap-2 px-6 py-5 border-b border-gray-100">
@@ -343,6 +445,8 @@ export function BuildStatusTab({
           void advanceAutomationStatus();
         }}
         quoteId={latestQuote?.id ?? undefined}
+        automationVersionId={automationVersionId ?? undefined}
+        onPricingRefresh={onPricingRefresh}
         volume={sliderVolume}
         unitPrice={unitPriceValue}
         monthlyCost={monthlyCost}

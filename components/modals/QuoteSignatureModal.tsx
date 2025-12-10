@@ -13,7 +13,9 @@ interface QuoteSignatureModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSigned?: (result?: { automationStatus?: string | null; quoteStatus?: string | null }) => void;
+  onPricingRefresh?: () => void;
   quoteId?: string | null;
+  automationVersionId?: string | null;
   volume: number;
   unitPrice: number;
   monthlyCost: number;
@@ -24,7 +26,9 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
   open,
   onOpenChange,
   onSigned,
+  onPricingRefresh,
   quoteId,
+  automationVersionId,
   volume,
   unitPrice,
   monthlyCost,
@@ -38,6 +42,9 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
   const [showCheckmark, setShowCheckmark] = useState(false);
   const [signing, setSigning] = useState(false);
   const [signError, setSignError] = useState<string | null>(null);
+  const [discountCode, setDiscountCode] = useState("");
+  const [applyingDiscount, setApplyingDiscount] = useState(false);
+  const [discountMessage, setDiscountMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -109,6 +116,39 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
       setSignError(message);
     } finally {
       setSigning(false);
+    }
+  };
+
+  const handleApplyDiscount = async () => {
+    if (!automationVersionId || !discountCode.trim()) {
+      setDiscountMessage("Enter a discount code to apply.");
+      return;
+    }
+    setApplyingDiscount(true);
+    setDiscountMessage(null);
+    try {
+      const response = await fetch(`/api/automation-versions/${automationVersionId}/price-and-quote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          complexity: "medium",
+          estimatedVolume: volume,
+          estimatedActions: [],
+          discounts: [],
+          discountCode: discountCode.trim(),
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.error ?? payload?.message ?? "Unable to apply discount");
+      }
+      setDiscountMessage("Discount applied. Pricing refreshed.");
+      onPricingRefresh?.();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to apply discount";
+      setDiscountMessage(message);
+    } finally {
+      setApplyingDiscount(false);
     }
   };
 
@@ -514,6 +554,28 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
                                 <p className="text-xs text-gray-500">{volume.toLocaleString()} units</p>
                               </div>
                             </div>
+                      <div className="pt-2 space-y-2">
+                        <p className="text-sm font-semibold text-[#0A0A0A]">Apply Discount</p>
+                        <div className="flex gap-2 items-center">
+                          <input
+                            className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                            placeholder="Enter discount code"
+                            value={discountCode}
+                            onChange={(e) => setDiscountCode(e.target.value)}
+                          />
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={handleApplyDiscount}
+                            disabled={applyingDiscount || !discountCode.trim()}
+                          >
+                            {applyingDiscount ? "Applying…" : "Apply"}
+                          </Button>
+                        </div>
+                        {discountMessage ? (
+                          <p className="text-xs text-gray-600">{discountMessage}</p>
+                        ) : null}
+                      </div>
                           </div>
                           <div className="rounded-2xl bg-[#f1f6ff] border border-[#dbe7ff] p-4 flex items-start gap-3 text-[#0a3ea1]">
                             <div className="h-9 w-9 rounded-full bg-white border border-[#cddcff] flex items-center justify-center text-[#0a3ea1]">

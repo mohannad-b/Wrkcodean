@@ -226,62 +226,90 @@ type CreateAutomationVersionParams = {
 };
 
 export async function createAutomationVersion(params: CreateAutomationVersionParams) {
-  const automationRow = await db
-    .select()
-    .from(automations)
-    .where(and(eq(automations.id, params.automationId), eq(automations.tenantId, params.tenantId)))
-    .limit(1);
-
-  if (automationRow.length === 0) {
-    throw new Error("Automation not found");
-  }
-
-  const label = params.versionLabel ?? (await nextVersionLabel(params.automationId, params.tenantId));
-
-  // If copying from a version, fetch the source version's workflow
-  let workflowJson: Workflow;
-  if (params.copyFromVersionId) {
-    const [sourceVersion] = await db
+  return db.transaction(async (tx) => {
+    const automationRow = await tx
       .select()
-      .from(automationVersions)
-      .where(
-        and(
-          eq(automationVersions.id, params.copyFromVersionId),
-          eq(automationVersions.automationId, params.automationId),
-          eq(automationVersions.tenantId, params.tenantId)
-        )
-      )
+      .from(automations)
+      .where(and(eq(automations.id, params.automationId), eq(automations.tenantId, params.tenantId)))
       .limit(1);
 
-    if (sourceVersion && sourceVersion.workflowJson) {
-      workflowJson = sourceVersion.workflowJson as Workflow;
-    } else {
-      // If source version doesn't have a workflow, create an empty one
-      workflowJson = createEmptyWorkflow();
+    if (automationRow.length === 0) {
+      throw new Error("Automation not found");
     }
-  } else {
-    // Start from scratch - create an empty workflow
-    workflowJson = createEmptyWorkflow();
-  }
 
-  const [version] = await db
+    const label = params.versionLabel ?? (await nextVersionLabel(params.automationId, params.tenantId));
+
+    const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+
+    const [sourceVersion] = params.copyFromVersionId
+      ? await tx
+          .select()
+          .from(automationVersions)
+          .where(
+            and(
+              eq(automationVersions.id, params.copyFromVersionId),
+              eq(automationVersions.automationId, params.automationId),
+              eq(automationVersions.tenantId, params.tenantId)
+            )
+          )
+          .limit(1)
+      : [];
+
+    const workflowJson: Workflow = sourceVersion?.workflowJson
+      ? clone(sourceVersion.workflowJson as Workflow)
+      : createEmptyWorkflow();
+    const summary = params.summary ?? sourceVersion?.summary ?? null;
+    const intakeNotes = params.intakeNotes ?? sourceVersion?.intakeNotes ?? null;
+    const requirementsText = sourceVersion?.requirementsText ?? null;
+    const requirementsJson = sourceVersion?.requirementsJson ? clone(sourceVersion.requirementsJson) : {};
+    const intakeProgress = sourceVersion?.intakeProgress ?? 0;
+
+    const [version] = await tx
       .insert(automationVersions)
       .values({
         tenantId: params.tenantId,
         automationId: params.automationId,
         versionLabel: label,
         status: toDbAutomationStatus("IntakeInProgress"),
-        summary: params.summary ?? null,
-        intakeNotes: params.intakeNotes ?? null,
-        workflowJson: workflowJson,
+        summary,
+        intakeNotes,
+        requirementsText,
+        requirementsJson,
+        workflowJson,
+        intakeProgress,
       })
-    .returning();
+      .returning();
 
-  if (!version) {
-    throw new Error("Unable to create version");
-  }
+    if (!version) {
+      throw new Error("Unable to create version");
+    }
 
-  return version;
+    if (sourceVersion) {
+      const sourceTasks = await tx
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.automationVersionId, sourceVersion.id), eq(tasks.tenantId, params.tenantId)));
+
+      if (sourceTasks.length > 0) {
+        await tx.insert(tasks).values(
+          sourceTasks.map((task) => ({
+            tenantId: params.tenantId,
+            automationVersionId: version.id,
+            projectId: task.projectId,
+            title: task.title,
+            description: task.description,
+            status: task.status,
+            priority: task.priority,
+            assigneeId: task.assigneeId,
+            dueDate: task.dueDate,
+            metadata: task.metadata ?? {},
+          }))
+        );
+      }
+    }
+
+    return version;
+  });
 }
 
 async function nextVersionLabel(automationId: string, tenantId: string) {

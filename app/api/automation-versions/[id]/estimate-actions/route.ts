@@ -76,7 +76,7 @@ function parseOpenAiJson(content: string, catalog: Record<string, { listPrice: n
         : parsed.complexity === "medium"
           ? "medium"
           : "basic";
-    const actions = rawActions
+    let actions = rawActions
       .map((a: any) => {
         if (!a || typeof a !== "object" || typeof a.actionType !== "string") return null;
         if (!catalog[a.actionType]) return null;
@@ -85,8 +85,17 @@ function parseOpenAiJson(content: string, catalog: Record<string, { listPrice: n
         return { actionType: a.actionType, count: Math.max(1, Math.round(count)) };
       })
       .filter(Boolean) as Array<{ actionType: string; count: number }>;
+    // Fallback if everything was filtered out.
+    if (actions.length === 0) {
+      actions = FALLBACK_ACTIONS.estimatedActions;
+    }
+    // Basic validation: if total action cost would be zero (no priced actions), reuse fallback.
+    const hasPriced = actions.some((a) => catalog[a.actionType]?.listPrice > 0);
+    if (!hasPriced) {
+      actions = FALLBACK_ACTIONS.estimatedActions;
+    }
     return {
-      estimatedActions: actions.length > 0 ? actions : FALLBACK_ACTIONS.estimatedActions,
+      estimatedActions: actions,
       complexity,
       estimatedVolume,
     };

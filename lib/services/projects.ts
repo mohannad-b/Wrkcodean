@@ -368,6 +368,28 @@ export async function signQuoteAndPromote(params: SignQuoteParams): Promise<Sign
           previousProjectStatus = fromDbAutomationStatus(projectRows[0].status);
           projectResult = projectRows[0];
         }
+
+      // Normalize statuses forward to the expected triad gating (Flow 16) if behind.
+      if (quoteType === "initial_commitment") {
+        if (previousAutomationStatus === "NeedsPricing") {
+          const [updatedVersion] = await tx
+            .update(automationVersions)
+            .set({ status: toDbAutomationStatus("AwaitingClientApproval") })
+            .where(eq(automationVersions.id, versionRows[0].id))
+            .returning();
+          automationVersionResult = updatedVersion ?? automationVersionResult;
+          previousAutomationStatus = fromDbAutomationStatus(automationVersionResult.status);
+        }
+        if (previousProjectStatus === "NeedsPricing") {
+          const [updatedProject] = await tx
+            .update(projects)
+            .set({ status: toDbAutomationStatus("AwaitingClientApproval"), pricingStatus: "Sent" })
+            .where(eq(projects.id, projectResult?.id ?? projectRows[0].id))
+            .returning();
+          projectResult = updatedProject ?? projectResult;
+          previousProjectStatus = fromDbAutomationStatus(projectResult.status);
+        }
+      }
       }
     }
 
