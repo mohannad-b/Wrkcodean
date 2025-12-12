@@ -98,7 +98,7 @@ export function OverviewTab({
             className="h-9 text-xs font-bold bg-[#0A0A0A] hover:bg-gray-900 text-white shadow-lg shadow-gray-900/10 transition-all hover:-translate-y-0.5"
           >
             <Edit3 size={14} className="mr-2" />
-            Edit Blueprint
+            Edit Workflow
           </Button>
         </div>
       </div>

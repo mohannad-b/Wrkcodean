@@ -1,12 +1,12 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Mic, Sparkles, AlertCircle, Paperclip, MonitorPlay, CheckCircle2 } from "lucide-react";
+import { Send, Mic, Sparkles, AlertCircle, Paperclip, MonitorPlay, CheckCircle2, RefreshCw, Lightbulb, Loader2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { currentUser } from "@/lib/mock-automations";
 import { motion, AnimatePresence } from "motion/react";
-import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import type { BlueprintUpdates } from "@/lib/blueprint/ai-updates";
 import type { Blueprint } from "@/lib/blueprint/types";
 import type { CopilotThinkingStep } from "@/types/copilot-thinking";
@@ -33,6 +33,11 @@ interface StudioChatProps {
   onProgressUpdate?: (progress: BlueprintProgressSnapshot | null) => void;
   injectedMessage?: CopilotMessage | null;
   onInjectedMessageConsumed?: () => void;
+  onOptimizeWorkflow?: () => void;
+  onSuggestNextSteps?: () => void;
+  isOptimizingWorkflow?: boolean;
+  isRequestingSuggestions?: boolean;
+  suggestionStatus?: string | null;
 }
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
@@ -58,13 +63,6 @@ const DEFAULT_USER_FACING_THINKING_STEPS: CopilotThinkingStep[] = [
   { id: "thinking-default-3", label: "Drafting the next blueprint updates" },
 ];
 
-const STARTER_PROMPTS = [
-  "I receive invoices by email and need to extract the data into our accounting system.",
-  "When a new customer signs up, create their software accounts and send a welcome email.",
-  "Monitor competitor pricing daily and notify me if we should adjust.",
-  "Every support ticket should be categorized and routed to the right team automatically.",
-];
-
 const formatTimestamp = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 
@@ -78,6 +76,11 @@ export function StudioChat({
   onProgressUpdate,
   injectedMessage = null,
   onInjectedMessageConsumed,
+  onOptimizeWorkflow,
+  onSuggestNextSteps,
+  isOptimizingWorkflow = false,
+  isRequestingSuggestions = false,
+  suggestionStatus = null,
 }: StudioChatProps) {
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
   const [input, setInput] = useState("");
@@ -93,6 +96,7 @@ export function StudioChat({
   const [currentThinkingIndex, setCurrentThinkingIndex] = useState(0);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const prevBlueprintEmptyRef = useRef<boolean>(blueprintEmpty);
+  const actionButtonsDisabled = disabled || !automationVersionId;
 
   const dropTransientMessages = useCallback(
     (list: CopilotMessage[]) => list.filter((message) => !message.transient),
@@ -457,9 +461,6 @@ useEffect(() => {
             <span className="font-bold text-sm text-[#0A0A0A] block leading-none">WRK Copilot</span>
             <span className="text-[10px] text-gray-400 font-medium">AI Assistant</span>
           </div>
-          <Badge variant="secondary" className="ml-auto text-[10px] bg-gray-100 text-gray-600 border-gray-200 px-2 py-0.5">
-            {blueprintEmpty ? "Draft Needed" : "Blueprint Synced"}
-          </Badge>
         </div>
 
         {/* Quick Actions Row */}
@@ -511,24 +512,6 @@ useEffect(() => {
                 >
                   <p className="whitespace-pre-wrap">{msg.content}</p>
                 </div>
-              {msg.id === INITIAL_AI_MESSAGE.id && messages.length === 1 && (
-                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {STARTER_PROMPTS.map((prompt, index) => (
-                    <button
-                      key={prompt}
-                      onClick={() => {
-                        setInput(prompt);
-                        inputRef.current?.focus();
-                      }}
-                      className="text-left text-sm text-gray-700 bg-white border border-gray-200 rounded-xl px-3 py-2 hover:border-gray-300 hover:bg-gray-50 transition-colors shadow-sm"
-                      data-testid={`starter-prompt-${index}`}
-                    >
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
-              )}
-
                 <span className="text-[10px] text-gray-400 px-1 block">
                   {msg.optimistic ? "Sending…" : formatTimestamp(msg.createdAt)}
                 </span>
@@ -595,8 +578,43 @@ useEffect(() => {
         </div>
       </ScrollArea>
 
-      {/* Input Area */}
-      <div className="p-4 bg-white border-t border-gray-200">
+      {/* Action + Input Area */}
+      <div className="p-4 bg-white border-t border-gray-200 space-y-3">
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={onOptimizeWorkflow}
+              disabled={isOptimizingWorkflow || actionButtonsDisabled}
+              className="text-xs font-semibold"
+            >
+              {isOptimizingWorkflow ? (
+                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-3 w-3" />
+              )}
+              Optimize workflow
+            </Button>
+            <Button
+              size="sm"
+              onClick={onSuggestNextSteps}
+              disabled={isRequestingSuggestions || actionButtonsDisabled}
+              className="text-xs font-semibold"
+            >
+              {isRequestingSuggestions ? (
+                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+              ) : (
+                <Lightbulb className="mr-2 h-3 w-3" />
+              )}
+              Suggest next steps
+            </Button>
+            {suggestionStatus ? (
+              <p className="text-[11px] text-gray-500">{suggestionStatus}</p>
+            ) : null}
+          </div>
+        </div>
+
         <div className="relative flex items-center gap-2">
           <div className="flex items-center gap-2">
             <button className="p-1.5 text-gray-400 hover:text-[#0A0A0A] hover:bg-gray-100 rounded-md transition-colors">

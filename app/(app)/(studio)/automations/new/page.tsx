@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,6 +11,7 @@ import {
   Sparkles as SparklesIcon,
   Undo2,
   Zap,
+  CheckCircle2,
   ShoppingCart,
   Package,
   Mail,
@@ -25,14 +26,20 @@ import {
   GraduationCap,
   Code,
   Hammer,
+  MapPin,
+  ShieldCheck,
+  Video,
+  Camera,
 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import {
   Select,
   SelectContent,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
+  SelectGroup,
 } from "@/components/ui/select";
 
 type AutomationType = "starter" | "intermediate" | "advanced";
@@ -73,6 +80,19 @@ const INDUSTRIES = [
   "Technology",
   "Construction",
 ];
+
+const DEPARTMENTS = [
+  "Sales",
+  "Marketing",
+  "Operations",
+  "Finance & Accounting",
+  "Human Resources",
+  "Customer Support",
+  "IT & Engineering",
+  "Product Management",
+];
+
+const SUGGESTIONS_PER_PAGE = 6;
 
 const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string; icon: React.ReactNode }>> = {
   "Retail & E-commerce": [
@@ -395,6 +415,427 @@ const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string
       icon: <Wrench className="h-5 w-5" />,
     },
   ],
+  Sales: [
+    {
+      text: "Qualify inbound leads and assign to reps based on territory rules",
+      description:
+        "When a new lead enters the CRM, enrich with firmographic data, score it, and route to the correct sales rep based on territory and product line.",
+      icon: <Briefcase className="h-5 w-5" />,
+    },
+    {
+      text: "Create follow-up tasks after demos and send recap emails",
+      description:
+        "After a demo is logged, auto-create follow-up tasks in the CRM, send a recap email with next steps, and schedule reminders in the rep’s calendar.",
+      icon: <Calendar className="h-5 w-5" />,
+    },
+    {
+      text: "Sync pipeline updates to forecasting sheet and Slack",
+      description:
+        "When opportunities move stages, push updates to the forecasting spreadsheet and notify sales leadership in Slack with deal risk highlights.",
+      icon: <FileText className="h-5 w-5" />,
+    },
+    {
+      text: "Automate quote generation from product catalog",
+      description:
+        "When a rep selects products, automatically generate a quote document, calculate discounts, and send it for approval and e-signature.",
+      icon: <CreditCard className="h-5 w-5" />,
+    },
+    {
+      text: "Re-engage stalled deals with personalized sequences",
+      description:
+        "Detect deals with no activity for 14 days, enroll contacts into a personalized outreach sequence, and alert the account owner.",
+      icon: <Mail className="h-5 w-5" />,
+    },
+    {
+      text: "Sync closed-won deals to billing and onboarding",
+      description:
+        "When a deal is marked closed-won, create the customer in billing, start onboarding tasks, and send welcome emails to stakeholders.",
+      icon: <Package className="h-5 w-5" />,
+    },
+  ],
+  Marketing: [
+    {
+      text: "Score inbound leads from form fills and route to sales",
+      description:
+        "Score leads from marketing forms, tag them by campaign, and route qualified leads into the CRM with the right owner and notes.",
+      icon: <Mail className="h-5 w-5" />,
+    },
+    {
+      text: "Repurpose blog posts into social content",
+      description:
+        "When a new blog publishes, generate social copy variations, push drafts to the calendar, and create design tasks for creative assets.",
+      icon: <SparklesIcon className="h-5 w-5" />,
+    },
+    {
+      text: "Sync webinar registrants to CRM and send reminders",
+      description:
+        "Capture webinar registrations, create contacts, enroll them into reminder campaigns, and push attendance data back to the CRM.",
+      icon: <Calendar className="h-5 w-5" />,
+    },
+    {
+      text: "Automate UTM validation and campaign tagging",
+      description:
+        "Validate UTM parameters on incoming leads, standardize campaign names, and update analytics dashboards automatically.",
+      icon: <FileText className="h-5 w-5" />,
+    },
+    {
+      text: "Route intent signals to SDRs with context",
+      description:
+        "Monitor intent data sources, enrich accounts with buying signals, and alert SDRs with recommended outreach steps.",
+      icon: <Zap className="h-5 w-5" />,
+    },
+    {
+      text: "Generate nurture sequences by persona",
+      description:
+        "When a contact’s persona is identified, automatically enroll them into a tailored nurture flow with emails and retargeting audiences.",
+      icon: <Users className="h-5 w-5" />,
+    },
+  ],
+  Operations: [
+    {
+      text: "Auto-create tickets for failed jobs and assign owners",
+      description:
+        "Monitor system failures, open tickets in the ops queue with logs attached, and notify the right on-call owner.",
+      icon: <Wrench className="h-5 w-5" />,
+    },
+    {
+      text: "Daily KPI rollups to leadership",
+      description:
+        "Aggregate operational metrics each morning, generate a summary, and send it to stakeholders via email and Slack.",
+      icon: <FileText className="h-5 w-5" />,
+    },
+    {
+      text: "Intake form routing for internal requests",
+      description:
+        "Collect requests from an intake form, categorize them, and route to the correct team with SLAs and due dates.",
+      icon: <Package className="h-5 w-5" />,
+    },
+    {
+      text: "Vendor onboarding workflow",
+      description:
+        "When a new vendor is added, trigger security reviews, contract approvals, and account provisioning tasks automatically.",
+      icon: <Briefcase className="h-5 w-5" />,
+    },
+    {
+      text: "Inventory threshold alerts and purchase orders",
+      description:
+        "Watch inventory levels, alert when thresholds are crossed, and auto-create purchase orders in the ERP for approvals.",
+      icon: <ShoppingCart className="h-5 w-5" />,
+    },
+    {
+      text: "Service outage playbooks",
+      description:
+        "On incident creation, spin up a command channel, invite responders, share the runbook, and track comms to customers.",
+      icon: <AlertCircle className="h-5 w-5" />,
+    },
+  ],
+  "Finance & Accounting": [
+    {
+      text: "Auto-categorize expenses from receipts",
+      description:
+        "Pull receipts from email, extract data, categorize expenses based on rules, and push to the accounting system.",
+      icon: <CreditCard className="h-5 w-5" />,
+    },
+    {
+      text: "Monthly close checklist automation",
+      description:
+        "Generate close checklists, assign owners, pull trial balances, and remind assignees as deadlines approach.",
+      icon: <FileText className="h-5 w-5" />,
+    },
+    {
+      text: "Invoice approvals and payments",
+      description:
+        "Route invoices for approval based on amount and department, then push approved invoices to payments and update status.",
+      icon: <Package className="h-5 w-5" />,
+    },
+    {
+      text: "Revenue recognition scheduling",
+      description:
+        "When new contracts are signed, generate rev rec schedules, sync to the ledger, and alert finance of anomalies.",
+      icon: <Calendar className="h-5 w-5" />,
+    },
+    {
+      text: "Budget vs actuals variance alerts",
+      description:
+        "Compare actuals to budget monthly, highlight variances beyond thresholds, and notify budget owners with context.",
+      icon: <AlertCircle className="h-5 w-5" />,
+    },
+    {
+      text: "Cash flow forecast refresh",
+      description:
+        "Pull bank balances and upcoming payables/receivables, refresh the cash flow model, and send a summary to finance leaders.",
+      icon: <Home className="h-5 w-5" />,
+    },
+  ],
+  "Human Resources": [
+    {
+      text: "New hire onboarding checklist and system access",
+      description:
+        "When an offer is accepted, trigger onboarding tasks, provision accounts, schedule orientation, and notify managers.",
+      icon: <Users className="h-5 w-5" />,
+    },
+    {
+      text: "Recruiting pipeline updates to hiring managers",
+      description:
+        "Sync applicant stage changes to hiring manager dashboards and send weekly summaries with bottlenecks.",
+      icon: <Briefcase className="h-5 w-5" />,
+    },
+    {
+      text: "Automate performance review reminders",
+      description:
+        "Start review cycles, notify reviewers, collect feedback forms, and follow up on overdue submissions.",
+      icon: <Calendar className="h-5 w-5" />,
+    },
+    {
+      text: "Offboarding with asset recovery",
+      description:
+        "When an offboarding is initiated, disable accounts, collect assets, update payroll, and notify stakeholders.",
+      icon: <Wrench className="h-5 w-5" />,
+    },
+    {
+      text: "Training compliance tracking",
+      description:
+        "Assign mandatory trainings, track completion, send reminders, and escalate overdue items to managers.",
+      icon: <GraduationCap className="h-5 w-5" />,
+    },
+    {
+      text: "Employee data sync across HRIS and payroll",
+      description:
+        "Keep employee records consistent across HRIS, payroll, and benefits platforms with automated updates.",
+      icon: <FileText className="h-5 w-5" />,
+    },
+  ],
+  "Customer Support": [
+    {
+      text: "Auto-triage tickets by sentiment and priority",
+      description:
+        "Analyze incoming tickets, tag them by sentiment and urgency, and route to the right queue with SLAs.",
+      icon: <Mail className="h-5 w-5" />,
+    },
+    {
+      text: "Surface similar resolved cases to agents",
+      description:
+        "When a ticket opens, fetch similar past cases and display suggested responses to the agent.",
+      icon: <SparklesIcon className="h-5 w-5" />,
+    },
+    {
+      text: "Escalation workflows to engineering",
+      description:
+        "Create linked engineering issues for escalations, sync status back to the helpdesk, and notify customers automatically.",
+      icon: <Code className="h-5 w-5" />,
+    },
+    {
+      text: "CSAT follow-up automation",
+      description:
+        "Send CSAT surveys post-resolution, alert managers on low scores, and open follow-up tasks for detractors.",
+      icon: <AlertCircle className="h-5 w-5" />,
+    },
+    {
+      text: "VIP support routing",
+      description:
+        "Detect VIP customers, prioritize their tickets, route to senior agents, and ensure response within defined SLAs.",
+      icon: <Users className="h-5 w-5" />,
+    },
+    {
+      text: "Proactive outreach on incident updates",
+      description:
+        "During incidents, send status updates to affected customers, log communications, and close the loop post-recovery.",
+      icon: <Calendar className="h-5 w-5" />,
+    },
+  ],
+  "IT & Engineering": [
+    {
+      text: "Access requests with approvals and provisioning",
+      description:
+        "Handle access requests via form, route approvals based on role, and provision accounts across systems automatically.",
+      icon: <Wrench className="h-5 w-5" />,
+    },
+    {
+      text: "CI/CD failure alerts with diagnostics",
+      description:
+        "On CI pipeline failures, collect logs, post a summary to Slack, create a ticket, and tag the owning team.",
+      icon: <Code className="h-5 w-5" />,
+    },
+    {
+      text: "Change management notifications",
+      description:
+        "When a change request is approved, notify stakeholders, schedule deployment windows, and update status pages.",
+      icon: <Calendar className="h-5 w-5" />,
+    },
+    {
+      text: "Security incident intake and routing",
+      description:
+        "Standardize security incident intake, auto-assign based on severity, and kick off investigation checklists.",
+      icon: <AlertCircle className="h-5 w-5" />,
+    },
+    {
+      text: "Asset lifecycle tracking",
+      description:
+        "Track device assignments, warranty status, and refresh cycles; create tasks before warranty expiration.",
+      icon: <Package className="h-5 w-5" />,
+    },
+    {
+      text: "Monitor error spikes and open tickets",
+      description:
+        "Detect error spikes in observability tools, create tickets with context, and alert the on-call engineer.",
+      icon: <Zap className="h-5 w-5" />,
+    },
+  ],
+  "Product Management": [
+    {
+      text: "Aggregate user feedback into themes",
+      description:
+        "Collect feedback from support, sales, and surveys, cluster themes, and push summaries to the roadmap board.",
+      icon: <Users className="h-5 w-5" />,
+    },
+    {
+      text: "Beta program enrollment and follow-up",
+      description:
+        "Enroll eligible users into beta programs, send onboarding guides, and collect structured feedback automatically.",
+      icon: <Mail className="h-5 w-5" />,
+    },
+    {
+      text: "Release notes automation",
+      description:
+        "Generate release notes from merged PRs, format by user impact, and publish to docs and email lists.",
+      icon: <FileText className="h-5 w-5" />,
+    },
+    {
+      text: "Feature flag rollout coordination",
+      description:
+        "When enabling a flag, notify stakeholders, schedule gradual rollout, and monitor metrics with alerts.",
+      icon: <SparklesIcon className="h-5 w-5" />,
+    },
+    {
+      text: "Customer interview scheduling",
+      description:
+        "Identify target customers, send invitations, schedule interviews, and log notes back to the CRM.",
+      icon: <Calendar className="h-5 w-5" />,
+    },
+    {
+      text: "Roadmap dependency tracking",
+      description:
+        "Track dependencies across teams, alert when timelines slip, and update roadmap artifacts automatically.",
+      icon: <Briefcase className="h-5 w-5" />,
+    },
+  ],
+};
+
+const COMBO_USE_CASES: Record<string, Array<{ text: string; description: string; icon: React.ReactNode }>> = {
+  "Retail & E-commerce|Marketing": [
+    {
+      text: "Launch promo campaigns from product drops",
+      description:
+        "When a new product goes live, auto-create launch emails, paid ads, and social posts with SKU-specific creatives and inventory-aware messaging.",
+      icon: <SparklesIcon className="h-5 w-5" />,
+    },
+    {
+      text: "Recover high-value carts with tailored offers",
+      description:
+        "Detect abandoned carts over a set value, segment by customer tier, and trigger SMS/email with personalized bundles and limited-time offers.",
+      icon: <CreditCard className="h-5 w-5" />,
+    },
+    {
+      text: "Creator/UCG sourcing from top products",
+      description:
+        "Identify top-selling SKUs weekly, request UGC from recent buyers, route approvals, and schedule social placements by channel.",
+      icon: <Users className="h-5 w-5" />,
+    },
+    {
+      text: "Merch feed to ads with live availability",
+      description:
+        "Sync product availability to ad platforms, pause ads for out-of-stock variants, and boost budget on high-margin SKUs automatically.",
+      icon: <Package className="h-5 w-5" />,
+    },
+    {
+      text: "Loyalty nudges by cohort",
+      description:
+        "Cohort customers by LTV and category, send replenishment and cross-sell offers with predicted next-best product suggestions.",
+      icon: <Mail className="h-5 w-5" />,
+    },
+    {
+      text: "Promo performance pulse",
+      description:
+        "Roll up campaign ROAS, CAC, and conversion by channel each morning; alert when promo codes over-discount or margin erodes.",
+      icon: <FileText className="h-5 w-5" />,
+    },
+  ],
+  "Healthcare|Marketing": [
+    {
+      text: "Localized service-line campaigns",
+      description:
+        "Launch geo-targeted ads for service lines (orthopedics, cardiology), using eligibility rules and location-specific provider availability.",
+      icon: <MapPin className="h-5 w-5" />,
+    },
+    {
+      text: "No-show reduction drips",
+      description:
+        "Trigger SMS/email reminders with prep instructions based on appointment type, track confirmations, and escalate to call center for high-risk no-shows.",
+      icon: <Calendar className="h-5 w-5" />,
+    },
+    {
+      text: "HIPAA-safe lead intake routing",
+      description:
+        "Ingest web leads, scrub PHI from marketing systems, and route to the CRM or patient access team with consent tracking.",
+      icon: <ShieldCheck className="h-5 w-5" />,
+    },
+    {
+      text: "Provider spotlight nurture",
+      description:
+        "Enroll prospects into condition-specific education drips, slot provider intro videos, and hand off warm leads to scheduling.",
+      icon: <Video className="h-5 w-5" />,
+    },
+    {
+      text: "Reputation management by location",
+      description:
+        "Monitor reviews by clinic, open tickets on low scores, and trigger personalized outreach to recover detractors.",
+      icon: <AlertCircle className="h-5 w-5" />,
+    },
+    {
+      text: "Referral partner engagement",
+      description:
+        "Track referral sources, send performance summaries to partners, and trigger co-branded outreach for top-performing practices.",
+      icon: <Briefcase className="h-5 w-5" />,
+    },
+  ],
+  "Construction|Marketing": [
+    {
+      text: "Bid follow-up cadences",
+      description:
+        "When a bid is submitted, enroll the account in a staged follow-up cadence with project-type-specific collateral and references.",
+      icon: <Hammer className="h-5 w-5" />,
+    },
+    {
+      text: "Project win announcements",
+      description:
+        "On project award, publish a case-study teaser, update the project map, and push social posts tailored to region and vertical.",
+      icon: <MapPin className="h-5 w-5" />,
+    },
+    {
+      text: "Lead qualification by project scope",
+      description:
+        "Score inbound leads using scope, budget, and timeline; route high-fit commercial vs. residential to the right team automatically.",
+      icon: <CheckCircle2 className="h-5 w-5" />,
+    },
+    {
+      text: "Equipment availability signals",
+      description:
+        "Publish weekly availability for key equipment, auto-update landing pages, and notify target accounts in active cycles.",
+      icon: <Wrench className="h-5 w-5" />,
+    },
+    {
+      text: "Safety and compliance storytelling",
+      description:
+        "Auto-generate content featuring safety milestones and certifications for bids in regulated segments; push to email and LinkedIn.",
+      icon: <ShieldCheck className="h-5 w-5" />,
+    },
+    {
+      text: "Jobsite progress highlights",
+      description:
+        "Ingest site photos, select highlights, and send weekly visual updates to stakeholders segmented by project phase.",
+      icon: <Camera className="h-5 w-5" />,
+    },
+  ],
 };
 
 export default function NewAutomationPage() {
@@ -402,12 +843,19 @@ export default function NewAutomationPage() {
   const toast = useToast();
   const [processDescription, setProcessDescription] = useState("");
   const [selectedIndustry, setSelectedIndustry] = useState<string>("");
+  const [selectedDepartment, setSelectedDepartment] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isExpanding, setIsExpanding] = useState(false);
   const [originalDescription, setOriginalDescription] = useState<string>("");
   const [showUndo, setShowUndo] = useState(false);
   const [showExpandOptions, setShowExpandOptions] = useState(false);
+  const [suggestedUseCases, setSuggestedUseCases] = useState<Array<{ text: string; description: string; icon: React.ReactNode }>>([]);
+  const [isSuggestingUseCases, setIsSuggestingUseCases] = useState(false);
+  const [suggestUseCasesError, setSuggestUseCasesError] = useState<string | null>(null);
+  const [suggestionsPage, setSuggestionsPage] = useState(0);
+  const [suggestionCache, setSuggestionCache] = useState<Record<string, Array<{ text: string; description: string; icon: React.ReactNode }>>>({});
+  const selectionKey = `${selectedIndustry || "none"}|${selectedDepartment || "none"}`;
 
   const handleAIExpand = async (level: ExpansionLevel) => {
     if (!processDescription.trim()) {
@@ -456,8 +904,8 @@ export default function NewAutomationPage() {
       return;
     }
 
-    if (!selectedIndustry) {
-      setError("Please select an industry");
+    if (!selectedIndustry && !selectedDepartment) {
+      setError("Please select an industry or department");
       return;
     }
 
@@ -471,7 +919,7 @@ export default function NewAutomationPage() {
         body: JSON.stringify({
           automationType: DEFAULT_AUTOMATION_TYPE,
           processDescription: processDescription.trim(),
-          industry: selectedIndustry,
+          industry: selectedIndustry || selectedDepartment,
         }),
       });
 
@@ -504,179 +952,391 @@ export default function NewAutomationPage() {
     }
   };
 
+  const handleAISuggestUseCases = async () => {
+    if ((!selectedIndustry && !selectedDepartment) || isSuggestingUseCases) {
+      return;
+    }
+
+    setIsSuggestingUseCases(true);
+    setSuggestUseCasesError(null);
+
+    try {
+      const response = await fetch("/api/ai/suggest-use-cases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          context: [
+            selectedIndustry ? `Industry: ${selectedIndustry}` : null,
+            selectedDepartment ? `Department: ${selectedDepartment}` : null,
+          ]
+            .filter(Boolean)
+            .join(" | "),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error ?? "Failed to fetch suggestions");
+      }
+
+      const useCases =
+        Array.isArray(data?.useCases) && data.useCases.length > 0
+          ? data.useCases
+          : [];
+
+      const normalized = useCases.slice(0, 6).map((item: any, index: number) => ({
+        text: typeof item.text === "string" ? item.text : `Suggested workflow ${index + 1}`,
+        description:
+          typeof item.description === "string"
+            ? item.description
+            : "A suggested workflow tailored to your selection.",
+        icon: <SparklesIcon className="h-5 w-5 text-[#E43632]" />,
+      }));
+
+      setSuggestedUseCases((prev) => {
+        const merged = [...prev, ...normalized];
+        setSuggestionCache((cache) => ({ ...cache, [selectionKey]: merged }));
+        const nextPage = Math.max(0, Math.ceil(merged.length / SUGGESTIONS_PER_PAGE) - 1);
+        setSuggestionsPage(nextPage);
+        return merged;
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to fetch suggestions";
+      setSuggestUseCasesError(message);
+      toast({
+        title: "Unable to fetch suggestions",
+        description: message,
+        variant: "error",
+      });
+    } finally {
+      setIsSuggestingUseCases(false);
+    }
+  };
+
+  const baseUseCases = useMemo(() => {
+    const comboKey = `${selectedIndustry || ""}|${selectedDepartment || ""}`;
+    const combo = COMBO_USE_CASES[comboKey];
+    if (combo && combo.length > 0) {
+      return combo.slice(0, 6);
+    }
+
+    const departmentUseCases = selectedDepartment ? COMMON_USE_CASES[selectedDepartment] ?? [] : [];
+    const industryUseCases = selectedIndustry ? COMMON_USE_CASES[selectedIndustry] ?? [] : [];
+    const combined: typeof departmentUseCases = [];
+    const seen = new Set<string>();
+    let d = 0;
+    let i = 0;
+
+    // Interleave department and industry to ensure both influence the set
+    while (combined.length < 6 && (d < departmentUseCases.length || i < industryUseCases.length)) {
+      if (d < departmentUseCases.length) {
+        const item = departmentUseCases[d++];
+        if (!seen.has(item.text)) {
+          seen.add(item.text);
+          combined.push(item);
+        }
+      }
+      if (combined.length >= 6) break;
+      if (i < industryUseCases.length) {
+        const item = industryUseCases[i++];
+        if (!seen.has(item.text)) {
+          seen.add(item.text);
+          combined.push(item);
+        }
+      }
+    }
+
+    return combined;
+  }, [selectedDepartment, selectedIndustry]);
+
+  const totalSuggestionPages = Math.max(1, Math.ceil(suggestedUseCases.length / SUGGESTIONS_PER_PAGE));
+  const currentSuggestionsPage = Math.min(suggestionsPage, totalSuggestionPages - 1);
+  const paginatedSuggestions = suggestedUseCases.slice(
+    currentSuggestionsPage * SUGGESTIONS_PER_PAGE,
+    currentSuggestionsPage * SUGGESTIONS_PER_PAGE + SUGGESTIONS_PER_PAGE
+  );
+
+  const availableUseCases = suggestedUseCases.length > 0 ? paginatedSuggestions : baseUseCases;
+
   return (
-    <div className="flex h-full items-center justify-center bg-gray-50 px-4 py-10">
-      <div className="w-full max-w-4xl">
-        <Card className="w-full">
-          <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>Describe Your Process</CardTitle>
-              <CardDescription>
-                Provide as many details as possible. The more information you share, the better we can help.
-              </CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {error ? (
-              <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                <AlertCircle className="h-4 w-4" />
-                <span>{error}</span>
-              </div>
-            ) : null}
+    <div className="relative flex min-h-screen items-center justify-center bg-gradient-to-br bg-[radial-gradient(circle_at_10%_20%,rgba(228,54,50,0.08),transparent_35%),radial-gradient(circle_at_80%_0%,rgba(59,130,246,0.08),transparent_30%),radial-gradient(circle_at_50%_80%,rgba(16,185,129,0.08),transparent_25%)] from-slate-50 via-white to-rose-50 px-4 py-10">
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/60 via-transparent to-white/40 animate-[pulse_12s_ease-in-out_infinite]" aria-hidden />
+      <div className="relative w-full max-w-4xl space-y-6">
+        <div className="space-y-2 text-center">
+          <h1 className="text-3xl md:text-4xl font-bold text-gray-900">Describe Your Process</h1>
+          <p className="text-base text-gray-600">
+            Provide as many details as possible. The more information you share, the better we can help.
+          </p>
+        </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700" htmlFor="industry">
-                Industry *
-              </label>
-              <Select value={selectedIndustry} onValueChange={setSelectedIndustry} required>
-                <SelectTrigger id="industry" className="bg-white">
-                  <SelectValue placeholder="Select your industry" />
-                </SelectTrigger>
-                <SelectContent className="bg-white">
-                  {INDUSTRIES.map((industry) => (
-                    <SelectItem 
-                      key={industry} 
-                      value={industry}
-                      className="hover:bg-gray-100 focus:bg-gray-100 data-[highlighted]:bg-gray-100"
-                    >
-                      {industry}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {selectedIndustry && COMMON_USE_CASES[selectedIndustry] && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-700">Most common use cases</label>
-                <div className="grid grid-cols-2 gap-3">
-                  {COMMON_USE_CASES[selectedIndustry].map((useCase, index) => (
-                    <button
-                      key={index}
-                      type="button"
-                      onClick={() => setProcessDescription(useCase.description)}
-                      className="text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200 hover:border-[#E43632] transition-all group flex items-start gap-3"
-                    >
-                      <div className="text-[#E43632] shrink-0 mt-0.5">
-                        {useCase.icon}
-                      </div>
-                      <div className="text-sm font-medium text-gray-900 group-hover:text-[#E43632] transition-colors">
-                        {useCase.text}
-                      </div>
-                    </button>
-                  ))}
+        <Card className="w-full shadow-xl shadow-gray-200/60">
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-6 pt-8">
+              {error ? (
+                <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  <AlertCircle className="h-4 w-4" />
+                  <span>{error}</span>
                 </div>
-                <p className="text-xs text-gray-500">
-                  Click any use case above to auto-fill the form, or describe your own process below.
-                </p>
-              </div>
-            )}
+              ) : null}
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700" htmlFor="process">
-                Process Description *
-              </label>
-              <div className="relative">
-                <Textarea
-                  id="process"
-                  placeholder="Describe the workflow you want to automate. Include what triggers it, what steps are involved, what systems you use, and what the end result should be..."
-                  value={processDescription}
-                  onChange={(event) => {
-                    setProcessDescription(event.target.value);
-                    setShowUndo(false);
-                    setShowExpandOptions(false);
-                  }}
-                  rows={8}
-                  required
-                  className="resize-none bg-white pb-12"
-                />
-                {processDescription.trim() && (
-                  <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                    {showUndo ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-700" htmlFor="industry">
+                    Industry
+                  </label>
+                  <Select
+                    value={selectedIndustry}
+                    onValueChange={(value) => {
+                      setSelectedIndustry(value);
+                      const nextKey = `${value || "none"}|${selectedDepartment || "none"}`;
+                      const cached = suggestionCache[nextKey] ?? [];
+                      setSuggestedUseCases(cached);
+                      setSuggestionsPage(0);
+                      setSuggestUseCasesError(null);
+                    }}
+                  >
+                    <SelectTrigger id="industry" className="bg-white">
+                      <SelectValue placeholder="Select an industry" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white">
+                      <SelectGroup>
+                        <SelectLabel>By industry</SelectLabel>
+                        {INDUSTRIES.map((industry) => (
+                          <SelectItem
+                            key={industry}
+                            value={industry}
+                            className="hover:bg-gray-100 focus:bg-gray-100 data-[highlighted]:bg-gray-100"
+                          >
+                            {industry}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-700" htmlFor="department">
+                    Department
+                  </label>
+                  <Select
+                    value={selectedDepartment}
+                    onValueChange={(value) => {
+                      setSelectedDepartment(value);
+                      const nextKey = `${selectedIndustry || "none"}|${value || "none"}`;
+                      const cached = suggestionCache[nextKey] ?? [];
+                      setSuggestedUseCases(cached);
+                      setSuggestionsPage(0);
+                      setSuggestUseCasesError(null);
+                    }}
+                  >
+                    <SelectTrigger id="department" className="bg-white">
+                      <SelectValue placeholder="Select a department" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white">
+                      <SelectGroup>
+                        <SelectLabel>By department</SelectLabel>
+                        {DEPARTMENTS.map((department) => (
+                          <SelectItem
+                            key={department}
+                            value={department}
+                            className="hover:bg-gray-100 focus:bg-gray-100 data-[highlighted]:bg-gray-100"
+                          >
+                            {department}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {selectedIndustry && availableUseCases.length > 0 && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-700">Most common use cases</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {availableUseCases.map((useCase, index) => (
+                      <button
+                        key={index}
+                        type="button"
+                        onClick={() => setProcessDescription(useCase.description)}
+                        className="text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200 hover:border-[#E43632] transition-all group flex items-start gap-3"
+                      >
+                        <div className="text-[#E43632] shrink-0 mt-0.5">
+                          {useCase.icon}
+                        </div>
+                        <div className="text-sm font-medium text-gray-900 group-hover:text-[#E43632] transition-colors">
+                          {useCase.text}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs text-gray-500">
+                      Click any use case above to auto-fill the form, or describe your own process below.
+                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {suggestUseCasesError ? (
+                        <span className="text-[11px] text-red-600">{suggestUseCasesError}</span>
+                      ) : null}
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => {
-                          setProcessDescription(originalDescription);
-                          setShowUndo(false);
-                          setShowExpandOptions(false);
-                        }}
-                        className="h-8 text-xs bg-white hover:bg-gray-50"
+                        onClick={handleAISuggestUseCases}
+                        disabled={isSuggestingUseCases}
+                        className="h-8 text-xs"
                       >
-                        <Undo2 className="h-3.5 w-3.5 mr-1" />
-                        Undo
+                        {isSuggestingUseCases ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                            AI suggesting...
+                          </>
+                        ) : (
+                          <>
+                            <SparklesIcon className="h-3.5 w-3.5 mr-2 text-[#E43632]" />
+                            AI suggest more
+                          </>
+                        )}
                       </Button>
-                    ) : (
-                      <div className="relative">
+
+                      {suggestedUseCases.length > SUGGESTIONS_PER_PAGE ? (
+                        <div className="flex items-center gap-2 text-[11px] text-gray-600">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs"
+                            disabled={currentSuggestionsPage === 0}
+                            onClick={() => setSuggestionsPage((p) => Math.max(0, p - 1))}
+                          >
+                            Previous
+                          </Button>
+                          <span>
+                            Page {currentSuggestionsPage + 1} of {totalSuggestionPages}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs"
+                            disabled={currentSuggestionsPage >= totalSuggestionPages - 1}
+                            onClick={() =>
+                              setSuggestionsPage((p) => Math.min(totalSuggestionPages - 1, p + 1))
+                            }
+                          >
+                            Next
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700" htmlFor="process">
+                  Process Description *
+                </label>
+                <div className="relative">
+                  <Textarea
+                    id="process"
+                    placeholder="Describe the workflow you want to automate. Include what triggers it, what steps are involved, what systems you use, and what the end result should be..."
+                    value={processDescription}
+                    onChange={(event) => {
+                      setProcessDescription(event.target.value);
+                      setShowUndo(false);
+                      setShowExpandOptions(false);
+                    }}
+                    rows={8}
+                    required
+                    className="resize-none bg-white pb-12"
+                  />
+                  {processDescription.trim() && (
+                    <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                      {showUndo ? (
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
-                          onClick={() => setShowExpandOptions((prev) => !prev)}
-                          disabled={isExpanding}
+                          onClick={() => {
+                            setProcessDescription(originalDescription);
+                            setShowUndo(false);
+                            setShowExpandOptions(false);
+                          }}
                           className="h-8 text-xs bg-white hover:bg-gray-50"
                         >
-                          {isExpanding ? (
-                            <>
-                              <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                              Expanding...
-                            </>
-                          ) : (
-                            <>
-                              <SparklesIcon className="h-3.5 w-3.5 mr-1 text-[#E43632]" />
-                              AI Expand It
-                            </>
-                          )}
+                          <Undo2 className="h-3.5 w-3.5 mr-1" />
+                          Undo
                         </Button>
+                      ) : (
+                        <div className="relative">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setShowExpandOptions((prev) => !prev)}
+                            disabled={isExpanding}
+                            className="h-8 text-xs bg-white hover:bg-gray-50"
+                          >
+                            {isExpanding ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                Expanding...
+                              </>
+                            ) : (
+                              <>
+                                <SparklesIcon className="h-3.5 w-3.5 mr-1 text-[#E43632]" />
+                                AI Expand It
+                              </>
+                            )}
+                          </Button>
 
-                        {showExpandOptions ? (
-                          <div className="absolute bottom-11 right-0 w-72 rounded-lg border border-gray-200 bg-white shadow-lg">
-                            <div className="p-2 space-y-1">
-                              {EXPANSION_OPTIONS.map((option) => (
-                                <button
-                                  key={option.id}
-                                  type="button"
-                                  disabled={isExpanding}
-                                  onClick={() => handleAIExpand(option.id)}
-                                  className="w-full rounded-md px-3 py-2 text-left hover:bg-gray-100 focus:outline-none disabled:opacity-60"
-                                >
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-sm font-medium text-gray-900">{option.title}</span>
-                                    <span className="text-[11px] uppercase text-gray-500">{option.id}</span>
-                                  </div>
-                                  <p className="text-xs text-gray-600 mt-1">{option.description}</p>
-                                </button>
-                              ))}
+                          {showExpandOptions ? (
+                            <div className="absolute bottom-11 right-0 w-72 rounded-lg border border-gray-200 bg-white shadow-lg">
+                              <div className="p-2 space-y-1">
+                                {EXPANSION_OPTIONS.map((option) => (
+                                  <button
+                                    key={option.id}
+                                    type="button"
+                                    disabled={isExpanding}
+                                    onClick={() => handleAIExpand(option.id)}
+                                    className="w-full rounded-md px-3 py-2 text-left hover:bg-gray-100 focus:outline-none disabled:opacity-60"
+                                  >
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-sm font-medium text-gray-900">{option.title}</span>
+                                      <span className="text-[11px] uppercase text-gray-500">{option.id}</span>
+                                    </div>
+                                    <p className="text-xs text-gray-600 mt-1">{option.description}</p>
+                                  </button>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    )}
-                  </div>
-                )}
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500">
+                  Be as detailed as possible. Include systems, tools, people involved, and desired outcomes.
+                </p>
               </div>
-              <p className="text-xs text-gray-500">
-                Be as detailed as possible. Include systems, tools, people involved, and desired outcomes.
-              </p>
-            </div>
 
-            <div className="flex gap-3">
-              <Button type="submit" className="flex-1 bg-[#E43632] hover:bg-[#C12E2A] text-white" disabled={submitting}>
-                {submitting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  "Create Automation"
-                )}
-              </Button>
-            </div>
-          </form>
+              <div className="flex gap-3">
+                <Button type="submit" className="flex-1 bg-[#E43632] hover:bg-[#C12E2A] text-white" disabled={submitting}>
+                  {submitting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Creating...
+                    </>
+                  ) : (
+                    "Create Automation"
+                  )}
+                </Button>
+              </div>
+            </form>
         </CardContent>
       </Card>
       </div>

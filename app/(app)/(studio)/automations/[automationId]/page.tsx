@@ -331,6 +331,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [isOptimizingFlow, setIsOptimizingFlow] = useState(false);
   const [isRequestingSuggestions, setIsRequestingSuggestions] = useState(false);
   const [suggestionStatus, setSuggestionStatus] = useState<string | null>(null);
+  const [isSwitchingVersion, setIsSwitchingVersion] = useState(false);
   const completionRef = useRef<ReturnType<typeof getBlueprintCompletionState> | null>(null);
   const preserveSelectionRef = useRef(false);
   const synthesisTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -492,6 +493,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     void fetchVersionMetrics(selectedVersionId);
   }, [fetchVersionMetrics, selectedVersionId]);
 
+  useEffect(() => {
+    if (isSwitchingVersion && !metricsLoading && !recentActivityLoading) {
+      setIsSwitchingVersion(false);
+    }
+  }, [isSwitchingVersion, metricsLoading, recentActivityLoading]);
+
   const selectedVersion = useMemo(() => {
     if (!automation || !selectedVersionId) {
       return automation?.versions[0] ?? null;
@@ -559,6 +566,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     if (!confirmDiscardBlueprintChanges()) {
       return;
     }
+    setIsSwitchingVersion(true);
     setSelectedVersionId(versionId);
     const version = automation?.versions.find((v) => v.id === versionId);
     setNotes(version?.intakeNotes ?? "");
@@ -1557,6 +1565,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             onBlueprintRefresh={refreshAutomationPreservingSelection}
             injectedMessage={injectedChatMessage}
             onInjectedMessageConsumed={() => setInjectedChatMessage(null)}
+            onOptimizeWorkflow={handleOptimizeFlow}
+            onSuggestNextSteps={handleSuggestNextSteps}
+            isOptimizingWorkflow={isOptimizingFlow}
+            isRequestingSuggestions={isRequestingSuggestions}
+            suggestionStatus={suggestionStatus}
           />
         </div>
 
@@ -1605,43 +1618,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
               <CheckSquare className="h-3.5 w-3.5 mr-1.5" />
               Tasks
             </Button>
-          </div>
-
-          <div className="absolute top-4 right-4 z-50 flex flex-wrap gap-2">
-            {canvasViewMode === "flowchart" && (
-              <>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={handleOptimizeFlow}
-                  disabled={isOptimizingFlow || !selectedVersion}
-                  className="text-xs font-semibold"
-                >
-                  {isOptimizingFlow ? (
-                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                  ) : (
-                    <RefreshCw className="mr-2 h-3 w-3" />
-                  )}
-                  Optimize flow
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={handleSuggestNextSteps}
-                  disabled={isRequestingSuggestions || !selectedVersion}
-                  className="text-xs font-semibold"
-                >
-                  {isRequestingSuggestions ? (
-                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                  ) : (
-                    <Lightbulb className="mr-2 h-3 w-3" />
-                  )}
-                  Suggest next steps
-                </Button>
-                {suggestionStatus && (
-                  <p className="w-full text-[11px] text-gray-500">{suggestionStatus}</p>
-                )}
-              </>
-            )}
           </div>
 
           {/* View Content */}
@@ -1714,6 +1690,15 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             />
           </div>
         )}
+
+        {isSwitchingVersion ? (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/85 backdrop-blur-sm">
+            <div className="flex items-center gap-3 text-sm font-semibold text-gray-700">
+              <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
+              Loading version…
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1753,6 +1738,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Refresh
               </Button>
+              {(isSwitchingVersion || metricsLoading || recentActivityLoading) && (
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                  <span>Loading version…</span>
+                </div>
+              )}
             </div>
             <div className="flex h-full gap-1">
               {AUTOMATION_TABS.map((tab) => (
@@ -2013,7 +2004,7 @@ function AutomationHeader({
           className="h-9 text-xs font-bold bg-[#0A0A0A] hover:bg-gray-900 text-white shadow-lg shadow-gray-900/10 transition-all hover:-translate-y-0.5"
         >
           <Edit3 size={14} className="mr-2" />
-          Edit Blueprint
+          Edit Workflow
         </Button>
       </div>
     </section>
