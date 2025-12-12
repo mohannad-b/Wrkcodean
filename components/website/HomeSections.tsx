@@ -412,7 +412,7 @@ export const TrustSection = () => {
                    size="lg"
                    className="h-16 rounded-full bg-[#E43632] px-10 text-lg font-bold text-white shadow-[0_0_30px_-5px_rgba(228,54,50,0.5)] hover:bg-[#C12E2A]"
                  >
-                    <Link href="/pricing">Start designing my workflow</Link>
+                    <Link href="/auth/login?returnTo=/workspace-setup">Start designing my workflow</Link>
                  </Button>
                  <Button
                     asChild

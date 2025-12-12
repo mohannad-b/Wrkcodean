@@ -1,23 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import {
-  Send,
-  Paperclip,
-  Monitor,
-  CheckCircle2,
-  ArrowRight,
-  Zap,
-  FileText,
-  Split,
-  Users,
-  Globe,
-  MessageSquare,
-  FileStack,
-  Video,
-  Image as ImageIcon,
-  MousePointerClick,
-} from "lucide-react";
+import { Send, CheckCircle2, ArrowRight, Zap, FileText, Split, Users, Globe, MessageSquare, FileStack, Video, Image as ImageIcon, MousePointerClick } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -25,6 +9,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import dynamic from "next/dynamic";
 import { StudioInspector } from "@/components/automations/StudioInspector";
+import { SecureUploader } from "@/components/files/SecureUploader";
 
 // Dynamically import StudioCanvas and ReactFlow hooks to keep initial bundle light
 const StudioCanvas = dynamic(
@@ -353,13 +338,16 @@ export function OnboardingIntake({ onNext }: { onNext: () => void }) {
 
           <div className="p-4 border-t border-gray-100 bg-white space-y-3">
             {status !== "complete" && (
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" className="flex-1 text-[10px] h-7">
-                  <Paperclip size={12} className="mr-1" /> File
-                </Button>
-                <Button variant="outline" size="sm" className="flex-1 text-[10px] h-7">
-                  <Monitor size={12} className="mr-1" /> Record
-                </Button>
+              <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                <p className="text-[11px] font-semibold text-gray-700 mb-2">Attach requirements or link</p>
+                <SecureUploader
+                  purpose="automation_doc"
+                  resourceType="onboarding"
+                  resourceId="intake"
+                  accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,video/*"
+                  maxSizeMb={25}
+                  title="Onboarding Requirements"
+                />
               </div>
             )}
             <div className="relative">

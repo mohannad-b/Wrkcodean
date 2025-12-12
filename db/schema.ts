@@ -62,6 +62,10 @@ export const users = pgTable(
     title: text("title"),
     avatarUrl: text("avatar_url"),
     timezone: text("timezone"),
+    phone: text("phone"),
+    phoneVerified: integer("phone_verified").notNull().default(0),
+    tosAcceptedAt: timestamp("tos_accepted_at", { withTimezone: true }),
+    tosVersion: text("tos_version"),
     notificationPreference: notificationPreferenceEnum("notification_preference").notNull().default("all"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -228,28 +232,63 @@ export const automationVersionMetrics = pgTable(
   })
 );
 
-export const automationVersionFiles = pgTable(
-  "automation_version_files",
+export const files = pgTable(
+  "files",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    automationVersionId: uuid("automation_version_id")
-      .notNull()
-      .references(() => automationVersions.id, { onDelete: "cascade" }),
-    filename: text("filename").notNull(),
-    mimeType: text("mime_type").notNull(),
-    sizeBytes: integer("size_bytes").notNull(),
-    storageKey: text("storage_key").notNull(),
-    storageUrl: text("storage_url"),
-    status: fileStatusEnum("status").notNull().default("pending"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    purpose: text("purpose").notNull().default("generic"),
+    resourceType: text("resource_type"),
+    resourceId: text("resource_id"),
+    title: text("title"),
+    latestVersion: integer("latest_version").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
-    tenantIdx: index("automation_version_files_tenant_idx").on(table.tenantId),
-    versionIdx: index("automation_version_files_version_idx").on(table.automationVersionId),
+    tenantIdx: index("files_tenant_idx").on(table.tenantId),
+    resourceIdx: index("files_resource_idx").on(table.resourceType, table.resourceId),
+  })
+);
+
+export const fileVersions = pgTable(
+  "file_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    fileId: uuid("file_id")
+      .notNull()
+      .references(() => files.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    filename: text("filename").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    checksumSha256: text("checksum_sha256").notNull(),
+    storageKey: text("storage_key").notNull(),
+    storageUrl: text("storage_url"),
+    source: text("source").notNull().default("upload"),
+    sourceUrl: text("source_url"),
+    encryption: jsonb("encryption")
+      .$type<{
+        algorithm: "aes-256-gcm";
+        iv: string;
+        authTag: string;
+        keyFingerprint: string;
+      }>()
+      .notNull(),
+    status: fileStatusEnum("status").notNull().default("uploaded"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantIdx: index("file_versions_tenant_idx").on(table.tenantId),
+    fileIdx: index("file_versions_file_idx").on(table.fileId),
+    fileVersionIdx: uniqueIndex("file_versions_unique_version").on(table.fileId, table.version),
   })
 );
 
@@ -500,7 +539,6 @@ export type User = typeof users.$inferSelect;
 export type Membership = typeof memberships.$inferSelect;
 export type Automation = typeof automations.$inferSelect;
 export type AutomationVersion = typeof automationVersions.$inferSelect;
-export type AutomationVersionFile = typeof automationVersionFiles.$inferSelect;
 export type AiJob = typeof aiJobs.$inferSelect;
 export type Project = typeof projects.$inferSelect;
 export type Quote = typeof quotes.$inferSelect;
@@ -508,6 +546,8 @@ export type CopilotMessage = typeof copilotMessages.$inferSelect;
 export type CopilotAnalysis = typeof copilotAnalyses.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Task = typeof tasks.$inferSelect;
+export type File = typeof files.$inferSelect;
+export type FileVersion = typeof fileVersions.$inferSelect;
 export type AutomationMetricConfig = typeof automationMetricConfigs.$inferSelect;
 export type AutomationVersionMetric = typeof automationVersionMetrics.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;

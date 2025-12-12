@@ -29,37 +29,32 @@ const withCache =
     return fn;
   });
 
+export class NoTenantMembershipError extends Error {
+  code = "NO_TENANT_MEMBERSHIP";
+
+  constructor(message = "No tenant membership found for current user.") {
+    super(message);
+    this.name = "NoTenantMembershipError";
+  }
+}
+
 export type AppSession = {
   userId: string;
   tenantId: string;
   roles: string[];
 };
 
-async function getMockSession(): Promise<AppSession> {
-  const tenantId = process.env.MOCK_TENANT_ID;
-  const userId = process.env.MOCK_USER_ID;
+export type Auth0UserProfile = {
+  auth0Id: string;
+  email: string;
+  name: string;
+  avatarUrl: string | null;
+};
 
-  if (!tenantId || !userId) {
-    throw new Error("MOCK_TENANT_ID and MOCK_USER_ID must be set when AUTH0_MOCK_ENABLED=true.");
-  }
-
-  const membershipRows = await db
-    .select({ role: memberships.role })
-    .from(memberships)
-    .where(and(eq(memberships.tenantId, tenantId), eq(memberships.userId, userId)));
-
-  if (membershipRows.length === 0) {
-    throw new Error("Mock membership not found. Seed the database with the mock user before continuing.");
-  }
-
-  return {
-    tenantId,
-    userId,
-    roles: membershipRows.map((row) => row.role),
-  };
-}
-
-async function getAuth0BackedSession(): Promise<AppSession> {
+export async function getOrCreateUserFromAuth0Session(): Promise<{
+  userRecord: typeof users.$inferSelect;
+  profile: Auth0UserProfile;
+}> {
   const session = await auth0.getSession();
 
   if (!session || !session.user) {
@@ -122,13 +117,52 @@ async function getAuth0BackedSession(): Promise<AppSession> {
     throw new Error("Unable to persist user record for the authenticated session.");
   }
 
+  return {
+    userRecord,
+    profile: {
+      auth0Id,
+      email,
+      name,
+      avatarUrl,
+    },
+  };
+}
+
+async function getMockSession(): Promise<AppSession> {
+  const tenantId = process.env.MOCK_TENANT_ID;
+  const userId = process.env.MOCK_USER_ID;
+
+  if (!tenantId || !userId) {
+    throw new Error("MOCK_TENANT_ID and MOCK_USER_ID must be set when AUTH0_MOCK_ENABLED=true.");
+  }
+
+  const membershipRows = await db
+    .select({ role: memberships.role })
+    .from(memberships)
+    .where(and(eq(memberships.tenantId, tenantId), eq(memberships.userId, userId)));
+
+  if (membershipRows.length === 0) {
+    throw new Error("Mock membership not found. Seed the database with the mock user before continuing.");
+  }
+
+  return {
+    tenantId,
+    userId,
+    roles: membershipRows.map((row) => row.role),
+  };
+}
+
+async function getAuth0BackedSession(): Promise<AppSession> {
+  const { userRecord } = await getOrCreateUserFromAuth0Session();
+
   let membershipRows = await db
     .select({ role: memberships.role, tenantId: memberships.tenantId })
     .from(memberships)
     .where(eq(memberships.userId, userRecord.id));
 
   if (membershipRows.length === 0) {
-    const fallbackTenantId = process.env.DEFAULT_TENANT_ID ?? process.env.MOCK_TENANT_ID ?? null;
+    const allowBackfill = process.env.ALLOW_DEFAULT_TENANT_BACKFILL === "true";
+    const fallbackTenantId = allowBackfill ? process.env.DEFAULT_TENANT_ID ?? process.env.MOCK_TENANT_ID ?? null : null;
 
     if (fallbackTenantId) {
       await db
@@ -148,15 +182,13 @@ async function getAuth0BackedSession(): Promise<AppSession> {
         .where(eq(memberships.userId, userRecord.id));
     }
 
-    if (!fallbackTenantId) {
-      throw new Error(
-        "No tenant membership found for current user and DEFAULT_TENANT_ID is not configured. Set DEFAULT_TENANT_ID or seed memberships before logging in."
-      );
+    if (!fallbackTenantId || membershipRows.length === 0) {
+      throw new NoTenantMembershipError();
     }
   }
 
   if (membershipRows.length === 0) {
-    throw new Error("No tenant membership found for current user. Please ask an admin to grant access.");
+    throw new NoTenantMembershipError();
   }
 
   const distinctTenants = new Set(membershipRows.map((row) => row.tenantId));

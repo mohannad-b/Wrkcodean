@@ -2,6 +2,8 @@
 
 -- Drop tables (if they exist) - clean slate first
 DROP TABLE IF EXISTS audit_logs CASCADE;
+DROP TABLE IF EXISTS file_versions CASCADE;
+DROP TABLE IF EXISTS files CASCADE;
 DROP TABLE IF EXISTS tasks CASCADE;
 DROP TABLE IF EXISTS messages CASCADE;
 DROP TABLE IF EXISTS copilot_analyses CASCADE;
@@ -9,7 +11,6 @@ DROP TABLE IF EXISTS copilot_messages CASCADE;
 DROP TABLE IF EXISTS quotes CASCADE;
 DROP TABLE IF EXISTS projects CASCADE;
 DROP TABLE IF EXISTS ai_jobs CASCADE;
-DROP TABLE IF EXISTS automation_version_files CASCADE;
 DROP TABLE IF EXISTS automation_versions CASCADE;
 DROP TABLE IF EXISTS automations CASCADE;
 DROP TABLE IF EXISTS memberships CASCADE;
@@ -149,22 +150,44 @@ CREATE TABLE automation_versions (
 CREATE INDEX automation_versions_tenant_idx ON automation_versions(tenant_id);
 CREATE INDEX automation_versions_status_idx ON automation_versions(status);
 
--- Automation Version Files
-CREATE TABLE automation_version_files (
+-- Files (generic, versioned)
+CREATE TABLE files (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  automation_version_id uuid NOT NULL REFERENCES automation_versions(id) ON DELETE CASCADE,
-  filename text NOT NULL,
-  mime_type text NOT NULL,
-  size_bytes integer NOT NULL,
-  storage_key text NOT NULL,
-  storage_url text,
-  status file_status NOT NULL DEFAULT 'pending',
+  created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  purpose text NOT NULL DEFAULT 'generic',
+  resource_type text,
+  resource_id text,
+  title text,
+  latest_version integer NOT NULL DEFAULT 1,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX automation_version_files_tenant_idx ON automation_version_files(tenant_id);
-CREATE INDEX automation_version_files_version_idx ON automation_version_files(automation_version_id);
+CREATE INDEX files_tenant_idx ON files(tenant_id);
+CREATE INDEX files_resource_idx ON files(resource_type, resource_id);
+
+-- File Versions (encrypted payload references)
+CREATE TABLE file_versions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  file_id uuid NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+  version integer NOT NULL,
+  filename text NOT NULL,
+  mime_type text NOT NULL,
+  size_bytes integer NOT NULL,
+  checksum_sha256 text NOT NULL,
+  storage_key text NOT NULL,
+  storage_url text,
+  source text NOT NULL DEFAULT 'upload',
+  source_url text,
+  encryption jsonb NOT NULL,
+  status file_status NOT NULL DEFAULT 'uploaded',
+  created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT file_versions_unique_version UNIQUE (file_id, version)
+);
+CREATE INDEX file_versions_tenant_idx ON file_versions(tenant_id);
+CREATE INDEX file_versions_file_idx ON file_versions(file_id);
 
 -- AI Jobs
 CREATE TABLE ai_jobs (

@@ -41,7 +41,6 @@ const MAX_AVATAR_FILE_BYTES = MAX_AVATAR_FILE_MB * 1024 * 1024;
 type EditableFormState = {
   name: string;
   title: string;
-  avatarUrl: string;
   timezone: string;
   notificationPreference: (typeof NOTIFICATION_PREFERENCES)[number];
 };
@@ -52,7 +51,6 @@ function createFormState(profile: UserProfile): EditableFormState {
   return {
     name: profile.name,
     title: profile.title ?? "",
-    avatarUrl: profile.avatarUrl ?? "",
     timezone: profile.timezone ?? "",
     notificationPreference: profile.notificationPreference,
   };
@@ -75,6 +73,10 @@ export function ProfileScreen() {
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);
   const [tempAvatarPreviewUrl, setTempAvatarPreviewUrl] = useState<string | null>(null);
+  const [avatarUrlOverride, setAvatarUrlOverride] = useState<string | null>(null);
+  const [linkedinUrl, setLinkedinUrl] = useState("");
+  const [linkedinLoading, setLinkedinLoading] = useState(false);
+  const [linkedinError, setLinkedinError] = useState<string | null>(null);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const toast = useToast();
 
@@ -84,6 +86,9 @@ export function ProfileScreen() {
       setErrors({});
       setTempAvatarPreviewUrl(null);
       setAvatarUploadError(null);
+      setAvatarUrlOverride(null);
+      setLinkedinUrl("");
+      setLinkedinError(null);
     }
   }, [profile]);
 
@@ -98,19 +103,20 @@ export function ProfileScreen() {
       };
     }
     return {
-      src: formState?.avatarUrl?.trim() || profile.avatarUrl || "",
+      src: profile.avatarUrl || "",
       fallback: initialsFromProfile(profile),
     };
-  }, [profile, formState?.avatarUrl, tempAvatarPreviewUrl]);
+  }, [profile, tempAvatarPreviewUrl]);
 
   const lastUpdatedLabel = useMemo(() => {
     if (!lastUpdatedAt) {
       return null;
     }
     try {
-      return new Intl.DateTimeFormat(undefined, {
+      return new Intl.DateTimeFormat("en-US", {
         dateStyle: "medium",
         timeStyle: "short",
+        hour12: true,
       }).format(new Date(lastUpdatedAt));
     } catch {
       return null;
@@ -138,14 +144,13 @@ export function ProfileScreen() {
       payload.title = title;
     }
 
-    const avatarUrl = normalizeString(formState.avatarUrl);
-    if ((profile.avatarUrl ?? null) !== avatarUrl) {
-      payload.avatarUrl = avatarUrl;
-    }
-
     const timezone = normalizeString(formState.timezone);
     if ((profile.timezone ?? null) !== timezone) {
       payload.timezone = timezone;
+    }
+
+    if (avatarUrlOverride && avatarUrlOverride !== profile.avatarUrl) {
+      payload.avatarUrl = avatarUrlOverride;
     }
 
     if (profile.notificationPreference !== formState.notificationPreference) {
@@ -227,11 +232,12 @@ export function ProfileScreen() {
       }
 
       setProfile(body.profile, body.lastUpdatedAt);
-      setFormState((prev) => (prev ? { ...prev, avatarUrl: body.profile.avatarUrl ?? "" } : prev));
       setTempAvatarPreviewUrl(null);
+      setAvatarUrlOverride(null);
       toast({
         title: "Avatar updated",
         description: "Your new avatar is live.",
+        variant: "success",
       });
     } catch (error) {
       console.error("[profile] avatar upload failed", error);
@@ -248,6 +254,71 @@ export function ProfileScreen() {
       if (objectUrl) {
         URL.revokeObjectURL(objectUrl);
       }
+    }
+  };
+
+  const handleLinkedinImport = async () => {
+    if (!linkedinUrl.trim()) {
+      setLinkedinError("Enter a LinkedIn profile URL.");
+      return;
+    }
+    setLinkedinError(null);
+    setLinkedinLoading(true);
+    try {
+      const response = await fetch("/api/me/linkedin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: linkedinUrl.trim() }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setLinkedinError(data?.error ?? "Failed to import from LinkedIn.");
+        setLinkedinLoading(false);
+        return;
+      }
+      setFormState((prev) =>
+        prev
+          ? {
+              ...prev,
+              name: data.name || prev.name,
+              title: data.title || prev.title,
+            }
+          : prev
+      );
+      if (data.photoUrl) {
+        setTempAvatarPreviewUrl(data.photoUrl);
+        setAvatarUrlOverride(data.photoUrl);
+      }
+      const payload: Record<string, unknown> = {};
+      if (data.name) payload.name = data.name;
+      if (data.title) payload.title = data.title;
+      if (data.photoUrl) payload.avatarUrl = data.photoUrl;
+
+      if (Object.keys(payload).length > 0) {
+        const saveRes = await fetch("/api/me/profile", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const saveBody = await saveRes.json().catch(() => ({}));
+        if (!saveRes.ok) {
+          setLinkedinError(saveBody?.error ?? "Failed to save imported data.");
+          setLinkedinLoading(false);
+          return;
+        }
+        setProfile(saveBody.profile, saveBody.lastUpdatedAt);
+      }
+
+      toast({
+        title: "Imported from LinkedIn",
+        description: "Name, title, and photo were populated.",
+        variant: "success",
+      });
+    } catch (error) {
+      console.error("[profile] linkedin import failed", error);
+      setLinkedinError("Unexpected error importing from LinkedIn.");
+    } finally {
+      setLinkedinLoading(false);
     }
   };
 
@@ -294,6 +365,7 @@ export function ProfileScreen() {
       toast({
         title: "Profile updated",
         description: "Your changes were saved successfully.",
+        variant: "success",
       });
     } catch (error) {
       console.error("[profile] failed to save", error);
@@ -311,6 +383,10 @@ export function ProfileScreen() {
     if (profile) {
       setFormState(createFormState(profile));
       setErrors({});
+      setLinkedinUrl("");
+      setLinkedinError(null);
+      setTempAvatarPreviewUrl(null);
+      setAvatarUrlOverride(null);
     }
   };
 
@@ -349,13 +425,20 @@ export function ProfileScreen() {
           <CardContent className="space-y-8 py-6">
             <section className="flex flex-col gap-6 md:flex-row md:items-center">
               <div className="flex items-center gap-4">
-                <Avatar className="w-16 h-16 border border-gray-200">
-                  {avatarPreview.src ? <AvatarImage src={avatarPreview.src} alt={profile.name} /> : null}
-                  <AvatarFallback>{avatarPreview.fallback}</AvatarFallback>
-                </Avatar>
+                <button
+                  type="button"
+                  onClick={handleAvatarButtonClick}
+                  className="rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E43632]"
+                  title="Click to upload a new photo"
+                >
+                  <Avatar className="w-16 h-16 border border-gray-200">
+                    {avatarPreview.src ? <AvatarImage src={avatarPreview.src} alt={profile.name} /> : null}
+                    <AvatarFallback>{avatarPreview.fallback}</AvatarFallback>
+                  </Avatar>
+                </button>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-gray-900">Profile photo</p>
-                  <p className="text-xs text-gray-500">PNG, JPG, or WebP up to {MAX_AVATAR_FILE_MB}MB.</p>
+                  <p className="text-xs text-gray-500">Click the avatar or use the button to upload (PNG, JPG, WebP up to {MAX_AVATAR_FILE_MB}MB).</p>
                   <div className="flex items-center gap-2">
                     <Button
                       type="button"
@@ -376,19 +459,6 @@ export function ProfileScreen() {
                   </div>
                   {avatarUploadError ? <p className="text-xs text-red-500">{avatarUploadError}</p> : null}
                 </div>
-              </div>
-              <div className="flex-1 space-y-2">
-                <Label htmlFor="avatarUrl">Avatar URL</Label>
-                <Input
-                  id="avatarUrl"
-                  placeholder="https://..."
-                  value={formState.avatarUrl}
-                  onChange={(event) => handleFieldChange("avatarUrl", event.target.value)}
-                />
-                {errors.avatarUrl ? <p className="text-xs text-red-500">{errors.avatarUrl}</p> : null}
-                <p className="text-xs text-gray-400">
-                  Uploaded images automatically populate this field. You can still paste a public URL if preferred.
-                </p>
               </div>
             </section>
 
@@ -438,6 +508,25 @@ export function ProfileScreen() {
                   </SelectContent>
                 </Select>
                 {errors.timezone ? <p className="text-xs text-red-500">{errors.timezone}</p> : null}
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="linkedin">Import from LinkedIn</Label>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    id="linkedin"
+                    placeholder="https://www.linkedin.com/in/your-profile"
+                    value={linkedinUrl}
+                    onChange={(e) => setLinkedinUrl(e.target.value)}
+                    className="sm:flex-1"
+                  />
+                  <Button type="button" variant="outline" onClick={handleLinkedinImport} disabled={linkedinLoading}>
+                    {linkedinLoading ? "Importing…" : "Import from LinkedIn"}
+                  </Button>
+                </div>
+                {linkedinError ? <p className="text-xs text-red-500">{linkedinError}</p> : null}
+                <p className="text-xs text-gray-400">
+                  Paste your LinkedIn profile URL to pull your name, title, and photo.
+                </p>
               </div>
             </section>
 

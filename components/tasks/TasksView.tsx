@@ -20,7 +20,8 @@ import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Label } from "@/components/ui/label";
+import { SecureUploader } from "@/components/files/SecureUploader";
 import { cn } from "@/lib/utils";
 
 // --- Types & Mock Data ---
@@ -381,6 +382,19 @@ export function TasksView() {
                     </div>
                   </div>
                 )}
+
+                <div className="space-y-2">
+                  <Label className="text-xs font-bold text-[#0A0A0A] uppercase tracking-wider">
+                    Attachments & Evidence
+                  </Label>
+                  <SecureUploader
+                    purpose="task_attachment"
+                    resourceType="task"
+                    resourceId={selectedTask.id}
+                    accept="image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,video/*"
+                    title={selectedTask.title}
+                  />
+                </div>
 
                 <Button
                   variant="outline"

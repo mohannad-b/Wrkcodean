@@ -45,7 +45,7 @@ export const NewHero: React.FC = () => {
                  size="lg"
                  className="h-14 rounded-full bg-[#0A0A0A] px-8 text-base font-semibold text-white shadow-xl shadow-gray-200 transition-all hover:-translate-y-0.5 hover:bg-black hover:shadow-2xl"
                >
-                 <Link href="/pricing">
+                 <Link href="/auth/login?returnTo=/workspace-setup">
                    Start designing my workflow
                    <ArrowRight className="ml-2 h-4 w-4" />
                  </Link>

@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { SecureUploader } from "@/components/files/SecureUploader";
 import {
   Select,
   SelectContent,
@@ -153,27 +154,17 @@ const ProfileSettings = ({
     </div>
 
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 space-y-8">
-      <div className="flex items-center gap-6">
-        <div className="w-24 h-24 rounded-xl bg-gray-100 flex items-center justify-center border-2 border-dashed border-gray-300 cursor-pointer hover:border-[#E43632] hover:bg-red-50 transition-colors group relative overflow-hidden">
-          <Building2 size={32} className="text-gray-400 group-hover:text-[#E43632]" />
-          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 flex items-center justify-center transition-colors">
-            <span className="text-xs font-bold text-[#E43632] opacity-0 group-hover:opacity-100">
-              Change
-            </span>
-          </div>
-        </div>
-        <div className="space-y-1">
-          <h4 className="font-bold text-[#0A0A0A]">Workspace Logo</h4>
-          <p className="text-sm text-gray-500">Used in emails and PDF quotes.</p>
-          <div className="flex gap-2 mt-2">
-            <Button size="sm" variant="outline" className="text-xs">
-              Remove
-            </Button>
-            <Button size="sm" variant="outline" className="text-xs">
-              Upload New
-            </Button>
-          </div>
-        </div>
+      <div className="space-y-2">
+        <h4 className="font-bold text-[#0A0A0A]">Workspace Logo</h4>
+        <p className="text-sm text-gray-500">Used in emails, PDFs, and task notifications.</p>
+        <SecureUploader
+          purpose="workspace_logo"
+          resourceType="workspace"
+          resourceId="current"
+          accept="image/png,image/jpeg,image/webp, image/svg+xml"
+          maxSizeMb={8}
+          title="Workspace Logo"
+        />
       </div>
 
       <Separator />
