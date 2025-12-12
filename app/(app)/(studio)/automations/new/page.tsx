@@ -5,7 +5,27 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertCircle, Loader2, Sparkles, Map, Zap, Sparkles as SparklesIcon, Undo2, ShoppingCart, Package, Mail, Calendar, FileText, CreditCard, Home, Building, Wrench, Users, Briefcase, Plane, GraduationCap, Code, Hammer } from "lucide-react";
+import {
+  AlertCircle,
+  Loader2,
+  Sparkles as SparklesIcon,
+  Undo2,
+  Zap,
+  ShoppingCart,
+  Package,
+  Mail,
+  Calendar,
+  FileText,
+  CreditCard,
+  Home,
+  Building,
+  Wrench,
+  Users,
+  Briefcase,
+  GraduationCap,
+  Code,
+  Hammer,
+} from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import {
   Select,
@@ -16,30 +36,28 @@ import {
 } from "@/components/ui/select";
 
 type AutomationType = "starter" | "intermediate" | "advanced";
+const DEFAULT_AUTOMATION_TYPE: AutomationType = "intermediate";
+type ExpansionLevel = "basic" | "medium" | "expert";
 
-const AUTOMATION_TYPES: Array<{
-  id: AutomationType;
+const EXPANSION_OPTIONS: Array<{
+  id: ExpansionLevel;
   title: string;
   description: string;
-  icon: React.ReactNode;
 }> = [
   {
-    id: "starter",
-    title: "Starter",
-    description: "AI, recommend my whole process",
-    icon: <Sparkles className="h-6 w-6" />,
+    id: "basic",
+    title: "Basic expand",
+    description: "Fill gaps and clarify intent without changing the tone or length too much.",
   },
   {
-    id: "intermediate",
-    title: "Intermediate",
-    description: "AI, I'll tell you my process I want you to map it out in more detail",
-    icon: <Map className="h-6 w-6" />,
+    id: "medium",
+    title: "Medium expand",
+    description: "Polish and enrich with clearer structure, steps, and data flow.",
   },
   {
-    id: "advanced",
-    title: "Advanced",
-    description: "AI, I know my steps inside out, I want you to optimize my workflow",
-    icon: <Zap className="h-6 w-6" />,
+    id: "expert",
+    title: "Expert expand",
+    description: "Build out the whole workflow with triggers, actors, systems, and edge cases.",
   },
 ];
 
@@ -382,8 +400,6 @@ const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string
 export default function NewAutomationPage() {
   const router = useRouter();
   const toast = useToast();
-  const [step, setStep] = useState<"type" | "details">("type");
-  const [selectedType, setSelectedType] = useState<AutomationType | null>(null);
   const [processDescription, setProcessDescription] = useState("");
   const [selectedIndustry, setSelectedIndustry] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
@@ -391,13 +407,9 @@ export default function NewAutomationPage() {
   const [isExpanding, setIsExpanding] = useState(false);
   const [originalDescription, setOriginalDescription] = useState<string>("");
   const [showUndo, setShowUndo] = useState(false);
+  const [showExpandOptions, setShowExpandOptions] = useState(false);
 
-  const handleTypeSelect = (type: AutomationType) => {
-    setSelectedType(type);
-    setStep("details");
-  };
-
-  const handleAIExpand = async () => {
+  const handleAIExpand = async (level: ExpansionLevel) => {
     if (!processDescription.trim()) {
       return;
     }
@@ -405,6 +417,7 @@ export default function NewAutomationPage() {
     setIsExpanding(true);
     setOriginalDescription(processDescription);
     setError(null);
+    setShowExpandOptions(false);
 
     try {
       const response = await fetch("/api/ai/expand-description", {
@@ -412,6 +425,7 @@ export default function NewAutomationPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           description: processDescription.trim(),
+          expansionLevel: level,
         }),
       });
 
@@ -437,11 +451,6 @@ export default function NewAutomationPage() {
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     
-    if (!selectedType) {
-      setError("Please select an automation type");
-      return;
-    }
-    
     if (!processDescription.trim()) {
       setError("Please describe your process");
       return;
@@ -460,7 +469,7 @@ export default function NewAutomationPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          automationType: selectedType,
+          automationType: DEFAULT_AUTOMATION_TYPE,
           processDescription: processDescription.trim(),
           industry: selectedIndustry,
         }),
@@ -495,42 +504,6 @@ export default function NewAutomationPage() {
     }
   };
 
-  if (step === "type") {
-    return (
-      <div className="flex h-full items-center justify-center bg-gray-50 px-4 py-10">
-        <Card className="w-full max-w-4xl">
-          <CardHeader>
-            <CardTitle className="text-2xl">Create New Automation</CardTitle>
-            <CardDescription>
-              Choose how you'd like to get started. We'll help you build the perfect workflow.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {AUTOMATION_TYPES.map((type) => (
-                <button
-                  key={type.id}
-                  onClick={() => handleTypeSelect(type.id)}
-                  className="group relative p-6 border-2 border-gray-200 rounded-xl hover:border-[#E43632] hover:bg-[#E43632]/5 transition-all text-left"
-                >
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 rounded-lg bg-gray-50 group-hover:bg-[#E43632]/10 transition-colors">
-                      <div className="text-[#E43632]">{type.icon}</div>
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="font-bold text-lg text-gray-900 mb-2">{type.title}</h3>
-                      <p className="text-sm text-gray-600">{type.description}</p>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-full items-center justify-center bg-gray-50 px-4 py-10">
       <div className="w-full max-w-4xl">
@@ -543,14 +516,6 @@ export default function NewAutomationPage() {
                 Provide as many details as possible. The more information you share, the better we can help.
               </CardDescription>
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setStep("type")}
-              className="text-gray-500"
-            >
-              Back
-            </Button>
           </div>
         </CardHeader>
         <CardContent>
@@ -622,6 +587,7 @@ export default function NewAutomationPage() {
                   onChange={(event) => {
                     setProcessDescription(event.target.value);
                     setShowUndo(false);
+                    setShowExpandOptions(false);
                   }}
                   rows={8}
                   required
@@ -637,6 +603,7 @@ export default function NewAutomationPage() {
                         onClick={() => {
                           setProcessDescription(originalDescription);
                           setShowUndo(false);
+                          setShowExpandOptions(false);
                         }}
                         className="h-8 text-xs bg-white hover:bg-gray-50"
                       >
@@ -644,26 +611,50 @@ export default function NewAutomationPage() {
                         Undo
                       </Button>
                     ) : (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={handleAIExpand}
-                        disabled={isExpanding}
-                        className="h-8 text-xs bg-white hover:bg-gray-50"
-                      >
-                        {isExpanding ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                            Expanding...
-                          </>
-                        ) : (
-                          <>
-                            <SparklesIcon className="h-3.5 w-3.5 mr-1 text-[#E43632]" />
-                            AI Expand It
-                          </>
-                        )}
-                      </Button>
+                      <div className="relative">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setShowExpandOptions((prev) => !prev)}
+                          disabled={isExpanding}
+                          className="h-8 text-xs bg-white hover:bg-gray-50"
+                        >
+                          {isExpanding ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                              Expanding...
+                            </>
+                          ) : (
+                            <>
+                              <SparklesIcon className="h-3.5 w-3.5 mr-1 text-[#E43632]" />
+                              AI Expand It
+                            </>
+                          )}
+                        </Button>
+
+                        {showExpandOptions ? (
+                          <div className="absolute bottom-11 right-0 w-72 rounded-lg border border-gray-200 bg-white shadow-lg">
+                            <div className="p-2 space-y-1">
+                              {EXPANSION_OPTIONS.map((option) => (
+                                <button
+                                  key={option.id}
+                                  type="button"
+                                  disabled={isExpanding}
+                                  onClick={() => handleAIExpand(option.id)}
+                                  className="w-full rounded-md px-3 py-2 text-left hover:bg-gray-100 focus:outline-none disabled:opacity-60"
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-sm font-medium text-gray-900">{option.title}</span>
+                                    <span className="text-[11px] uppercase text-gray-500">{option.id}</span>
+                                  </div>
+                                  <p className="text-xs text-gray-600 mt-1">{option.description}</p>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
                     )}
                   </div>
                 )}
@@ -674,15 +665,6 @@ export default function NewAutomationPage() {
             </div>
 
             <div className="flex gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setStep("type")}
-                className="flex-1"
-                disabled={submitting}
-              >
-                Back
-              </Button>
               <Button type="submit" className="flex-1 bg-[#E43632] hover:bg-[#C12E2A] text-white" disabled={submitting}>
                 {submitting ? (
                   <>

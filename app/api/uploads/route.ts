@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
 import { listFiles, uploadFile, type UploadPurpose } from "@/lib/storage/file-service";
+import { db } from "@/db";
+import { users } from "@/db/schema";
+import { eq } from "drizzle-orm";
 
 export const runtime = "nodejs";
 
@@ -65,6 +68,13 @@ export async function POST(request: Request) {
     }
 
     let result;
+    let uploaderName: string | undefined;
+    try {
+      const [uploader] = await db.select({ name: users.name }).from(users).where(eq(users.id, session.userId)).limit(1);
+      uploaderName = uploader?.name ?? undefined;
+    } catch {
+      // ignore
+    }
     if (file && file instanceof File) {
       result = await uploadFile({
         tenantId: session.tenantId,
@@ -75,6 +85,8 @@ export async function POST(request: Request) {
         title,
         versionOfFileId,
         file,
+        // @ts-expect-error pass-through for audit metadata
+        uploaderName,
       });
     } else if (url && typeof url === "string") {
       result = await uploadFile({
@@ -86,6 +98,8 @@ export async function POST(request: Request) {
         title,
         versionOfFileId,
         url,
+        // @ts-expect-error pass-through for audit metadata
+        uploaderName,
       });
     } else {
       throw new ApiError(400, "Invalid upload payload.");

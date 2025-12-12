@@ -12,6 +12,8 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     const description = typeof body.description === "string" ? body.description.trim() : null;
+    const expansionLevel =
+      typeof body.expansionLevel === "string" ? body.expansionLevel.trim().toLowerCase() : "medium";
 
     if (!description || description.length === 0) {
       return NextResponse.json({ error: "Description is required" }, { status: 400 });
@@ -20,6 +22,17 @@ export async function POST(request: Request) {
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({ error: "OpenAI API key not configured" }, { status: 500 });
     }
+
+    const expansionStyles: Record<string, string> = {
+      basic:
+        "Fill obvious gaps, clarify intent, and add missing but implied details. Keep length close to the original without over-expanding.",
+      medium:
+        "Polish and enrich the description. Add structure, key steps, data inputs/outputs, and typical decision points. Moderate length increase is fine.",
+      expert:
+        "Fully build out the workflow end-to-end with triggers, actors, systems, inputs/outputs, success criteria, edge cases, and sequencing. Make it actionable and comprehensive.",
+    };
+
+    const level = expansionStyles[expansionLevel] ? expansionLevel : "medium";
 
     const completion = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
@@ -41,7 +54,9 @@ Guidelines:
         },
         {
           role: "user",
-          content: `Expand this process description with more detail:\n\n${description}`,
+          content: `Expansion style: ${expansionStyles[level]}
+
+Expand this process description with more detail:\n\n${description}`,
         },
       ],
       max_tokens: 1000,

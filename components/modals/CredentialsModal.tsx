@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { X, Eye, CheckCircle2, Shield, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
@@ -11,25 +11,40 @@ interface CredentialsModalProps {
   isOpen: boolean;
   onClose: () => void;
   systemName: string;
+  onConnected?: (payload: { systemName: string; connectedVia: "sso" | "credentials"; username?: string }) => void;
 }
 
-export function CredentialsModal({ isOpen, onClose, systemName }: CredentialsModalProps) {
+export function CredentialsModal({ isOpen, onClose, systemName, onConnected }: CredentialsModalProps) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [username, setUsername] = useState("");
 
-  const handleConnect = (e: React.FormEvent) => {
-    e.preventDefault();
+  const finishConnection = (connectedVia: "sso" | "credentials") => {
     setIsConnecting(true);
-    // Simulate API call
     setTimeout(() => {
       setIsConnecting(false);
       setIsSuccess(true);
+      onConnected?.({
+        systemName,
+        connectedVia,
+        username: connectedVia === "credentials" ? username : undefined,
+      });
       setTimeout(() => {
         onClose();
-        setIsSuccess(false); // Reset for next time
+        setIsSuccess(false);
+        setUsername("");
       }, 1500);
     }, 1500);
+  };
+
+  const handleConnect = (e: FormEvent) => {
+    e.preventDefault();
+    finishConnection("credentials");
+  };
+
+  const handleSso = () => {
+    finishConnection("sso");
   };
 
   return (
@@ -88,6 +103,7 @@ export function CredentialsModal({ isOpen, onClose, systemName }: CredentialsMod
                   <Button
                     variant="outline"
                     type="button"
+                    onClick={handleSso}
                     className="w-full h-12 bg-white border-gray-300 hover:bg-gray-50 text-[#0A0A0A] font-medium relative"
                   >
                     <div className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 bg-gray-100 rounded-full flex items-center justify-center text-[10px] font-bold">
@@ -113,6 +129,8 @@ export function CredentialsModal({ isOpen, onClose, systemName }: CredentialsMod
                       <Input
                         placeholder="user@company.com"
                         className="bg-gray-50 border-gray-200 focus-visible:ring-[#E43632]"
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value)}
                         required
                       />
                     </div>
