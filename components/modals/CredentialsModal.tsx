@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { X, Eye, CheckCircle2, Shield, Loader2 } from "lucide-react";
+import { X, Eye, CheckCircle2, Shield, Loader2, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,40 +11,58 @@ interface CredentialsModalProps {
   isOpen: boolean;
   onClose: () => void;
   systemName: string;
-  onConnected?: (payload: { systemName: string; connectedVia: "sso" | "credentials"; username?: string }) => void;
+  onConnected?: (payload: { systemName: string; connectedVia: "sso" | "credentials"; username?: string; vaultPath?: string; version?: number; connectedBy?: string }) => void;
+  onConnect?: (payload: { systemName: string; connectedVia: "sso" | "credentials"; username?: string; password?: string }) => Promise<{ vaultPath?: string; version?: number; connectedBy?: string } | void>;
 }
 
-export function CredentialsModal({ isOpen, onClose, systemName, onConnected }: CredentialsModalProps) {
+export function CredentialsModal({ isOpen, onClose, systemName, onConnected, onConnect }: CredentialsModalProps) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
-  const finishConnection = (connectedVia: "sso" | "credentials") => {
+  const finishConnection = async (connectedVia: "sso" | "credentials") => {
+    setError(null);
     setIsConnecting(true);
-    setTimeout(() => {
+    try {
+      const result = (await onConnect?.({
+        systemName,
+        connectedVia,
+        username: connectedVia === "credentials" ? username : undefined,
+        password: connectedVia === "credentials" ? password : undefined,
+      })) ?? {};
+
       setIsConnecting(false);
       setIsSuccess(true);
       onConnected?.({
         systemName,
         connectedVia,
         username: connectedVia === "credentials" ? username : undefined,
+        vaultPath: result.vaultPath,
+        version: result.version,
+        connectedBy: result.connectedBy,
       });
       setTimeout(() => {
         onClose();
         setIsSuccess(false);
         setUsername("");
+        setPassword("");
       }, 1500);
-    }, 1500);
+    } catch (err) {
+      setIsConnecting(false);
+      setError(err instanceof Error ? err.message : "Unable to connect. Please try again.");
+    }
   };
 
   const handleConnect = (e: FormEvent) => {
     e.preventDefault();
-    finishConnection("credentials");
+    void finishConnection("credentials");
   };
 
   const handleSso = () => {
-    finishConnection("sso");
+    void finishConnection("sso");
   };
 
   return (
@@ -143,6 +161,8 @@ export function CredentialsModal({ isOpen, onClose, systemName, onConnected }: C
                           type={showPassword ? "text" : "password"}
                           placeholder="••••••••••••••••"
                           className="bg-gray-50 border-gray-200 focus-visible:ring-[#E43632] pr-10"
+                          value={password}
+                          onChange={(event) => setPassword(event.target.value)}
                           required
                         />
                         <button
@@ -155,6 +175,13 @@ export function CredentialsModal({ isOpen, onClose, systemName, onConnected }: C
                       </div>
                     </div>
                   </div>
+
+                  {error ? (
+                    <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                      <AlertCircle size={16} />
+                      <span>{error}</span>
+                    </div>
+                  ) : null}
 
                   <div className="pt-2">
                     <Button

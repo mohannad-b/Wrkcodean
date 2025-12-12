@@ -87,6 +87,8 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
     connectedBy: string;
     status: "connected" | "pending";
     connectedVia?: "sso" | "credentials";
+    vaultPath?: string;
+    version?: number;
   };
 
   const fetchFiles = async () => {
@@ -304,20 +306,63 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
     setCredentialsOpen(true);
   };
 
-  const handleConnected = (payload: { systemName: string; connectedVia: "sso" | "credentials"; username?: string }) => {
+  const handleConnected = (payload: {
+    systemName: string;
+    connectedVia: "sso" | "credentials";
+    username?: string;
+    vaultPath?: string;
+    version?: number;
+    connectedBy?: string;
+  }) => {
     setSecureConnections((prev) => {
       const filtered = prev.filter((conn) => conn.name !== payload.systemName);
       return [
         ...filtered,
         {
           name: payload.systemName,
-          connectedBy: payload.username && payload.username.trim() ? payload.username.trim() : "You",
+          connectedBy:
+            payload.connectedBy ??
+            (payload.username && payload.username.trim() ? payload.username.trim() : "You"),
           status: "connected",
           connectedVia: payload.connectedVia,
+          vaultPath: payload.vaultPath,
+          version: payload.version,
         },
       ];
     });
     setCredentialsOpen(false);
+  };
+
+  const handleConnectCredentials = async (payload: {
+    systemName: string;
+    connectedVia: "sso" | "credentials";
+    username?: string;
+    password?: string;
+  }) => {
+    const res = await fetch("/api/credentials", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        taskId: task.id,
+        systemName: payload.systemName,
+        connectedVia: payload.connectedVia,
+        username: payload.username,
+        password: payload.password,
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error ?? "Unable to connect system.");
+    }
+
+    return {
+      vaultPath: data.vaultPath as string | undefined,
+      version: data.version as number | undefined,
+      connectedBy: data.connectedBy as string | undefined,
+    };
   };
 
   return (
@@ -665,6 +710,7 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
         }}
         systemName={selectedSystem ?? "System"}
         onConnected={handleConnected}
+        onConnect={handleConnectCredentials}
       />
       {historyOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 px-4">
