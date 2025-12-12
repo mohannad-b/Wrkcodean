@@ -1,6 +1,7 @@
 import { randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { access } from "node:fs/promises";
 
 export type EncryptionMetadata = {
   algorithm: "aes-256-gcm";
@@ -177,6 +178,17 @@ export async function readDecryptedFile(storageKey: string, encryption: Encrypti
   ensureUnderRoot(abs);
   const ciphertext = await fs.readFile(abs);
   return decryptBuffer(ciphertext, encryption);
+}
+
+export async function deleteStoredFile(storageKey: string) {
+  const abs = path.join(UPLOAD_ROOT, storageKey);
+  ensureUnderRoot(abs);
+  try {
+    await access(abs);
+    await fs.unlink(abs);
+  } catch {
+    // ignore missing file
+  }
 }
 
 

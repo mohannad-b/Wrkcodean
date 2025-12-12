@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { files, fileVersions, type File as FileRecord, type FileVersion } from "@/db/schema";
 import { ApiError } from "@/lib/api/context";
 import { logAudit } from "@/lib/audit/log";
-import { storeLocalFile, storeFromUrl, type StoredFilePayload } from "@/lib/storage/secure-file-storage";
+import { storeLocalFile, storeFromUrl, deleteStoredFile, type StoredFilePayload } from "@/lib/storage/secure-file-storage";
 
 export type UploadPurpose = "workspace_logo" | "task_attachment" | "automation_doc" | "generic";
 
@@ -12,6 +12,7 @@ type UploadParams =
   | {
       tenantId: string;
       userId: string;
+      uploaderName?: string;
       purpose?: UploadPurpose;
       resourceType?: string | null;
       resourceId?: string | null;
@@ -23,6 +24,7 @@ type UploadParams =
   | {
       tenantId: string;
       userId: string;
+      uploaderName?: string;
       purpose?: UploadPurpose;
       resourceType?: string | null;
       resourceId?: string | null;
@@ -160,6 +162,8 @@ export async function uploadFile(params: UploadParams) {
 
   const versionRecord = await persistFileVersion(fileRecord, stored, params.userId);
 
+  const uploaderName = params.uploaderName;
+
   await logAudit({
     tenantId: params.tenantId,
     userId: params.userId,
@@ -174,6 +178,9 @@ export async function uploadFile(params: UploadParams) {
       resourceType,
       resourceId,
       source: versionRecord.source,
+      uploaderName,
+      taskId: resourceId,
+      workflowId: resourceType === "automation_version" ? resourceId : undefined,
     },
   });
 
@@ -222,6 +229,50 @@ export async function getVersionForDownload(versionId: string, tenantId: string)
   }
 
   return row;
+}
+
+export async function deleteFileVersion(versionId: string, tenantId: string, actorUserId: string) {
+  const [row] = await db
+    .select({
+      version: fileVersions,
+      file: files,
+    })
+    .from(fileVersions)
+    .innerJoin(files, and(eq(files.id, fileVersions.fileId), eq(files.tenantId, tenantId)))
+    .where(and(eq(fileVersions.id, versionId), eq(fileVersions.tenantId, tenantId)));
+
+  if (!row) {
+    throw new ApiError(404, "File not found.");
+  }
+
+  await deleteStoredFile(row.version.storageKey);
+  await db.delete(fileVersions).where(eq(fileVersions.id, versionId));
+
+  const remaining = await db
+    .select()
+    .from(fileVersions)
+    .where(and(eq(fileVersions.fileId, row.file.id), eq(fileVersions.tenantId, tenantId)))
+    .orderBy(desc(fileVersions.version));
+
+  if (remaining.length === 0) {
+    await db.delete(files).where(eq(files.id, row.file.id));
+  } else {
+    await db
+      .update(files)
+      .set({ latestVersion: remaining[0].version, updatedAt: new Date() })
+      .where(eq(files.id, row.file.id));
+  }
+
+  await logAudit({
+    tenantId,
+    userId: actorUserId,
+    action: "file.delete",
+    resourceType: row.file.purpose,
+    resourceId: row.file.id,
+    metadata: {
+      versionId,
+    },
+  });
 }
 
 

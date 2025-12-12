@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { handleApiError, requireTenantSession, ApiError } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
 import { logAudit } from "@/lib/audit/log";
-import { getVersionForDownload } from "@/lib/storage/file-service";
+import { deleteFileVersion, getVersionForDownload } from "@/lib/storage/file-service";
 import { readDecryptedFile } from "@/lib/storage/secure-file-storage";
 
 export const runtime = "nodejs";
@@ -43,6 +43,22 @@ export async function GET(request: Request, { params }: RouteParams) {
     });
 
     return new NextResponse(buffer, { headers });
+  } catch (error) {
+    return handleApiError(error);
+  }
+}
+
+export async function DELETE(_request: Request, { params }: RouteParams) {
+  try {
+    const session = await requireTenantSession();
+    if (!can(session, "automation:metadata:update", { type: "automation", tenantId: session.tenantId })) {
+      throw new ApiError(403, "Forbidden");
+    }
+    if (!params.versionId || params.versionId === "undefined") {
+      throw new ApiError(400, "versionId is required");
+    }
+    await deleteFileVersion(params.versionId, session.tenantId, session.userId);
+    return new NextResponse(null, { status: 204 });
   } catch (error) {
     return handleApiError(error);
   }
