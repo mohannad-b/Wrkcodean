@@ -3,7 +3,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+<<<<<<< HEAD
 import { Loader2, X, Download, MoreHorizontal, Trash2, FileText, Upload, History, ShieldCheck, Plus, KeyRound } from "lucide-react";
+=======
+import { Loader2, X, Download, MoreHorizontal, Trash2, FileText, Upload, History } from "lucide-react";
+>>>>>>> bfe26faefe851ad37400e27aa5c6223f2116ab8f
 import type { VersionTask } from "@/db/schema";
 import { SystemPickerModal } from "@/components/modals/SystemPickerModal";
 import { CredentialsModal } from "@/components/modals/CredentialsModal";
@@ -34,10 +38,13 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
   const [fileBusyAction, setFileBusyAction] = useState<"idle" | "uploading" | "deleting">("idle");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+<<<<<<< HEAD
   const [secureConnections, setSecureConnections] = useState<SecureConnection[]>([]);
   const [systemPickerOpen, setSystemPickerOpen] = useState(false);
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
+=======
+>>>>>>> bfe26faefe851ad37400e27aa5c6223f2116ab8f
 
   useEffect(() => {
     setStatus(task.status);
@@ -82,6 +89,7 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
     versions: FileVersionItem[];
   };
 
+<<<<<<< HEAD
   type SecureConnection = {
     name: string;
     connectedBy: string;
@@ -89,6 +97,8 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
     connectedVia?: "sso" | "credentials";
   };
 
+=======
+>>>>>>> bfe26faefe851ad37400e27aa5c6223f2116ab8f
   const fetchFiles = async () => {
     setFileLoading(true);
     setFileError(null);
@@ -656,6 +666,7 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
           </div>
         </div>
       </div>
+<<<<<<< HEAD
       <SystemPickerModal isOpen={systemPickerOpen} onClose={() => setSystemPickerOpen(false)} onSelect={handleSystemSelect} />
       <CredentialsModal
         isOpen={credentialsOpen && Boolean(selectedSystem)}
@@ -666,6 +677,8 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
         systemName={selectedSystem ?? "System"}
         onConnected={handleConnected}
       />
+=======
+>>>>>>> bfe26faefe851ad37400e27aa5c6223f2116ab8f
       {historyOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 px-4">
           <div className="w-[520px] max-w-full rounded-2xl bg-white shadow-2xl border border-gray-200 overflow-hidden">
