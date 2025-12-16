@@ -92,6 +92,111 @@ const DEPARTMENTS = [
   "Product Management",
 ];
 
+const SYSTEMS_BY_INDUSTRY: Record<string, string[]> = {
+  "Retail & E-commerce": [
+    "Shopify",
+    "Amazon",
+    "WooCommerce",
+    "BigCommerce",
+    "Square",
+    "Stripe",
+    "PayPal",
+    "Mailchimp",
+    "Klaviyo",
+    "Salesforce Commerce Cloud",
+  ],
+  Healthcare: [
+    "Epic",
+    "Cerner",
+    "Athenahealth",
+    "Allscripts",
+    "eClinicalWorks",
+    "NextGen",
+    "Practice Fusion",
+    "DrChrono",
+  ],
+  "Finance & Banking": [
+    "QuickBooks",
+    "Xero",
+    "Sage",
+    "NetSuite",
+    "Stripe",
+    "Plaid",
+    "Yodlee",
+    "FIS",
+  ],
+  "Real Estate": [
+    "Salesforce",
+    "Zillow",
+    "Realtor.com",
+    "AppFolio",
+    "Buildium",
+    "Yardi",
+    "MRI Software",
+    "Cozy",
+  ],
+  Manufacturing: [
+    "SAP",
+    "Oracle ERP",
+    "NetSuite",
+    "Infor",
+    "Microsoft Dynamics",
+    "Plex",
+    "Epicor",
+    "IFS",
+  ],
+  "Professional Services": [
+    "Salesforce",
+    "HubSpot",
+    "Asana",
+    "Monday.com",
+    "FreshBooks",
+    "QuickBooks",
+    "Toggl",
+    "DocuSign",
+  ],
+  "Hospitality & Tourism": [
+    "Booking.com",
+    "Airbnb",
+    "Expedia",
+    "Sabre",
+    "Amadeus",
+    "Hotelogix",
+    "Cloudbeds",
+    "Little Hotelier",
+  ],
+  Education: [
+    "Canvas",
+    "Blackboard",
+    "PowerSchool",
+    "Infinite Campus",
+    "Skyward",
+    "Google Classroom",
+    "Schooology",
+    "Brightspace",
+  ],
+  Technology: [
+    "Salesforce",
+    "HubSpot",
+    "Stripe",
+    "Zendesk",
+    "Intercom",
+    "Datadog",
+    "PagerDuty",
+    "Jira",
+  ],
+  Construction: [
+    "Procore",
+    "Autodesk",
+    "PlanGrid",
+    "BuilderTREND",
+    "CoConstruct",
+    "Buildertrend",
+    "Jobber",
+    "Fieldwire",
+  ],
+};
+
 const SUGGESTIONS_PER_PAGE = 6;
 
 const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string; icon: React.ReactNode }>> = {
@@ -102,8 +207,8 @@ const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string
       icon: <ShoppingCart className="h-5 w-5" />,
     },
     {
-      text: "Update inventory levels between WooCommerce and warehouse management system",
-      description: "Automatically sync product inventory quantities from your warehouse system to your WooCommerce store to keep stock levels accurate.",
+      text: "Update inventory levels between WooCommerce and NetSuite warehouse management",
+      description: "Automatically sync product inventory quantities from your NetSuite warehouse management system to your WooCommerce store to keep stock levels accurate.",
       icon: <Package className="h-5 w-5" />,
     },
     {
@@ -112,18 +217,18 @@ const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string
       icon: <Mail className="h-5 w-5" />,
     },
     {
-      text: "Process returns and refunds from e-commerce platform to payment processor and inventory system",
-      description: "When a return is initiated in your e-commerce platform, automatically process the refund through your payment processor (Stripe, PayPal) and update inventory levels in your warehouse management system.",
+      text: "Process returns and refunds from Shopify to Stripe and update inventory in NetSuite",
+      description: "When a return is initiated in Shopify, automatically process the refund through Stripe, update inventory levels in NetSuite, and send confirmation emails to customers.",
       icon: <CreditCard className="h-5 w-5" />,
     },
     {
-      text: "Sync customer reviews from product pages to CRM and trigger follow-up campaigns",
-      description: "Automatically capture customer reviews from your product pages, sync them to your CRM (Salesforce, HubSpot), and trigger personalized follow-up email campaigns based on review sentiment.",
+      text: "Sync customer reviews from product pages to Salesforce CRM and trigger follow-up campaigns via Mailchimp",
+      description: "Automatically capture customer reviews from your product pages, sync them to Salesforce CRM, analyze sentiment, and trigger personalized follow-up email campaigns via Mailchimp based on review ratings.",
       icon: <Users className="h-5 w-5" />,
     },
     {
-      text: "Automate abandoned cart recovery with SMS and email reminders using customer data",
-      description: "When a customer abandons their cart, automatically send SMS and email reminders with personalized product recommendations, pulling customer preferences from your CRM and purchase history.",
+      text: "Automate abandoned cart recovery from Shopify with SMS via Twilio and email via Klaviyo",
+      description: "When a customer abandons their cart in Shopify, automatically send SMS reminders via Twilio and email reminders via Klaviyo with personalized product recommendations, pulling customer preferences from Salesforce and purchase history.",
       icon: <ShoppingCart className="h-5 w-5" />,
     },
   ],
@@ -186,8 +291,8 @@ const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string
       icon: <CreditCard className="h-5 w-5" />,
     },
     {
-      text: "Send payment reminders and process late fees for overdue invoices",
-      description: "Automatically identify overdue invoices in your accounting system, send escalating payment reminders via email and SMS, calculate and apply late fees, and update customer records in your CRM.",
+      text: "Send payment reminders from QuickBooks and process late fees, updating Salesforce CRM",
+      description: "Automatically identify overdue invoices in QuickBooks, send escalating payment reminders via email and SMS, calculate and apply late fees, and update customer records in Salesforce CRM.",
       icon: <Mail className="h-5 w-5" />,
     },
   ],
@@ -225,8 +330,8 @@ const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string
   ],
   Manufacturing: [
     {
-      text: "Schedule production in ERP system based on inventory levels from warehouse management system",
-      description: "Automatically create production schedules in your ERP system (like SAP or NetSuite) when inventory levels drop below thresholds in your warehouse management system.",
+      text: "Schedule production in SAP ERP based on inventory levels from NetSuite warehouse management",
+      description: "Automatically create production schedules in SAP ERP when inventory levels drop below thresholds in NetSuite warehouse management system, with notifications sent to production planners.",
       icon: <Package className="h-5 w-5" />,
     },
     {
@@ -257,8 +362,8 @@ const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string
   ],
   "Professional Services": [
     {
-      text: "Onboard new clients by collecting documents via DocuSign and storing in Dropbox",
-      description: "When a new client is added to your CRM, automatically send document collection requests via DocuSign and organize completed documents in Dropbox folders.",
+      text: "Onboard new clients from Salesforce CRM by collecting documents via DocuSign and storing in Dropbox",
+      description: "When a new client is added to Salesforce CRM, automatically send document collection requests via DocuSign and organize completed documents in Dropbox folders with proper naming conventions.",
       icon: <Briefcase className="h-5 w-5" />,
     },
     {
@@ -272,8 +377,8 @@ const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string
       icon: <Mail className="h-5 w-5" />,
     },
     {
-      text: "Automate contract renewal workflows from CRM to document generation and client notifications",
-      description: "When contracts are approaching expiration dates in your CRM, automatically generate renewal documents, send them to clients via DocuSign, track signature status, and notify account managers of pending renewals.",
+      text: "Automate contract renewal workflows from Salesforce CRM to DocuSign and client notifications",
+      description: "When contracts are approaching expiration dates in Salesforce CRM, automatically generate renewal documents, send them to clients via DocuSign, track signature status, and notify account managers via email and Slack of pending renewals.",
       icon: <FileText className="h-5 w-5" />,
     },
     {
@@ -431,7 +536,7 @@ const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string
     {
       text: "Sync pipeline updates to forecasting sheet and Slack",
       description:
-        "When opportunities move stages, push updates to the forecasting spreadsheet and notify sales leadership in Slack with deal risk highlights.",
+        "When opportunities move stages, push changes to the forecast model, recompute coverage targets, flag slips or missing next steps, and DM owners/leadership in Slack with risk reasons and follow-ups.",
       icon: <FileText className="h-5 w-5" />,
     },
     {
@@ -501,7 +606,7 @@ const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string
     {
       text: "Daily KPI rollups to leadership",
       description:
-        "Aggregate operational metrics each morning, generate a summary, and send it to stakeholders via email and Slack.",
+        "Pull KPIs across systems (tickets, SLAs, incidents, throughput), detect anomalies vs. prior week, attach links to dashboards/runbooks, and send Slack/email digests with owners assigned to outliers.",
       icon: <FileText className="h-5 w-5" />,
     },
     {
@@ -685,7 +790,7 @@ const COMMON_USE_CASES: Record<string, Array<{ text: string; description: string
     {
       text: "Aggregate user feedback into themes",
       description:
-        "Collect feedback from support, sales, and surveys, cluster themes, and push summaries to the roadmap board.",
+        "Ingest feedback from support, sales notes, NPS, and app reviews; dedupe and sentiment-score items; auto-cluster themes with volume/revenue impact; open Jira/Linear issues for top themes; and post a weekly digest to the roadmap board and Slack.",
       icon: <Users className="h-5 w-5" />,
     },
     {
@@ -844,6 +949,7 @@ export default function NewAutomationPage() {
   const [processDescription, setProcessDescription] = useState("");
   const [selectedIndustry, setSelectedIndustry] = useState<string>("");
   const [selectedDepartment, setSelectedDepartment] = useState<string>("");
+  const [selectedSystem, setSelectedSystem] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isExpanding, setIsExpanding] = useState(false);
@@ -961,6 +1067,7 @@ export default function NewAutomationPage() {
     setSuggestUseCasesError(null);
 
     try {
+      const availableSystems = selectedIndustry ? SYSTEMS_BY_INDUSTRY[selectedIndustry] || [] : [];
       const response = await fetch("/api/ai/suggest-use-cases", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -971,6 +1078,8 @@ export default function NewAutomationPage() {
           ]
             .filter(Boolean)
             .join(" | "),
+          selectedSystem: selectedSystem || null,
+          availableSystems: availableSystems.length > 0 ? availableSystems : null,
         }),
       });
 
@@ -1017,38 +1126,62 @@ export default function NewAutomationPage() {
   const baseUseCases = useMemo(() => {
     const comboKey = `${selectedIndustry || ""}|${selectedDepartment || ""}`;
     const combo = COMBO_USE_CASES[comboKey];
+    let useCasesToFilter: typeof combo = [];
+    
     if (combo && combo.length > 0) {
-      return combo.slice(0, 6);
-    }
+      useCasesToFilter = combo;
+    } else {
+      const departmentUseCases = selectedDepartment ? COMMON_USE_CASES[selectedDepartment] ?? [] : [];
+      const industryUseCases = selectedIndustry ? COMMON_USE_CASES[selectedIndustry] ?? [] : [];
+      const combined: typeof departmentUseCases = [];
+      const seen = new Set<string>();
+      let d = 0;
+      let i = 0;
 
-    const departmentUseCases = selectedDepartment ? COMMON_USE_CASES[selectedDepartment] ?? [] : [];
-    const industryUseCases = selectedIndustry ? COMMON_USE_CASES[selectedIndustry] ?? [] : [];
-    const combined: typeof departmentUseCases = [];
-    const seen = new Set<string>();
-    let d = 0;
-    let i = 0;
-
-    // Interleave department and industry to ensure both influence the set
-    while (combined.length < 6 && (d < departmentUseCases.length || i < industryUseCases.length)) {
-      if (d < departmentUseCases.length) {
-        const item = departmentUseCases[d++];
-        if (!seen.has(item.text)) {
-          seen.add(item.text);
-          combined.push(item);
+      // Interleave department and industry to ensure both influence the set
+      while (combined.length < 6 && (d < departmentUseCases.length || i < industryUseCases.length)) {
+        if (d < departmentUseCases.length) {
+          const item = departmentUseCases[d++];
+          if (!seen.has(item.text)) {
+            seen.add(item.text);
+            combined.push(item);
+          }
+        }
+        if (combined.length >= 6) break;
+        if (i < industryUseCases.length) {
+          const item = industryUseCases[i++];
+          if (!seen.has(item.text)) {
+            seen.add(item.text);
+            combined.push(item);
+          }
         }
       }
-      if (combined.length >= 6) break;
-      if (i < industryUseCases.length) {
-        const item = industryUseCases[i++];
-        if (!seen.has(item.text)) {
-          seen.add(item.text);
-          combined.push(item);
-        }
+      useCasesToFilter = combined as typeof combo;
+    }
+
+    // Filter by selected system if one is selected
+    if (selectedSystem) {
+      const systemLower = selectedSystem.toLowerCase();
+      // Prioritize workflows that mention the system in the title (text field)
+      const matchingInTitle = useCasesToFilter.filter((useCase) =>
+        useCase.text.toLowerCase().includes(systemLower)
+      );
+      // Then include workflows that mention it in description
+      const matchingInDescription = useCasesToFilter.filter(
+        (useCase) =>
+          !useCase.text.toLowerCase().includes(systemLower) &&
+          useCase.description.toLowerCase().includes(systemLower)
+      );
+      // Combine with title matches first
+      const filtered = [...matchingInTitle, ...matchingInDescription];
+      // If we have matches, return them (up to 6)
+      if (filtered.length > 0) {
+        return filtered.slice(0, 6);
       }
     }
 
-    return combined;
-  }, [selectedDepartment, selectedIndustry]);
+    return useCasesToFilter.slice(0, 6);
+  }, [selectedDepartment, selectedIndustry, selectedSystem]);
 
   const totalSuggestionPages = Math.max(1, Math.ceil(suggestedUseCases.length / SUGGESTIONS_PER_PAGE));
   const currentSuggestionsPage = Math.min(suggestionsPage, totalSuggestionPages - 1);
@@ -1080,7 +1213,7 @@ export default function NewAutomationPage() {
                 </div>
               ) : null}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-gray-700" htmlFor="industry">
                     Industry
@@ -1089,6 +1222,7 @@ export default function NewAutomationPage() {
                     value={selectedIndustry}
                     onValueChange={(value) => {
                       setSelectedIndustry(value);
+                      setSelectedSystem(""); // Reset system when industry changes
                       const nextKey = `${value || "none"}|${selectedDepartment || "none"}`;
                       const cached = suggestionCache[nextKey] ?? [];
                       setSuggestedUseCases(cached);
@@ -1146,6 +1280,41 @@ export default function NewAutomationPage() {
                             {department}
                           </SelectItem>
                         ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-700" htmlFor="system">
+                    Systems
+                  </label>
+                  <Select
+                    value={selectedSystem}
+                    onValueChange={(value) => setSelectedSystem(value)}
+                    disabled={!selectedIndustry}
+                  >
+                    <SelectTrigger id="system" className="bg-white">
+                      <SelectValue placeholder={selectedIndustry ? "Select a system" : "Select industry first"} />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white">
+                      <SelectGroup>
+                        <SelectLabel>Common platforms</SelectLabel>
+                        {selectedIndustry && SYSTEMS_BY_INDUSTRY[selectedIndustry] ? (
+                          SYSTEMS_BY_INDUSTRY[selectedIndustry].map((system) => (
+                            <SelectItem
+                              key={system}
+                              value={system}
+                              className="hover:bg-gray-100 focus:bg-gray-100 data-[highlighted]:bg-gray-100"
+                            >
+                              {system}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="none" disabled>
+                            No systems available
+                          </SelectItem>
+                        )}
                       </SelectGroup>
                     </SelectContent>
                   </Select>

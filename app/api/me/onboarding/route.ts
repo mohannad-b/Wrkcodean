@@ -3,10 +3,10 @@ import { and, eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { memberships, users } from "@/db/schema";
-import { getSession } from "@/lib/auth/session";
+import { getUserSession } from "@/lib/auth/session";
 
 export async function GET() {
-  const session = await getSession();
+  const session = await getUserSession();
 
   const user = await db.query.users.findFirst({
     where: eq(users.id, session.userId),
@@ -18,10 +18,11 @@ export async function GET() {
     },
   });
 
+  // Check if user has any membership (not tenant-specific during setup)
   const membershipRow = await db
     .select({ id: memberships.id })
     .from(memberships)
-    .where(and(eq(memberships.userId, session.userId), eq(memberships.tenantId, session.tenantId)))
+    .where(eq(memberships.userId, session.userId))
     .limit(1);
 
   return NextResponse.json({

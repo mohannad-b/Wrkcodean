@@ -6,12 +6,22 @@ interface ActivityFeedItemProps {
 }
 
 export function ActivityFeedItem({ item }: ActivityFeedItemProps) {
+  const getUserInitials = () => {
+    // Support both old mock data format and new format with firstName/lastName
+    if ("userFirstName" in item && "userLastName" in item && item.userFirstName && item.userLastName) {
+      return `${item.userFirstName.charAt(0)}${item.userLastName.charAt(0)}`.toUpperCase();
+    }
+    return item.user.charAt(0).toUpperCase();
+  };
+
+  const avatarUrl = "userAvatarUrl" in item ? item.userAvatarUrl : item.avatar;
+
   return (
     <div className="p-4 flex gap-3 hover:bg-gray-50 transition-colors group">
       <Avatar className="h-8 w-8 border border-gray-100">
-        <AvatarImage src={item.avatar} />
+        {avatarUrl ? <AvatarImage src={avatarUrl} alt={item.user} /> : null}
         <AvatarFallback className="bg-gray-100 text-xs font-bold text-gray-500">
-          {item.user.charAt(0)}
+          {getUserInitials()}
         </AvatarFallback>
       </Avatar>
       <div className="flex-1 min-w-0">

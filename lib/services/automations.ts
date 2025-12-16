@@ -33,39 +33,61 @@ type AutomationWithLatestVersion = Automation & {
 };
 
 export async function listAutomationsForTenant(tenantId: string): Promise<AutomationWithLatestVersion[]> {
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:35',message:'listAutomationsForTenant entry',data:{tenantId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
+  const queryStart = Date.now();
   const automationRows = await db
     .select()
     .from(automations)
     .where(eq(automations.tenantId, tenantId))
     .orderBy(desc(automations.updatedAt));
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:40',message:'automations query completed',data:{automationCount:automationRows.length,queryTimeMs:Date.now()-queryStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
 
   if (automationRows.length === 0) {
     return [];
   }
 
   const automationIds = automationRows.map((row) => row.id);
-  const creatorIds = automationRows
+  const creatorIdsRaw = automationRows
     .map((row) => row.createdBy)
     .filter((id): id is string => id !== null);
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:49',message:'creatorIds before deduplication',data:{creatorIdsRaw,rawCount:creatorIdsRaw.length,uniqueCount:new Set(creatorIdsRaw).size,hasDuplicates:creatorIdsRaw.length!==new Set(creatorIdsRaw).size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
+  const creatorIds = Array.from(new Set(creatorIdsRaw));
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:52',message:'creatorIds after deduplication',data:{creatorIds,deduplicatedCount:creatorIds.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
 
+  // #endregion
   // Fetch creator information
+  const creatorQueryStart = Date.now();
   const creatorRows = creatorIds.length
     ? await db
         .select()
         .from(users)
         .where(inArray(users.id, creatorIds))
     : [];
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:57',message:'users query completed',data:{creatorRowsCount:creatorRows.length,queryTimeMs:Date.now()-creatorQueryStart,creatorIdsCount:creatorIds.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
 
   const creatorMap = new Map<string, User>();
   for (const creator of creatorRows) {
     creatorMap.set(creator.id, creator);
   }
 
+  const versionQueryStart = Date.now();
   const versionRows = await db
     .select()
     .from(automationVersions)
     .where(inArray(automationVersions.automationId, automationIds))
     .orderBy(desc(automationVersions.createdAt));
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:68',message:'automationVersions query completed',data:{versionRowsCount:versionRows.length,automationIdsCount:automationIds.length,queryTimeMs:Date.now()-versionQueryStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
 
   const latestVersionMap = new Map<string, AutomationVersion>();
   for (const version of versionRows) {
@@ -78,7 +100,12 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
     .filter(Boolean)
     .map((version) => version.id);
 
+  const metricsQueryStart = Date.now();
   const latestMetricMap = await getLatestMetricsForVersions(tenantId, latestVersionIds);
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:81',message:'getLatestMetricsForVersions completed',data:{latestVersionIdsCount:latestVersionIds.length,metricsCount:latestMetricMap.size,queryTimeMs:Date.now()-metricsQueryStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
+  const quoteQueryStart = Date.now();
   const quoteRows = latestVersionIds.length
     ? await db
         .select()
@@ -86,6 +113,9 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
         .where(inArray(quotes.automationVersionId, latestVersionIds))
         .orderBy(desc(quotes.createdAt))
     : [];
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:88',message:'quotes query completed',data:{quoteRowsCount:quoteRows.length,latestVersionIdsCount:latestVersionIds.length,queryTimeMs:Date.now()-quoteQueryStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
 
   const latestQuoteMap = new Map<string, Quote>();
   for (const quote of quoteRows) {
@@ -94,6 +124,10 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
     }
   }
 
+  const totalTime = Date.now() - queryStart;
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:97',message:'listAutomationsForTenant exit',data:{totalTimeMs:totalTime,automationCount:automationRows.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
   return automationRows.map((automation) => {
     const version = latestVersionMap.get(automation.id);
     const creator = automation.createdBy ? creatorMap.get(automation.createdBy) ?? null : null;

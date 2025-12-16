@@ -44,6 +44,9 @@ export const tenants = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
+    industry: text("industry"),
+    currency: text("currency").default("usd"),
+    timezone: text("timezone").default("est"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -58,7 +61,9 @@ export const users = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     auth0Id: text("auth0_id"),
     email: text("email").notNull(),
-    name: text("name"),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    name: text("name"), // Keep for backward compatibility, will be computed from firstName/lastName
     title: text("title"),
     avatarUrl: text("avatar_url"),
     timezone: text("timezone"),
@@ -111,6 +116,8 @@ export const automations = pgTable(
   },
   (table) => ({
     tenantIdx: index("automations_tenant_idx").on(table.tenantId),
+    createdByIdx: index("automations_created_by_idx").on(table.createdBy),
+    updatedAtIdx: index("automations_updated_at_idx").on(table.updatedAt),
   })
 );
 
@@ -168,7 +175,9 @@ export const automationVersions = pgTable(
       table.versionLabel
     ),
     tenantIdx: index("automation_versions_tenant_idx").on(table.tenantId),
+    automationIdIdx: index("automation_versions_automation_id_idx").on(table.automationId),
     statusIdx: index("automation_versions_status_idx").on(table.status),
+    createdAtIdx: index("automation_versions_created_at_idx").on(table.createdAt),
   })
 );
 
@@ -442,6 +451,7 @@ export const copilotMessages = pgTable(
   (table) => ({
     tenantIdx: index("copilot_messages_tenant_idx").on(table.tenantId),
     versionIdx: index("copilot_messages_version_idx").on(table.automationVersionId),
+    versionCreatedAtIdx: index("copilot_messages_version_created_at_idx").on(table.automationVersionId, table.createdAt),
   })
 );
 

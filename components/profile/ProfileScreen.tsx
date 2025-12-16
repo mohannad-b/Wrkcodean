@@ -6,13 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/use-toast";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
-import { NOTIFICATION_PREFERENCES, type UserProfile } from "@/lib/user/profile-shared";
+import type { UserProfile } from "@/lib/user/profile-shared";
 import { cn } from "@/lib/utils";
 
 const TIMEZONE_OPTIONS = [
@@ -28,31 +27,26 @@ const TIMEZONE_OPTIONS = [
   { value: "Asia/Tokyo", label: "Tokyo" },
 ] as const;
 
-const NOTIFICATION_LABELS: Record<(typeof NOTIFICATION_PREFERENCES)[number], string> = {
-  all: "All activity",
-  mentions: "Mentions & assignments",
-  none: "Mute everything",
-};
 
 const ALLOWED_AVATAR_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
 const MAX_AVATAR_FILE_MB = 4;
 const MAX_AVATAR_FILE_BYTES = MAX_AVATAR_FILE_MB * 1024 * 1024;
 
 type EditableFormState = {
-  name: string;
+  firstName: string;
+  lastName: string;
   title: string;
   timezone: string;
-  notificationPreference: (typeof NOTIFICATION_PREFERENCES)[number];
 };
 
 type EditableFieldKey = keyof EditableFormState;
 
 function createFormState(profile: UserProfile): EditableFormState {
   return {
-    name: profile.name,
+    firstName: profile.firstName ?? "",
+    lastName: profile.lastName ?? "",
     title: profile.title ?? "",
     timezone: profile.timezone ?? "",
-    notificationPreference: profile.notificationPreference,
   };
 }
 
@@ -73,10 +67,6 @@ export function ProfileScreen() {
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);
   const [tempAvatarPreviewUrl, setTempAvatarPreviewUrl] = useState<string | null>(null);
-  const [avatarUrlOverride, setAvatarUrlOverride] = useState<string | null>(null);
-  const [linkedinUrl, setLinkedinUrl] = useState("");
-  const [linkedinLoading, setLinkedinLoading] = useState(false);
-  const [linkedinError, setLinkedinError] = useState<string | null>(null);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const toast = useToast();
 
@@ -86,9 +76,6 @@ export function ProfileScreen() {
       setErrors({});
       setTempAvatarPreviewUrl(null);
       setAvatarUploadError(null);
-      setAvatarUrlOverride(null);
-      setLinkedinUrl("");
-      setLinkedinError(null);
     }
   }, [profile]);
 
@@ -134,9 +121,15 @@ export function ProfileScreen() {
     }
 
     const payload: Record<string, unknown> = {};
-    const name = formState.name.trim();
-    if (name && name !== profile.name) {
-      payload.name = name;
+    
+    const firstName = normalizeString(formState.firstName);
+    if ((profile.firstName ?? null) !== firstName) {
+      payload.firstName = firstName;
+    }
+
+    const lastName = normalizeString(formState.lastName);
+    if ((profile.lastName ?? null) !== lastName) {
+      payload.lastName = lastName;
     }
 
     const title = normalizeString(formState.title);
@@ -147,14 +140,6 @@ export function ProfileScreen() {
     const timezone = normalizeString(formState.timezone);
     if ((profile.timezone ?? null) !== timezone) {
       payload.timezone = timezone;
-    }
-
-    if (avatarUrlOverride && avatarUrlOverride !== profile.avatarUrl) {
-      payload.avatarUrl = avatarUrlOverride;
-    }
-
-    if (profile.notificationPreference !== formState.notificationPreference) {
-      payload.notificationPreference = formState.notificationPreference;
     }
 
     return payload;
@@ -233,7 +218,6 @@ export function ProfileScreen() {
 
       setProfile(body.profile, body.lastUpdatedAt);
       setTempAvatarPreviewUrl(null);
-      setAvatarUrlOverride(null);
       toast({
         title: "Avatar updated",
         description: "Your new avatar is live.",
@@ -257,70 +241,6 @@ export function ProfileScreen() {
     }
   };
 
-  const handleLinkedinImport = async () => {
-    if (!linkedinUrl.trim()) {
-      setLinkedinError("Enter a LinkedIn profile URL.");
-      return;
-    }
-    setLinkedinError(null);
-    setLinkedinLoading(true);
-    try {
-      const response = await fetch("/api/me/linkedin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: linkedinUrl.trim() }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        setLinkedinError(data?.error ?? "Failed to import from LinkedIn.");
-        setLinkedinLoading(false);
-        return;
-      }
-      setFormState((prev) =>
-        prev
-          ? {
-              ...prev,
-              name: data.name || prev.name,
-              title: data.title || prev.title,
-            }
-          : prev
-      );
-      if (data.photoUrl) {
-        setTempAvatarPreviewUrl(data.photoUrl);
-        setAvatarUrlOverride(data.photoUrl);
-      }
-      const payload: Record<string, unknown> = {};
-      if (data.name) payload.name = data.name;
-      if (data.title) payload.title = data.title;
-      if (data.photoUrl) payload.avatarUrl = data.photoUrl;
-
-      if (Object.keys(payload).length > 0) {
-        const saveRes = await fetch("/api/me/profile", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const saveBody = await saveRes.json().catch(() => ({}));
-        if (!saveRes.ok) {
-          setLinkedinError(saveBody?.error ?? "Failed to save imported data.");
-          setLinkedinLoading(false);
-          return;
-        }
-        setProfile(saveBody.profile, saveBody.lastUpdatedAt);
-      }
-
-      toast({
-        title: "Imported from LinkedIn",
-        description: "Name, title, and photo were populated.",
-        variant: "success",
-      });
-    } catch (error) {
-      console.error("[profile] linkedin import failed", error);
-      setLinkedinError("Unexpected error importing from LinkedIn.");
-    } finally {
-      setLinkedinLoading(false);
-    }
-  };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -383,10 +303,7 @@ export function ProfileScreen() {
     if (profile) {
       setFormState(createFormState(profile));
       setErrors({});
-      setLinkedinUrl("");
-      setLinkedinError(null);
       setTempAvatarPreviewUrl(null);
-      setAvatarUrlOverride(null);
     }
   };
 
@@ -466,14 +383,24 @@ export function ProfileScreen() {
 
             <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <Label htmlFor="name">Full name</Label>
+                <Label htmlFor="firstName">First name</Label>
                 <Input
-                  id="name"
-                  autoComplete="name"
-                  value={formState.name}
-                  onChange={(event) => handleFieldChange("name", event.target.value)}
+                  id="firstName"
+                  autoComplete="given-name"
+                  value={formState.firstName}
+                  onChange={(event) => handleFieldChange("firstName", event.target.value)}
                 />
-                {errors.name ? <p className="text-xs text-red-500">{errors.name}</p> : null}
+                {errors.firstName ? <p className="text-xs text-red-500">{errors.firstName}</p> : null}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="lastName">Last name</Label>
+                <Input
+                  id="lastName"
+                  autoComplete="family-name"
+                  value={formState.lastName}
+                  onChange={(event) => handleFieldChange("lastName", event.target.value)}
+                />
+                {errors.lastName ? <p className="text-xs text-red-500">{errors.lastName}</p> : null}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
@@ -509,73 +436,9 @@ export function ProfileScreen() {
                 </Select>
                 {errors.timezone ? <p className="text-xs text-red-500">{errors.timezone}</p> : null}
               </div>
-              <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="linkedin">Import from LinkedIn</Label>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Input
-                    id="linkedin"
-                    placeholder="https://www.linkedin.com/in/your-profile"
-                    value={linkedinUrl}
-                    onChange={(e) => setLinkedinUrl(e.target.value)}
-                    className="sm:flex-1"
-                  />
-                  <Button type="button" variant="outline" onClick={handleLinkedinImport} disabled={linkedinLoading}>
-                    {linkedinLoading ? "Importing…" : "Import from LinkedIn"}
-                  </Button>
-                </div>
-                {linkedinError ? <p className="text-xs text-red-500">{linkedinError}</p> : null}
-                <p className="text-xs text-gray-400">
-                  Paste your LinkedIn profile URL to pull your name, title, and photo.
-                </p>
-              </div>
-            </section>
-
-            <section className="space-y-4">
-              <div>
-                <h3 className="text-sm font-semibold text-gray-900">Notifications</h3>
-                <p className="text-xs text-gray-500">Choose when we should send alerts or summaries.</p>
-              </div>
-              <RadioGroup
-                value={formState.notificationPreference}
-                onValueChange={(value) => handleFieldChange("notificationPreference", value)}
-                className="grid gap-3 sm:grid-cols-3"
-              >
-                {NOTIFICATION_PREFERENCES.map((option) => (
-                  <label
-                    key={option}
-                    className="border border-gray-200 rounded-lg p-3 flex flex-col gap-1 text-left cursor-pointer hover:border-gray-300 data-[state=checked]:border-[#E43632] data-[state=checked]:bg-[#E43632]/5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-900">{NOTIFICATION_LABELS[option]}</span>
-                      <RadioGroupItem value={option} id={`notif-${option}`} className="sr-only" />
-                      <div className="w-4 h-4 rounded-full border border-gray-300 flex items-center justify-center">
-                        <div
-                          className={cn(
-                            "w-2.5 h-2.5 rounded-full",
-                            formState.notificationPreference === option ? "bg-[#E43632]" : "bg-transparent"
-                          )}
-                        />
-                      </div>
-                    </div>
-                    <p className="text-xs text-gray-500">
-                      {option === "all"
-                        ? "Includes approvals, mentions, reminders."
-                        : option === "mentions"
-                          ? "Only when you are tagged or assigned."
-                          : "Mute everything except billing & security."}
-                    </p>
-                  </label>
-                ))}
-              </RadioGroup>
-              {errors.notificationPreference ? (
-                <p className="text-xs text-red-500">{errors.notificationPreference}</p>
-              ) : null}
             </section>
           </CardContent>
-          <CardFooter className="flex flex-col gap-3 border-t border-gray-100 md:flex-row md:items-center md:justify-between">
-            <div className="text-xs text-gray-500">
-              Need to update your email? Contact your identity provider administrator.
-            </div>
+          <CardFooter className="flex flex-col gap-3 border-t border-gray-100 md:flex-row md:items-center md:justify-end">
             <div className="flex items-center gap-3 w-full md:w-auto">
               <Button type="button" variant="ghost" disabled={!hasChanges || isSaving} onClick={handleReset}>
                 Reset

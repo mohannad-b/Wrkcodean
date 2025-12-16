@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Building2, CreditCard, Save, Download, CheckCircle2, Globe, Clock, Mail, FileText, LogOut } from "lucide-react";
+import { Building2, CreditCard, Save, Download, CheckCircle2, Globe, Clock, Mail, FileText, LogOut, Upload, Link2, Sparkles, Check, Loader2, Palette } from "lucide-react";
 import { motion } from "motion/react";
 import {
   XAxis,
@@ -46,18 +46,16 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Effect to update activeTab if defaultTab changes
   useEffect(() => {
     setActiveTab(defaultTab);
   }, [defaultTab]);
 
-  const handleSave = () => {
-    setIsSaving(true);
-    setTimeout(() => {
-      setIsSaving(false);
-      // TODO: Show success message
-    }, 500);
+  const handleSave = async () => {
+    // Save is handled by ProfileSettings component via onSaveStateChange
   };
 
   const handleDownloadInvoice = () => {
@@ -121,7 +119,19 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2 }}
           >
-            {activeTab === "profile" && <ProfileSettings onSave={handleSave} isSaving={isSaving} />}
+            {activeTab === "profile" && (
+              <ProfileSettings 
+                onSave={handleSave} 
+                isSaving={isSaving}
+                saveError={saveError}
+                saveSuccess={saveSuccess}
+                onSaveStateChange={(error, success, saving) => {
+                  setSaveError(error);
+                  setSaveSuccess(success);
+                  setIsSaving(saving ?? false);
+                }}
+              />
+            )}
             {activeTab === "billing" && (
               <BillingSettings
                 onDownloadInvoice={handleDownloadInvoice}
@@ -140,99 +150,481 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
 const ProfileSettings = ({
   onSave,
   isSaving,
-}: { onSave?: () => void; isSaving?: boolean } = {}) => (
-  <div className="space-y-6">
-    <div className="flex justify-between items-center mb-2">
-      <h3 className="text-xl font-bold text-[#0A0A0A]">Workspace Profile</h3>
-      <Button
-        className="bg-[#0A0A0A] hover:bg-gray-800 text-white"
-        onClick={() => onSave?.()}
-        disabled={isSaving}
-      >
-        <Save size={16} className="mr-2" /> {isSaving ? "Saving..." : "Save Changes"}
-      </Button>
-    </div>
+  saveError,
+  saveSuccess,
+  onSaveStateChange,
+}: { 
+  onSave?: () => void; 
+  isSaving?: boolean;
+  saveError?: string | null;
+  saveSuccess?: boolean;
+  onSaveStateChange?: (error: string | null, success: boolean, saving?: boolean) => void;
+} = {}) => {
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [slugStatus, setSlugStatus] = useState<"idle" | "checking" | "available" | "unavailable" | "invalid">("idle");
+  const [slugMessage, setSlugMessage] = useState("");
+  const [brandColor, setBrandColor] = useState("#E43632");
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [logoTab, setLogoTab] = useState<"upload" | "link" | "ai">("upload");
+  const [logoLink, setLogoLink] = useState("");
+  const [logoPrompt, setLogoPrompt] = useState("");
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [logoError, setLogoError] = useState<string | null>(null);
+  const [showUpload, setShowUpload] = useState(true);
+  const [industry, setIndustry] = useState("tech");
+  const [currency, setCurrency] = useState("usd");
+  const [timezone, setTimezone] = useState("est");
+  const [loading, setLoading] = useState(true);
+  const [originalSlug, setOriginalSlug] = useState("");
 
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 space-y-8">
-      <div className="space-y-2">
-        <h4 className="font-bold text-[#0A0A0A]">Workspace Logo</h4>
-        <p className="text-sm text-gray-500">Used in emails, PDFs, and task notifications.</p>
-        <SecureUploader
-          purpose="workspace_logo"
-          resourceType="workspace"
-          resourceId="current"
-          accept="image/png,image/jpeg,image/webp, image/svg+xml"
-          maxSizeMb={8}
-          title="Workspace Logo"
-        />
+  const MIN_SLUG_LENGTH = 3;
+  const MAX_SLUG_LENGTH = 50;
+
+  function isValidSlugValue(value: string) {
+    if (!value) return false;
+    if (value.length < MIN_SLUG_LENGTH || value.length > MAX_SLUG_LENGTH) return false;
+    return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+  }
+
+  const colorOptions = ["#E43632", "#2563EB", "#22C55E", "#F59E0B", "#8B5CF6", "#0F172A"];
+
+  // Load initial workspace data
+  useEffect(() => {
+    async function loadWorkspace() {
+      try {
+        const res = await fetch("/api/workspaces");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.tenant) {
+            setWorkspaceName(data.tenant.name || "");
+            setSlug(data.tenant.slug || "");
+            setOriginalSlug(data.tenant.slug || "");
+            setIndustry(data.tenant.industry || "tech");
+            setCurrency(data.tenant.currency || "usd");
+            setTimezone(data.tenant.timezone || "est");
+            // If slug matches original, mark as available
+            if (data.tenant.slug) {
+              setSlugStatus("available");
+              setSlugMessage("Current workspace URL");
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load workspace:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadWorkspace();
+  }, []);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      if (!slug) return;
+      // Don't check if it's the original slug
+      if (slug === originalSlug) {
+        setSlugStatus("available");
+        setSlugMessage("Current workspace URL");
+        return;
+      }
+      checkSlug(slug);
+    }, 400);
+    return () => clearTimeout(handler);
+  }, [slug, originalSlug]);
+
+  async function checkSlug(nextSlug: string) {
+    if (!nextSlug) return;
+    if (!isValidSlugValue(nextSlug)) {
+      setSlugStatus("invalid");
+      setSlugMessage("Use 3-50 chars, lowercase, numbers, hyphens.");
+      return;
+    }
+
+    setSlugStatus("checking");
+    const res = await fetch(`/api/workspaces/check-slug?slug=${encodeURIComponent(nextSlug)}`);
+    const data = await res.json();
+    if (res.ok && data.available) {
+      setSlugStatus("available");
+      setSlugMessage("Slug is available.");
+    } else {
+      setSlugStatus(res.ok ? "unavailable" : "invalid");
+      setSlugMessage(data.reason ?? "Slug is not available.");
+    }
+  }
+
+  async function uploadLogoFromFile(file: File) {
+    const form = new FormData();
+    form.append("purpose", "workspace_logo");
+    form.append("resourceType", "workspace");
+    form.append("resourceId", "current");
+    form.append("title", "Workspace Logo");
+    form.append("file", file);
+    const res = await fetch("/api/uploads", { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error ?? "Upload failed");
+    }
+    if (data.version?.storageUrl) {
+      setLogoUrl(data.version.storageUrl);
+      setShowUpload(false);
+    }
+    return data;
+  }
+
+  async function uploadLogoFromUrl(url: string) {
+    const form = new FormData();
+    form.append("purpose", "workspace_logo");
+    form.append("resourceType", "workspace");
+    form.append("resourceId", "current");
+    form.append("title", "Workspace Logo");
+    form.append("url", url);
+    const res = await fetch("/api/uploads", { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error ?? "Unable to fetch logo.");
+    }
+    if (data.version?.storageUrl) {
+      setLogoUrl(data.version.storageUrl);
+      setShowUpload(false);
+    }
+    return data;
+  }
+
+  async function handleSave() {
+    if (!workspaceName.trim()) {
+      onSaveStateChange?.("Workspace name is required.", false, false);
+      return;
+    }
+
+    if (slugStatus === "unavailable" || slugStatus === "invalid") {
+      onSaveStateChange?.("Please fix the workspace URL before saving.", false, false);
+      return;
+    }
+
+    if (slugStatus === "checking") {
+      onSaveStateChange?.("Please wait for URL validation to complete.", false, false);
+      return;
+    }
+
+    onSaveStateChange?.(null, false, true);
+
+    try {
+      const res = await fetch("/api/workspaces", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: workspaceName.trim(),
+          slug: slug.trim().toLowerCase(),
+          industry: industry,
+          currency: currency,
+          timezone: timezone,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        onSaveStateChange?.(data.error ?? "Failed to save workspace settings.", false, false);
+        return;
+      }
+
+      if (data.tenant) {
+        setOriginalSlug(data.tenant.slug || slug);
+        onSaveStateChange?.(null, true, false);
+        // Clear success message after 3 seconds
+        setTimeout(() => {
+          onSaveStateChange?.(null, false, false);
+        }, 3000);
+      }
+    } catch (err) {
+      onSaveStateChange?.(err instanceof Error ? err.message : "Unexpected error saving workspace settings.", false, false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center mb-2">
+          <h3 className="text-xl font-bold text-[#0A0A0A]">Workspace Profile</h3>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 flex items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-[#E43632]" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center mb-2">
+        <h3 className="text-xl font-bold text-[#0A0A0A]">Workspace Profile</h3>
+        <Button
+          className="bg-[#0A0A0A] hover:bg-gray-800 text-white"
+          onClick={handleSave}
+          disabled={isSaving || loading}
+        >
+          <Save size={16} className="mr-2" /> {isSaving ? "Saving..." : "Save Changes"}
+        </Button>
       </div>
 
-      <Separator />
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-gray-700">Workspace Name</label>
-          <Input defaultValue="Acme Corp" />
+      {saveError && (
+        <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
+          {saveError}
         </div>
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-gray-700">Company Domain</label>
-          <div className="relative">
-            <Globe className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <Input defaultValue="acmecorp.com" className="pl-9 bg-gray-50" readOnly />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-600 flex items-center gap-1 text-xs font-bold">
-              <CheckCircle2 size={12} /> Verified
+      )}
+
+      {saveSuccess && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 text-sm text-emerald-700 flex items-center gap-2">
+          <CheckCircle2 size={16} />
+          Workspace settings saved successfully!
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 space-y-8">
+        <div className="space-y-4">
+          <h4 className="font-bold text-[#0A0A0A]">Workspace Logo</h4>
+          <p className="text-sm text-gray-500">Used in emails, PDFs, and task notifications.</p>
+          
+          {logoUrl && (
+            <div className="flex items-center justify-center pt-2">
+              <div className="relative h-24 w-24 rounded-2xl overflow-hidden border border-gray-200 shadow-sm bg-black">
+                <img src={logoUrl} alt="Workspace logo preview" className="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  aria-label="Delete logo"
+                  className="absolute -top-2 -right-2 h-8 w-8 rounded-full bg-white shadow border border-gray-200 flex items-center justify-center text-gray-600 hover:text-red-600"
+                  onClick={() => {
+                    setLogoUrl(null);
+                    setShowUpload(true);
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showUpload && (
+            <>
+              <div className="flex gap-2 bg-gray-100 rounded-full p-1 text-sm font-semibold text-gray-700">
+                {[
+                  { id: "upload", label: "Upload", icon: <Upload size={16} /> },
+                  { id: "link", label: "Link URL", icon: <Link2 size={16} /> },
+                  { id: "ai", label: "AI Gen", icon: <Sparkles size={16} /> },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setLogoTab(tab.id as typeof logoTab)}
+                    className={`flex-1 inline-flex items-center justify-center gap-2 rounded-full px-3 py-2 transition ${
+                      logoTab === tab.id ? "bg-white shadow-sm text-[#0A0A0A]" : "text-gray-600"
+                    }`}
+                  >
+                    {tab.icon}
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {logoError && <p className="text-sm text-red-600 text-center">{logoError}</p>}
+
+              {logoTab === "upload" && (
+                <label className="block border-2 border-dashed border-gray-200 rounded-2xl bg-gray-50 hover:border-[#E43632] hover:bg-white transition cursor-pointer">
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setLogoError(null);
+                      setLogoUploading(true);
+                      try {
+                        await uploadLogoFromFile(file);
+                      } catch (err) {
+                        setLogoError(err instanceof Error ? err.message : "Upload failed.");
+                      } finally {
+                        setLogoUploading(false);
+                      }
+                    }}
+                  />
+                  <div className="py-10 px-6 flex flex-col items-center justify-center text-center space-y-2">
+                    {logoUploading ? (
+                      <Loader2 className="h-8 w-8 animate-spin text-[#E43632]" />
+                    ) : (
+                      <Upload className="h-8 w-8 text-[#E43632]" />
+                    )}
+                    <p className="text-sm font-semibold text-[#0A0A0A]">Click to upload or drag & drop</p>
+                    <p className="text-xs text-gray-500">SVG, PNG, JPG (max 2MB)</p>
+                  </div>
+                </label>
+              )}
+
+              {logoTab === "link" && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 rounded-full bg-gray-100 px-4 py-3 text-sm text-gray-600">
+                    <Link2 size={16} />
+                    <input
+                      type="url"
+                      placeholder="https://example.com/logo.png"
+                      className="flex-1 bg-transparent outline-none"
+                      value={logoLink}
+                      onChange={(e) => setLogoLink(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    className="w-full rounded-full bg-[#0A0A0A] hover:bg-black text-white"
+                    disabled={logoUploading || !logoLink}
+                    onClick={async () => {
+                      setLogoError(null);
+                      setLogoUploading(true);
+                      try {
+                        await uploadLogoFromUrl(logoLink);
+                      } catch (err) {
+                        setLogoError(err instanceof Error ? err.message : "Unable to fetch logo.");
+                      } finally {
+                        setLogoUploading(false);
+                      }
+                    }}
+                  >
+                    {logoUploading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                    Fetch Logo
+                  </Button>
+                </div>
+              )}
+
+              {logoTab === "ai" && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 rounded-full bg-white border border-gray-200 px-4 py-3 text-sm text-gray-700">
+                    <Sparkles size={16} className="text-[#9b87f5]" />
+                    <input
+                      type="text"
+                      placeholder="e.g. Minimalist geometric fox"
+                      className="flex-1 bg-transparent outline-none"
+                      value={logoPrompt}
+                      onChange={(e) => setLogoPrompt(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    className="w-full rounded-full bg-[#9b87f5] hover:bg-[#8b79e0] text-white"
+                    disabled={logoUploading || !logoPrompt}
+                    onClick={() => {
+                      setLogoError("AI generation coming soon.");
+                    }}
+                  >
+                    Generate with AI
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <Separator />
+
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-gray-800">Workspace Name</label>
+            <input
+              value={workspaceName}
+              onChange={(e) => setWorkspaceName(e.target.value)}
+              className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-medium text-gray-900 shadow-inner focus:border-[#E43632] focus:bg-white focus:outline-none"
+              placeholder="Acme Corp"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-gray-800">Workspace URL</label>
+            <div className="flex items-center rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 shadow-inner focus-within:border-[#E43632] focus-within:bg-white">
+              <span className="text-sm text-gray-500">wrk.com/</span>
+              <input
+                value={slug}
+                onChange={(e) => setSlug(e.target.value.toLowerCase())}
+                className="ml-2 w-full bg-transparent text-sm font-medium text-gray-900 outline-none"
+                placeholder="acme"
+              />
+              {slugStatus === "checking" && <Loader2 className="h-4 w-4 animate-spin text-gray-400" />}
+              {slugStatus === "available" && <Check className="h-4 w-4 text-emerald-600" />}
+            </div>
+            {slugMessage && <p className="text-xs text-gray-600">{slugMessage}</p>}
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-gray-800">Brand Color</label>
+            <div className="flex flex-wrap gap-3">
+              {colorOptions.map((color) => {
+                const isActive = brandColor === color;
+                return (
+                  <button
+                    key={color}
+                    type="button"
+                    onClick={() => setBrandColor(color)}
+                    className={`flex h-11 w-11 items-center justify-center rounded-full border-2 transition ${
+                      isActive ? "border-[#E43632] ring-2 ring-[#E43632]/40" : "border-white shadow-sm hover:shadow"
+                    }`}
+                    style={{ backgroundColor: color }}
+                    aria-label={`Choose color ${color}`}
+                  >
+                    {isActive ? <Check className="h-4 w-4 text-white" /> : <Palette className="h-4 w-4 text-white/80" />}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
 
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-gray-700">Industry</label>
-          <Select defaultValue="tech">
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="tech">Technology</SelectItem>
-              <SelectItem value="finance">Finance</SelectItem>
-              <SelectItem value="health">Healthcare</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+        <Separator />
 
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-gray-700">Default Currency</label>
-          <Select defaultValue="usd">
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="usd">USD ($)</SelectItem>
-              <SelectItem value="eur">EUR (€)</SelectItem>
-              <SelectItem value="gbp">GBP (£)</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-gray-700">Timezone</label>
-          <div className="relative">
-            <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <Select defaultValue="est">
-              <SelectTrigger className="pl-9">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-gray-700">Industry</label>
+            <Select value={industry} onValueChange={setIndustry}>
+              <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="est">Eastern Time (US & Canada)</SelectItem>
-                <SelectItem value="pst">Pacific Time (US & Canada)</SelectItem>
-                <SelectItem value="utc">UTC</SelectItem>
+                <SelectItem value="tech">Technology</SelectItem>
+                <SelectItem value="finance">Finance</SelectItem>
+                <SelectItem value="health">Healthcare</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-gray-700">Default Currency</label>
+            <Select value={currency} onValueChange={setCurrency}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="usd">USD ($)</SelectItem>
+                <SelectItem value="cad">CAD ($)</SelectItem>
+                <SelectItem value="eur">EUR (€)</SelectItem>
+                <SelectItem value="gbp">GBP (£)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-gray-700">Timezone</label>
+            <div className="relative">
+              <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+              <Select value={timezone} onValueChange={setTimezone}>
+                <SelectTrigger className="pl-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="est">Eastern Time (US & Canada)</SelectItem>
+                  <SelectItem value="pst">Pacific Time (US & Canada)</SelectItem>
+                  <SelectItem value="utc">UTC</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 // --- 2. Billing ---
 const BillingSettings = ({

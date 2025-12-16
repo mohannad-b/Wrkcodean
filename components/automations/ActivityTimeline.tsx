@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 interface ActivityItem {
   id: string;
@@ -11,6 +12,9 @@ interface ActivityItem {
   displayText: string;
   category: string;
   user: string;
+  userAvatarUrl?: string | null;
+  userFirstName?: string | null;
+  userLastName?: string | null;
   timestamp: string;
   metadata?: Record<string, unknown>;
 }
@@ -168,22 +172,38 @@ export function ActivityTimeline({
       )}
 
       <div className="space-y-4">
-        {timelineItems.map((activity, index) => (
-          <div key={activity.id} className="flex gap-3">
-            <div className="relative">
-              <div className={`w-3 h-3 rounded-full mt-1.5 ${activity.color}`} />
-              {index < timelineItems.length - 1 && (
-                <div className="absolute top-4 left-1.5 w-px h-full bg-gray-200 -translate-x-1/2" />
-              )}
+        {timelineItems.map((activity, index) => {
+          const getUserInitials = () => {
+            if (activity.userFirstName && activity.userLastName) {
+              return `${activity.userFirstName.charAt(0)}${activity.userLastName.charAt(0)}`.toUpperCase();
+            }
+            return activity.user.charAt(0).toUpperCase();
+          };
+
+          return (
+            <div key={activity.id} className="flex gap-3">
+              <div className="relative flex flex-col items-center">
+                <Avatar className="w-6 h-6 border-2 border-white shadow-sm">
+                  {activity.userAvatarUrl ? (
+                    <AvatarImage src={activity.userAvatarUrl} alt={activity.user} />
+                  ) : null}
+                  <AvatarFallback className="text-[10px] bg-gray-100">
+                    {getUserInitials()}
+                  </AvatarFallback>
+                </Avatar>
+                {index < timelineItems.length - 1 && (
+                  <div className="absolute top-7 left-1/2 w-px h-full bg-gray-200 -translate-x-1/2" />
+                )}
+              </div>
+              <div className="flex-1 pb-4">
+                <p className="text-sm text-gray-900">{activity.displayText}</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}
+                </p>
+              </div>
             </div>
-            <div className="flex-1 pb-4">
-              <p className="text-sm text-gray-900">{activity.displayText}</p>
-              <p className="text-xs text-gray-400 mt-0.5">
-                {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}
-              </p>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

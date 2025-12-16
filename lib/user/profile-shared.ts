@@ -5,7 +5,9 @@ export type NotificationPreference = (typeof NOTIFICATION_PREFERENCES)[number];
 
 export interface UserProfile {
   id: string;
-  name: string;
+  firstName: string | null;
+  lastName: string | null;
+  name: string; // Computed from firstName/lastName for backward compatibility
   email: string;
   title: string | null;
   avatarUrl: string | null;
@@ -15,7 +17,7 @@ export interface UserProfile {
 
 export type UserProfileEditableFields = Pick<
   UserProfile,
-  "name" | "title" | "avatarUrl" | "timezone" | "notificationPreference"
+  "firstName" | "lastName" | "title" | "avatarUrl" | "timezone" | "notificationPreference"
 >;
 
 export type UserProfileUpdatePayload = Partial<UserProfileEditableFields>;
@@ -26,6 +28,8 @@ export type UserProfileResult = {
 };
 
 export const USER_PROFILE_NAME_MAX = 120;
+export const USER_PROFILE_FIRST_NAME_MAX = 60;
+export const USER_PROFILE_LAST_NAME_MAX = 60;
 export const USER_PROFILE_TITLE_MAX = 120;
 
 const TIMEZONE_PATTERN = /^[A-Za-z]+(?:[_-][A-Za-z]+)*(?:\/[A-Za-z]+(?:[_-][A-Za-z]+)*)+$/;
@@ -102,12 +106,8 @@ const timezoneField = z
 
 export const userProfileUpdateSchema = z
   .object({
-    name: z
-      .string()
-      .trim()
-      .min(1, "Name is required")
-      .max(USER_PROFILE_NAME_MAX, `Name must be ${USER_PROFILE_NAME_MAX} characters or fewer`)
-      .optional(),
+    firstName: nullableLimitedString(USER_PROFILE_FIRST_NAME_MAX),
+    lastName: nullableLimitedString(USER_PROFILE_LAST_NAME_MAX),
     title: nullableLimitedString(USER_PROFILE_TITLE_MAX),
     avatarUrl: avatarUrlField,
     timezone: timezoneField,

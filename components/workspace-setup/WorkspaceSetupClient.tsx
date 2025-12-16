@@ -4,8 +4,15 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Building2, Check, Link2, Loader2, Lock, Palette, Phone, ShieldCheck, Sparkles, Upload, Users, Workflow } from "lucide-react";
+import { ArrowLeft, ArrowRight, Building2, Check, Clock, Link2, Loader2, Lock, Palette, Phone, ShieldCheck, Sparkles, Upload, Users, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type Props = {
   firstName: string;
@@ -72,6 +79,9 @@ export function WorkspaceSetupClient({
   const [tosError, setTosError] = useState<string | null>(null);
   const [loadingOnboarding, setLoadingOnboarding] = useState(true);
   const [selectedImports, setSelectedImports] = useState<string[]>([]);
+  const [industry, setIndustry] = useState("tech");
+  const [currency, setCurrency] = useState("usd");
+  const [timezone, setTimezone] = useState("est");
 
   const isBrandingComplete = Boolean(createdTenantId);
   const isPhoneComplete = verifyState === "verified" || phoneSkipped;
@@ -568,6 +578,54 @@ export function WorkspaceSetupClient({
                     </button>
                   );
                 })}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-gray-800">Industry</label>
+              <Select value={industry} onValueChange={setIndustry}>
+                <SelectTrigger className="rounded-2xl border border-gray-200 bg-gray-50 shadow-inner focus:border-[#E43632] focus:bg-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="tech">Technology</SelectItem>
+                  <SelectItem value="finance">Finance</SelectItem>
+                  <SelectItem value="health">Healthcare</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-gray-800">Default Currency</label>
+              <Select value={currency} onValueChange={setCurrency}>
+                <SelectTrigger className="rounded-2xl border border-gray-200 bg-gray-50 shadow-inner focus:border-[#E43632] focus:bg-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="usd">USD ($)</SelectItem>
+                  <SelectItem value="cad">CAD ($)</SelectItem>
+                  <SelectItem value="eur">EUR (€)</SelectItem>
+                  <SelectItem value="gbp">GBP (£)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2 md:col-span-2">
+              <label className="text-sm font-semibold text-gray-800">Timezone</label>
+              <div className="relative">
+                <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <Select value={timezone} onValueChange={setTimezone}>
+                  <SelectTrigger className="pl-9 rounded-2xl border border-gray-200 bg-gray-50 shadow-inner focus:border-[#E43632] focus:bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="est">Eastern Time (US & Canada)</SelectItem>
+                    <SelectItem value="pst">Pacific Time (US & Canada)</SelectItem>
+                    <SelectItem value="utc">UTC</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           </div>

@@ -17,6 +17,9 @@ type ActivityPayload = {
   displayText: string;
   category: string;
   user: string;
+  userAvatarUrl: string | null;
+  userFirstName: string | null;
+  userLastName: string | null;
   timestamp: Date;
   metadata?: Record<string, unknown> | null;
 };
@@ -39,7 +42,10 @@ export async function GET(request: Request, { params }: RouteParams) {
         action: auditLogs.action,
         userId: auditLogs.userId,
         userName: users.name,
+        userFirstName: users.firstName,
+        userLastName: users.lastName,
         userEmail: users.email,
+        userAvatarUrl: users.avatarUrl,
         metadata: auditLogs.metadata,
         createdAt: auditLogs.createdAt,
       })
@@ -64,6 +70,9 @@ export async function GET(request: Request, { params }: RouteParams) {
         displayText: formatActivityText(log.action, user, log.metadata),
         category: getActivityCategory(log.action),
         user,
+        userAvatarUrl: log.userAvatarUrl ?? null,
+        userFirstName: log.userFirstName ?? null,
+        userLastName: log.userLastName ?? null,
         timestamp: log.createdAt,
         metadata: log.metadata,
       };

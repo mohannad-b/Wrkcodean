@@ -43,53 +43,95 @@ export function generateThinkingSteps(
 
   const normalizedLatestMessage = latestUserMessage?.toLowerCase() ?? "";
   const mentionsApproval = /approv/.test(normalizedLatestMessage) || normalizedLatestMessage.includes("$");
+  const mentionsEmail = /email|gmail|mail/i.test(normalizedLatestMessage);
+  const mentionsInvoice = /invoice|bill|payment/i.test(normalizedLatestMessage);
+  const mentionsLead = /lead|contact|customer/i.test(normalizedLatestMessage);
+  const mentionsData = /extract|data|information/i.test(normalizedLatestMessage);
+  const mentionsNotify = /notif|alert|send|email|message/i.test(normalizedLatestMessage);
+
+  // Extract workflow keywords to make thinking more contextual
+  const workflowContext = mentionsInvoice ? "invoice processing" : mentionsLead ? "lead management" : "workflow";
 
   switch (phase) {
     case "discovery":
+      const step1 = systemsText 
+        ? `Analyzing your ${workflowContext} workflow. I see you're working with ${systems[0]}${systems.length > 1 ? ` and ${systems.slice(1).join(", ")}` : ""}.`
+        : `Understanding your ${workflowContext} requirements and goals.`;
+      
       return [
         {
           id: "thinking-1",
-          label: systemsText ? `Understanding the ${systems[0]}-based workflow` : "Understanding the workflow goal",
+          label: step1,
         },
         {
           id: "thinking-2",
-          label: "Identifying triggers and desired outcomes",
+          label: mentionsEmail 
+            ? "Identifying the email trigger and what data needs to be extracted from incoming messages."
+            : "Identifying the starting trigger point and what kicks off this automation.",
         },
         {
           id: "thinking-3",
-          label: "Framing the first clarifying questions",
+          label: mentionsInvoice
+            ? "Determining the data extraction requirements - invoice amounts, dates, vendors, line items."
+            : mentionsData
+            ? "Mapping out what data needs to be captured, transformed, or validated at each step."
+            : "Framing key questions about outcomes, exceptions, and human touchpoints needed.",
         },
       ];
 
     case "flow":
+      const flowStep1 = mentionsInvoice && systemsText
+        ? `Step 1: Processing invoices from ${systems.includes("Gmail") || mentionsEmail ? "email" : systems[0]}. Extracting invoice data using OCR and parsing vendor, amount, date, and line items.`
+        : systemsText
+        ? `Step 1: Setting up the trigger from ${systems[0]}. Understanding what event initiates this workflow.`
+        : "Step 1: Mapping the workflow trigger - what event starts this automation?";
+      
+      const flowStep2 = systemsText && systems.length > 1
+        ? `Step 2: Connecting data flow between ${systems[0]} and ${systems[1]}. Mapping field mappings and transformation requirements.`
+        : mentionsData
+        ? `Step 2: Defining data extraction and transformation steps. Ensuring data quality and validation rules.`
+        : systemsText
+        ? `Step 2: Configuring actions in ${systems[0]}. Determining what operations need to happen and in what sequence.`
+        : "Step 2: Connecting systems and mapping data paths between each step.";
+      
+      const flowStep3 = mentionsNotify
+        ? `Step 3: Adding notification steps. Setting up email or Slack alerts to notify stakeholders when actions complete.`
+        : "Step 3: Drafting the complete workflow structure with all steps, branches, and decision points.";
+
       return [
         {
           id: "thinking-1",
-          label: "Mapping each step in the automation",
+          label: flowStep1,
         },
         {
           id: "thinking-2",
-          label: systemsText ? `Connecting ${systemsText}` : "Connecting systems and data paths",
+          label: flowStep2,
         },
         {
           id: "thinking-3",
-          label: "Drafting the visual blueprint",
+          label: flowStep3,
         },
       ];
 
     case "details":
+      const detailStep1 = mentionsApproval
+        ? `Analyzing approval thresholds. You mentioned ${normalizedLatestMessage.includes("$") ? "monetary thresholds" : "approval workflows"}. Setting up conditional logic to route items based on criteria.`
+        : mentionsInvoice
+        ? "Reviewing invoice processing edge cases: duplicate detection, amount validation, vendor matching, and exception handling."
+        : "Reviewing edge cases and exception scenarios. Identifying what could go wrong and how to handle it.";
+      
       return [
         {
           id: "thinking-1",
-          label: mentionsApproval ? "Analyzing approval threshold logic" : "Reviewing edge cases and data requirements",
+          label: detailStep1,
         },
         {
           id: "thinking-2",
-          label: "Capturing human touchpoints or reviews",
+          label: "Identifying human touchpoints - approval steps, manual reviews, or places where someone needs to make a decision.",
         },
         {
           id: "thinking-3",
-          label: "Tightening assumptions and branches",
+          label: "Tightening the workflow logic. Adding branches for different scenarios and ensuring data flows correctly through each path.",
         },
       ];
 
@@ -98,11 +140,11 @@ export function generateThinkingSteps(
       return [
         {
           id: "thinking-1",
-          label: "Validating the full automation flow",
+          label: "Validating the complete automation flow. Checking that all steps connect properly, required data is available, and exceptions are handled.",
         },
         {
           id: "thinking-2",
-          label: "Preparing the final summary for review",
+          label: "Preparing the final workflow blueprint with all details, ready for your review and any adjustments needed.",
         },
       ];
   }

@@ -44,6 +44,12 @@ export type AppSession = {
   roles: string[];
 };
 
+export type UserSession = {
+  userId: string;
+  tenantId: null;
+  roles: [];
+};
+
 export type Auth0UserProfile = {
   auth0Id: string;
   email: string;
@@ -69,20 +75,57 @@ export async function getOrCreateUserFromAuth0Session(): Promise<{
   const email = session.user.email ?? `${auth0Id.replace("|", "_")}@placeholder.local`;
   const name = session.user.name ?? email;
   const avatarUrl = session.user.picture ?? null;
+  
+  // Split name into firstName and lastName
+  let firstName: string | null = null;
+  let lastName: string | null = null;
+  if (name && name !== email) {
+    const nameParts = name.trim().split(/\s+/);
+    if (nameParts.length === 1) {
+      firstName = nameParts[0];
+    } else if (nameParts.length >= 2) {
+      firstName = nameParts[0];
+      lastName = nameParts.slice(1).join(" ");
+    }
+  }
 
-  let userRecord =
-    (await db.query.users.findFirst({
-      where: eq(users.auth0Id, auth0Id),
-    })) ??
-    (await db.query.users.findFirst({
-      where: eq(users.email, email),
-    }));
+  // Retry logic for database connection issues
+  let userRecord;
+  let retries = 3;
+  let lastError: Error | null = null;
+  
+  while (retries > 0) {
+    try {
+      userRecord =
+        (await db.query.users.findFirst({
+          where: eq(users.auth0Id, auth0Id),
+        })) ??
+        (await db.query.users.findFirst({
+          where: eq(users.email, email),
+        }));
+      break; // Success, exit retry loop
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      retries--;
+      if (retries > 0) {
+        // Wait before retrying (exponential backoff)
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (4 - retries)));
+      }
+    }
+  }
+  
+  if (!userRecord && lastError) {
+    // If we still don't have a user record and there was an error, throw it
+    throw lastError;
+  }
 
   if (userRecord && userRecord.auth0Id !== auth0Id) {
     await db
       .update(users)
       .set({
         auth0Id,
+        firstName,
+        lastName,
         name,
         avatarUrl,
       })
@@ -90,21 +133,46 @@ export async function getOrCreateUserFromAuth0Session(): Promise<{
     userRecord = {
       ...userRecord,
       auth0Id,
+      firstName,
+      lastName,
       name,
       avatarUrl,
     };
   }
 
   if (!userRecord) {
-    const [inserted] = await db
-      .insert(users)
-      .values({
-        auth0Id,
-        email,
-        name,
-        avatarUrl,
-      })
-      .returning();
+    // Retry logic for user creation as well
+    let inserted;
+    let createRetries = 3;
+    let createError: Error | null = null;
+    
+    while (createRetries > 0) {
+      try {
+        [inserted] = await db
+          .insert(users)
+          .values({
+            auth0Id,
+            email,
+            firstName,
+            lastName,
+            name,
+            avatarUrl,
+          })
+          .returning();
+        break; // Success, exit retry loop
+      } catch (error) {
+        createError = error instanceof Error ? error : new Error(String(error));
+        createRetries--;
+        if (createRetries > 0) {
+          // Wait before retrying (exponential backoff)
+          await new Promise((resolve) => setTimeout(resolve, 1000 * (4 - createRetries)));
+        }
+      }
+    }
+    
+    if (createError && !inserted) {
+      throw createError;
+    }
 
     userRecord =
       inserted ??
@@ -217,4 +285,29 @@ export const getSession = withCache(async (): Promise<AppSession> => {
 
   return getAuth0BackedSession();
 });
+
+/**
+ * Get a user session without requiring tenant membership.
+ * Useful for pre-workspace setup flows.
+ */
+export async function getUserSession(): Promise<UserSession> {
+  if (process.env.AUTH0_MOCK_ENABLED === "true") {
+    const userId = process.env.MOCK_USER_ID;
+    if (!userId) {
+      throw new Error("MOCK_USER_ID must be set when AUTH0_MOCK_ENABLED=true.");
+    }
+    return {
+      userId,
+      tenantId: null,
+      roles: [],
+    };
+  }
+
+  const { userRecord } = await getOrCreateUserFromAuth0Session();
+  return {
+    userId: userRecord.id,
+    tenantId: null,
+    roles: [],
+  };
+}
 

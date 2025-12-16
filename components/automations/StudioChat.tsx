@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from "react"
 import { Send, Mic, Sparkles, AlertCircle, Paperclip, MonitorPlay, CheckCircle2, RefreshCw, Lightbulb, Loader2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { currentUser } from "@/lib/mock-automations";
+import { useUserProfile } from "@/components/providers/user-profile-provider";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import type { BlueprintUpdates } from "@/lib/blueprint/ai-updates";
@@ -56,7 +56,7 @@ type ApiCopilotMessage = {
   createdAt: string;
 };
 
-const THINKING_STEP_INTERVAL_MS = process.env.NODE_ENV === "test" ? 150 : 600;
+const THINKING_STEP_INTERVAL_MS = process.env.NODE_ENV === "test" ? 150 : 800;
 const DEFAULT_USER_FACING_THINKING_STEPS: CopilotThinkingStep[] = [
   { id: "thinking-default-1", label: "Digesting what you're trying to accomplish" },
   { id: "thinking-default-2", label: "Mapping how the systems should connect" },
@@ -82,6 +82,7 @@ export function StudioChat({
   isRequestingSuggestions = false,
   suggestionStatus = null,
 }: StudioChatProps) {
+  const { profile } = useUserProfile();
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -94,9 +95,26 @@ export function StudioChat({
   const [thinkingSteps, setThinkingSteps] = useState<CopilotThinkingStep[]>([]);
   const [showThinkingBubble, setShowThinkingBubble] = useState(false);
   const [currentThinkingIndex, setCurrentThinkingIndex] = useState(0);
+  const [thinkingTextProgress, setThinkingTextProgress] = useState<Record<string, number>>({});
+  const typingIntervalRef = useRef<number | null>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const prevBlueprintEmptyRef = useRef<boolean>(blueprintEmpty);
   const actionButtonsDisabled = disabled || !automationVersionId;
+
+  const getUserInitials = () => {
+    if (!profile) return "ME";
+    if (profile.firstName && profile.lastName) {
+      return `${profile.firstName.charAt(0)}${profile.lastName.charAt(0)}`.toUpperCase();
+    }
+    if (profile.name) {
+      const parts = profile.name.split(/\s+/).filter(Boolean);
+      return parts
+        .slice(0, 2)
+        .map((segment) => segment.charAt(0).toUpperCase())
+        .join("");
+    }
+    return profile.email.charAt(0).toUpperCase();
+  };
 
   const dropTransientMessages = useCallback(
     (list: CopilotMessage[]) => list.filter((message) => !message.transient),
@@ -184,22 +202,59 @@ export function StudioChat({
 useEffect(() => {
   if (!showThinkingBubble || thinkingSteps.length === 0) {
     setCurrentThinkingIndex(0);
+    setThinkingTextProgress({});
+    if (typingIntervalRef.current) {
+      window.clearInterval(typingIntervalRef.current);
+      typingIntervalRef.current = null;
+    }
     return;
   }
 
+  // Reset state
   setCurrentThinkingIndex(0);
-  const interval = window.setInterval(() => {
-    setCurrentThinkingIndex((prev) => {
-      if (prev < thinkingSteps.length - 1) {
-        return prev + 1;
+  setThinkingTextProgress({});
+  
+  const displayedSteps = (thinkingSteps.length > 0 ? thinkingSteps : DEFAULT_USER_FACING_THINKING_STEPS).slice(0, 3);
+  let currentStepIndex = 0;
+  let currentCharIndex = 0;
+  const progress: Record<string, number> = {};
+  
+  if (typingIntervalRef.current) {
+    window.clearInterval(typingIntervalRef.current);
+  }
+  
+  typingIntervalRef.current = window.setInterval(() => {
+    if (currentStepIndex >= displayedSteps.length) {
+      if (typingIntervalRef.current) {
+        window.clearInterval(typingIntervalRef.current);
+        typingIntervalRef.current = null;
       }
-      window.clearInterval(interval);
-      return prev;
-    });
-  }, THINKING_STEP_INTERVAL_MS);
-
+      return;
+    }
+    
+    const currentStep = displayedSteps[currentStepIndex];
+    const fullText = currentStep.label;
+    
+    if (currentCharIndex <= fullText.length) {
+      progress[currentStep.id] = currentCharIndex;
+      setThinkingTextProgress({ ...progress });
+      setCurrentThinkingIndex(currentStepIndex);
+      currentCharIndex += 4; // Type 4 chars at a time
+    } else {
+      // Finished current step, move to next
+      currentStepIndex++;
+      currentCharIndex = 0;
+      if (currentStepIndex < displayedSteps.length) {
+        setCurrentThinkingIndex(currentStepIndex);
+      }
+    }
+  }, 35); // Update every 35ms for smooth typing
+  
   return () => {
-    window.clearInterval(interval);
+    if (typingIntervalRef.current) {
+      window.clearInterval(typingIntervalRef.current);
+      typingIntervalRef.current = null;
+    }
   };
 }, [showThinkingBubble, thinkingSteps]);
 
@@ -473,7 +528,7 @@ useEffect(() => {
           )}
           {isLoadingThread && (
             <div className="text-[11px] text-gray-400 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-gray-300 animate-pulse" />
+              <Loader2 className="h-3 w-3 animate-spin" />
               Loading conversation…
             </div>
           )}
@@ -483,7 +538,16 @@ useEffect(() => {
       {/* Chat Area */}
       <ScrollArea className="flex-1 min-h-0 px-4 py-4 bg-[#F9FAFB]">
         <div className="space-y-6 pb-4">
-          {messages.map((msg) => (
+          {isLoadingThread ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 className="h-8 w-8 text-[#E43632] animate-spin" />
+                <p className="text-sm text-gray-500">Loading conversation history...</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              {messages.map((msg) => (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -497,8 +561,8 @@ useEffect(() => {
               )}
               {msg.role === "user" && (
                 <Avatar className="w-8 h-8 mt-0.5 border-2 border-white shadow-sm shrink-0">
-                  <AvatarImage src={currentUser.avatar} />
-                  <AvatarFallback>ME</AvatarFallback>
+                  {profile?.avatarUrl ? <AvatarImage src={profile.avatarUrl} alt={profile.name} /> : null}
+                  <AvatarFallback>{getUserInitials()}</AvatarFallback>
                 </Avatar>
               )}
 
@@ -517,7 +581,9 @@ useEffect(() => {
                 </span>
               </div>
             </motion.div>
-          ))}
+              ))}
+            </>
+          )}
           <AnimatePresence>
             {showThinkingBubble ? (
               <motion.div
@@ -537,23 +603,35 @@ useEffect(() => {
                   <div className="flex items-center gap-2 mb-3">
                     <span className="text-sm font-semibold text-gray-900">WrkCoPilot is thinking...</span>
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     {visibleThinkingSteps.map((step, index) => {
                       const isActive = index === activeThinkingIndex;
                       const isComplete = activeThinkingIndex > 0 && index < activeThinkingIndex;
-                      const textClass = isActive
-                        ? "text-sm leading-relaxed text-gray-900 font-medium"
+                      const textProgress = thinkingTextProgress[step.id] ?? 0;
+                      const displayedText = isActive && textProgress > 0
+                        ? step.label.slice(0, textProgress)
                         : isComplete
-                        ? "text-sm leading-relaxed text-gray-500"
-                        : "text-sm leading-relaxed text-gray-400";
+                        ? step.label
+                        : "";
+                      
+                      const textClass = isActive
+                        ? "text-sm leading-relaxed text-gray-900 font-normal"
+                        : isComplete
+                        ? "text-sm leading-relaxed text-gray-500 font-normal"
+                        : "text-sm leading-relaxed text-gray-400 font-normal";
+
+                      // Only show step if it's been started or is complete
+                      if (!isActive && !isComplete) {
+                        return null;
+                      }
 
                       return (
                         <motion.div
                           key={step.id}
                           initial={{ opacity: 0, x: -10 }}
                           animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: index * 0.1 }}
-                          className="flex items-start gap-2"
+                          transition={{ delay: index * 0.05 }}
+                          className="flex items-start gap-3"
                         >
                           {isComplete ? (
                             <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
@@ -565,7 +643,14 @@ useEffect(() => {
                           ) : (
                             <div className="w-4 h-4 rounded-full border-2 border-gray-200 flex-shrink-0 mt-0.5" />
                           )}
-                          <span className={textClass}>{step.label}</span>
+                          <div className="flex-1">
+                            <span className={textClass}>
+                              {displayedText}
+                              {isActive && textProgress < step.label.length && (
+                                <span className="inline-block w-0.5 h-4 bg-[#E43632] ml-1 animate-pulse" />
+                              )}
+                            </span>
+                          </div>
                         </motion.div>
                       );
                     })}
@@ -574,7 +659,7 @@ useEffect(() => {
               </motion.div>
             ) : null}
           </AnimatePresence>
-          <div ref={scrollEndRef} />
+          {!isLoadingThread && <div ref={scrollEndRef} />}
         </div>
       </ScrollArea>
 

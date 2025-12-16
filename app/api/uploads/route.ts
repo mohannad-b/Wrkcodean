@@ -43,10 +43,6 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const session = await requireTenantSession();
-    if (!can(session, "automation:metadata:update", { type: "automation", tenantId: session.tenantId })) {
-      throw new ApiError(403, "Forbidden");
-    }
     const contentType = request.headers.get("content-type") ?? "";
     const isFormData = contentType.includes("multipart/form-data");
 
@@ -54,10 +50,35 @@ export async function POST(request: Request) {
       throw new ApiError(400, "Uploads must use multipart/form-data.");
     }
 
+    // Parse formData once
     const formData = await request.formData();
+    const purpose = parsePurpose(formData.get("purpose"));
+    const isWorkspaceLogoSetup = purpose === "workspace_logo" && formData.get("resourceId") === "setup";
+    
+    let session;
+    let tenantId: string | null = null;
+    
+    if (isWorkspaceLogoSetup) {
+      // Allow workspace logo uploads during setup without tenant
+      const { getUserSession } = await import("@/lib/auth/session");
+      const userSession = await getUserSession();
+      session = {
+        userId: userSession.userId,
+        tenantId: null,
+        roles: [],
+      };
+      tenantId = null; // Will be set when workspace is created
+    } else {
+      // Require tenant for all other uploads
+      session = await requireTenantSession();
+      tenantId = session.tenantId;
+      if (!can(session, "automation:metadata:update", { type: "automation", tenantId: session.tenantId })) {
+        throw new ApiError(403, "Forbidden");
+      }
+    }
+
     const file = formData.get("file");
     const url = formData.get("url");
-    const purpose = parsePurpose(formData.get("purpose"));
     const resourceType = (formData.get("resourceType") as string) || undefined;
     const resourceId = (formData.get("resourceId") as string) || undefined;
     const title = (formData.get("title") as string) || undefined;
@@ -75,9 +96,43 @@ export async function POST(request: Request) {
     } catch {
       // ignore
     }
+    
+    // For workspace logo during setup, return the file URL for temporary storage
+    // The frontend will store it and upload it properly after workspace creation
+    if (isWorkspaceLogoSetup && tenantId === null) {
+      // Store file temporarily and return URL
+      const { storeLocalFile, storeFromUrl } = await import("@/lib/storage/secure-file-storage");
+      let stored;
+      
+      if (file && file instanceof File) {
+        // Use user ID as temporary tenant identifier for storage path
+        stored = await storeLocalFile(file, `temp-${session.userId}`);
+      } else if (url && typeof url === "string") {
+        stored = await storeFromUrl(url, `temp-${session.userId}`);
+      } else {
+        throw new ApiError(400, "Invalid upload payload.");
+      }
+      
+      // Return the storage URL for frontend to use
+      // Format matches the normal response so frontend doesn't need special handling
+      return NextResponse.json({
+        file: null,
+        version: {
+          id: "temporary",
+          storageUrl: stored.storageUrl,
+        },
+        downloadUrl: stored.storageUrl,
+        temporary: true, // Flag to indicate this needs to be uploaded properly after workspace creation
+      });
+    }
+    
+    if (!tenantId) {
+      throw new ApiError(400, "Tenant context required for file uploads.");
+    }
+    
     if (file && file instanceof File) {
       result = await uploadFile({
-        tenantId: session.tenantId,
+        tenantId,
         userId: session.userId,
         purpose,
         resourceType,
@@ -90,7 +145,7 @@ export async function POST(request: Request) {
       });
     } else if (url && typeof url === "string") {
       result = await uploadFile({
-        tenantId: session.tenantId,
+        tenantId,
         userId: session.userId,
         purpose,
         resourceType,

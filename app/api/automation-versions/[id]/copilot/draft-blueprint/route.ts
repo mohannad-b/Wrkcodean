@@ -54,17 +54,36 @@ const SYSTEM_PROMPT =
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
+    console.log("[copilot:draft-blueprint] Request received for version:", params.id);
+    
     const session = await requireTenantSession();
+    console.log("[copilot:draft-blueprint] Session validated, tenantId:", session.tenantId);
 
     if (!can(session, "automation:metadata:update", { type: "automation_version", tenantId: session.tenantId })) {
+      console.error("[copilot:draft-blueprint] Permission denied");
       throw new ApiError(403, "Forbidden");
     }
 
     let payload: DraftRequest;
+    let rawBody: any;
     try {
-      payload = DraftRequestSchema.parse(await request.json());
-    } catch {
-      throw new ApiError(400, "Invalid request body.");
+      rawBody = await request.json();
+      console.log("[copilot:draft-blueprint] Request body parsed, keys:", Object.keys(rawBody || {}));
+      payload = DraftRequestSchema.parse(rawBody);
+      console.log("[copilot:draft-blueprint] Validation passed, messages count:", payload.messages?.length);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const issues = error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join(", ");
+        console.error("[copilot:draft-blueprint] Validation error:", issues);
+        console.error("[copilot:draft-blueprint] Raw body:", JSON.stringify(rawBody, null, 2));
+        throw new ApiError(400, `Invalid request body: ${issues}`);
+      }
+      if (error instanceof SyntaxError) {
+        console.error("[copilot:draft-blueprint] JSON parse error:", error.message);
+        throw new ApiError(400, `Invalid JSON: ${error.message}`);
+      }
+      console.error("[copilot:draft-blueprint] Request parsing error:", error);
+      throw new ApiError(400, `Invalid request body: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     const detail = await getAutomationVersionDetail(session.tenantId, params.id);

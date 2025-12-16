@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { memberships, tenants } from "@/db/schema";
 import { getOrCreateUserFromAuth0Session } from "@/lib/auth/session";
+import { requireTenantSession } from "@/lib/api/context";
 
 const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MIN_SLUG_LENGTH = 3;
@@ -12,6 +13,9 @@ const MAX_SLUG_LENGTH = 50;
 type WorkspacePayload = {
   name?: string;
   slug?: string;
+  industry?: string;
+  currency?: string;
+  timezone?: string;
 };
 
 function validateSlug(slug: string): { ok: boolean; message?: string } {
@@ -86,4 +90,87 @@ export async function POST(request: NextRequest) {
       role: "client_admin",
     },
   });
+}
+
+export async function PATCH(request: NextRequest) {
+  let body: WorkspacePayload;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+
+  const session = await requireTenantSession();
+
+  const updates: { name?: string; slug?: string; industry?: string; currency?: string; timezone?: string } = {};
+
+  if (body.name !== undefined) {
+    const name = body.name.trim();
+    if (!name) {
+      return NextResponse.json({ error: "Workspace name cannot be empty." }, { status: 400 });
+    }
+    updates.name = name;
+  }
+
+  if (body.slug !== undefined) {
+    const slug = body.slug.trim().toLowerCase();
+    const slugValidity = validateSlug(slug);
+    if (!slugValidity.ok) {
+      return NextResponse.json({ error: slugValidity.message }, { status: 400 });
+    }
+
+    // Check if slug is already taken by another tenant
+    const existingSlug = await db.query.tenants.findFirst({
+      where: eq(tenants.slug, slug),
+      columns: { id: true },
+    });
+
+    if (existingSlug && existingSlug.id !== session.tenantId) {
+      return NextResponse.json({ error: "Slug is already taken." }, { status: 409 });
+    }
+
+    updates.slug = slug;
+  }
+
+  if (body.industry !== undefined) {
+    updates.industry = body.industry.trim() || null;
+  }
+
+  if (body.currency !== undefined) {
+    updates.currency = body.currency.trim() || "usd";
+  }
+
+  if (body.timezone !== undefined) {
+    updates.timezone = body.timezone.trim() || "est";
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return NextResponse.json({ error: "No fields to update." }, { status: 400 });
+  }
+
+  const [updated] = await db
+    .update(tenants)
+    .set(updates)
+    .where(eq(tenants.id, session.tenantId))
+    .returning();
+
+  if (!updated) {
+    return NextResponse.json({ error: "Workspace not found." }, { status: 404 });
+  }
+
+  return NextResponse.json({ tenant: updated });
+}
+
+export async function GET() {
+  const session = await requireTenantSession();
+
+  const tenant = await db.query.tenants.findFirst({
+    where: eq(tenants.id, session.tenantId),
+  });
+
+  if (!tenant) {
+    return NextResponse.json({ error: "Workspace not found." }, { status: 404 });
+  }
+
+  return NextResponse.json({ tenant });
 }

@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,6 +30,9 @@ type ActivityItem = {
   displayText: string;
   category: string;
   user: string;
+  userAvatarUrl?: string | null;
+  userFirstName?: string | null;
+  userLastName?: string | null;
   timestamp: string;
 };
 
@@ -249,8 +252,13 @@ export function ActivityTab({ automationVersionId, onNavigateToBlueprint }: Acti
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-2 flex-wrap">
                       <Avatar className="w-7 h-7">
+                        {item.userAvatarUrl ? (
+                          <AvatarImage src={item.userAvatarUrl} alt={item.user} />
+                        ) : null}
                         <AvatarFallback className="text-xs bg-gray-100">
-                          {item.user.charAt(0).toUpperCase()}
+                          {item.userFirstName && item.userLastName
+                            ? `${item.userFirstName.charAt(0)}${item.userLastName.charAt(0)}`.toUpperCase()
+                            : item.user.charAt(0).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
                       <span className="text-sm font-bold text-[#0A0A0A]">{item.user}</span>

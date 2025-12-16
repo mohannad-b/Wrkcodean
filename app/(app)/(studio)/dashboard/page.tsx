@@ -15,6 +15,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   ArrowRight,
   ArrowUpRight,
   Plus,
@@ -28,20 +34,31 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { mockActivityFeed, mockUsageData } from "@/lib/mock-dashboard";
-import { currentUser } from "@/lib/mock-automations";
+import { useUserProfile } from "@/components/providers/user-profile-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { summarizeCounts, toDashboardAutomation, type ApiAutomationSummary } from "@/lib/dashboard/mapper";
 import type { DashboardAutomation } from "@/lib/mock-dashboard";
 import { buildKpiStats, type KpiStat, type VersionMetric } from "@/lib/metrics/kpi";
 
+type TenantMembership = {
+  tenantId: string;
+  tenantName: string;
+  tenantSlug: string;
+  role: string;
+};
+
 export default function DashboardPage() {
   const router = useRouter();
+  const { profile } = useUserProfile();
   const [showAlert, setShowAlert] = useState(true);
   const [automations, setAutomations] = useState<DashboardAutomation[]>([]);
   const [automationSummaries, setAutomationSummaries] = useState<ApiAutomationSummary[]>([]);
   const [loadingAutomations, setLoadingAutomations] = useState(true);
   const [automationsError, setAutomationsError] = useState<string | null>(null);
+  const [tenantMemberships, setTenantMemberships] = useState<TenantMembership[]>([]);
+  const [currentTenant, setCurrentTenant] = useState<{ id: string; name: string } | null>(null);
+  const [loadingTenants, setLoadingTenants] = useState(true);
 
   useEffect(() => {
     const loadAutomations = async () => {
@@ -66,6 +83,59 @@ export default function DashboardPage() {
     void loadAutomations();
   }, []);
 
+  useEffect(() => {
+    const loadTenants = async () => {
+      setLoadingTenants(true);
+      try {
+        const [tenantsResponse, currentTenantResponse] = await Promise.all([
+          fetch("/api/me/tenants", { cache: "no-store" }),
+          fetch("/api/workspaces", { cache: "no-store" }),
+        ]);
+
+        if (tenantsResponse.ok) {
+          const tenantsData = (await tenantsResponse.json()) as { tenants: TenantMembership[] };
+          setTenantMemberships(tenantsData.tenants);
+        }
+
+        if (currentTenantResponse.ok) {
+          const tenantData = (await currentTenantResponse.json()) as { tenant: { id: string; name: string } };
+          setCurrentTenant({ id: tenantData.tenant.id, name: tenantData.tenant.name });
+        }
+      } catch (err) {
+        console.error("[dashboard] failed to load tenant info", err);
+      } finally {
+        setLoadingTenants(false);
+      }
+    };
+
+    void loadTenants();
+  }, []);
+
+  const handleTenantSwitch = async (tenantId: string) => {
+    try {
+      const response = await fetch("/api/auth/switch-workspace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenant_id: tenantId }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to switch workspace");
+      }
+
+      // Reload the page to update the session
+      window.location.reload();
+    } catch (err) {
+      console.error("[dashboard] failed to switch tenant", err);
+    }
+  };
+
+  const getUserFirstName = () => {
+    if (profile?.firstName) return profile.firstName;
+    if (profile?.name) return profile.name.split(" ")[0];
+    return "there";
+  };
+
   const { total, live, building } = summarizeCounts(automations);
   const aggregatedMetric = useMemo(() => aggregateMetrics(automationSummaries), [automationSummaries]);
   const kpiStats = useMemo(() => buildKpiStats(aggregatedMetric, null), [aggregatedMetric]);
@@ -78,14 +148,43 @@ export default function DashboardPage() {
           <div>
             <div className="flex items-center gap-3 text-gray-500 mb-1">
               <Briefcase size={16} />
-              <span className="text-sm font-medium">Acme Corp</span>
-              <ChevronDown
-                size={14}
-                className="cursor-pointer hover:text-black transition-colors"
-              />
+              {loadingTenants ? (
+                <span className="text-sm font-medium">Loading...</span>
+              ) : currentTenant ? (
+                tenantMemberships.length > 1 ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button className="flex items-center gap-1 text-sm font-medium hover:text-black transition-colors">
+                        <span>{currentTenant.name}</span>
+                        <ChevronDown size={14} />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-56">
+                      {tenantMemberships.map((membership) => (
+                        <DropdownMenuItem
+                          key={membership.tenantId}
+                          onClick={() => handleTenantSwitch(membership.tenantId)}
+                          className={membership.tenantId === currentTenant.id ? "bg-gray-50" : ""}
+                        >
+                          <div className="flex flex-col">
+                            <span className="font-medium">{membership.tenantName}</span>
+                            {membership.tenantId !== currentTenant.id && (
+                              <span className="text-xs text-gray-500">{membership.role.replace("_", " ")}</span>
+                            )}
+                          </div>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : (
+                  <span className="text-sm font-medium">{currentTenant.name}</span>
+                )
+              ) : (
+                <span className="text-sm font-medium">Workspace</span>
+              )}
             </div>
             <h1 className="text-2xl md:text-3xl font-bold text-[#0A0A0A] tracking-tight">
-              Good afternoon, {currentUser.name.split(" ")[0]}
+              Good afternoon, {getUserFirstName()}
             </h1>
           </div>
 

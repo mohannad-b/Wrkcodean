@@ -5,6 +5,8 @@ import type { AppSession } from "@/lib/auth/session";
 import {
   NOTIFICATION_PREFERENCES,
   USER_PROFILE_NAME_MAX,
+  USER_PROFILE_FIRST_NAME_MAX,
+  USER_PROFILE_LAST_NAME_MAX,
   USER_PROFILE_TITLE_MAX,
   userProfileUpdateSchema,
   type NotificationPreference,
@@ -16,10 +18,20 @@ import {
 } from "./profile-shared";
 
 export function mapUserToProfile(user: User): UserProfile {
-  const fallbackName = user.name?.trim() && user.name.trim().length > 0 ? user.name.trim() : user.email;
+  // Compute name from firstName/lastName if available, otherwise fall back to name field or email
+  let computedName: string;
+  if (user.firstName || user.lastName) {
+    const parts = [user.firstName, user.lastName].filter(Boolean);
+    computedName = parts.length > 0 ? parts.join(" ") : user.email;
+  } else {
+    computedName = user.name?.trim() && user.name.trim().length > 0 ? user.name.trim() : user.email;
+  }
+
   return {
     id: user.id,
-    name: fallbackName,
+    firstName: user.firstName ?? null,
+    lastName: user.lastName ?? null,
+    name: computedName,
     email: user.email,
     title: user.title ?? null,
     avatarUrl: user.avatarUrl ?? null,
@@ -63,8 +75,11 @@ export async function getTenantScopedProfile(session: AppSession): Promise<UserP
 export function buildProfileUpdate(data: UserProfileUpdateInput): UserProfileUpdatePayload {
   const payload: UserProfileUpdatePayload = {};
 
-  if (data.name !== undefined) {
-    payload.name = data.name;
+  if (data.firstName !== undefined) {
+    payload.firstName = data.firstName;
+  }
+  if (data.lastName !== undefined) {
+    payload.lastName = data.lastName;
   }
   if (data.title !== undefined) {
     payload.title = data.title;
@@ -98,10 +113,19 @@ export async function updateUserProfile(
     };
   }
 
+  // Compute name from firstName/lastName if either is being updated
+  const updatePayload: Record<string, unknown> = { ...updates };
+  if (updates.firstName !== undefined || updates.lastName !== undefined) {
+    const finalFirstName = updates.firstName !== undefined ? updates.firstName : user.firstName;
+    const finalLastName = updates.lastName !== undefined ? updates.lastName : user.lastName;
+    const parts = [finalFirstName, finalLastName].filter(Boolean);
+    updatePayload.name = parts.length > 0 ? parts.join(" ") : user.email;
+  }
+
   const [updated] = await db
     .update(users)
     .set({
-      ...updates,
+      ...updatePayload,
       updatedAt: new Date(),
     })
     .where(eq(users.id, user.id))
@@ -118,6 +142,8 @@ export async function updateUserProfile(
 export {
   NOTIFICATION_PREFERENCES,
   USER_PROFILE_NAME_MAX,
+  USER_PROFILE_FIRST_NAME_MAX,
+  USER_PROFILE_LAST_NAME_MAX,
   USER_PROFILE_TITLE_MAX,
   userProfileUpdateSchema,
 };

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
+import type { ChangeEvent } from "react";
 import {
   User,
-  Bell,
   Shield,
   Link,
   AlertTriangle,
@@ -15,7 +15,6 @@ import {
   CheckCircle2,
   Laptop,
   Key,
-  Mail,
   Slack,
   LayoutTemplate,
   ChevronRight,
@@ -24,7 +23,6 @@ import { motion } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Select,
@@ -35,7 +33,8 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
-import { currentUser } from "@/lib/mock-automations";
+import { useUserProfile } from "@/components/providers/user-profile-provider";
+import { useToast } from "@/components/ui/use-toast";
 
 // --- Mock Data ---
 
@@ -118,7 +117,6 @@ export const UserSettings: React.FC = () => {
 
   const tabs = [
     { id: "profile", label: "My Profile", icon: User },
-    { id: "notifications", label: "Notifications", icon: Bell },
     { id: "security", label: "Security", icon: Shield },
     { id: "accounts", label: "Connected Accounts", icon: Link },
   ];
@@ -187,7 +185,6 @@ export const UserSettings: React.FC = () => {
             transition={{ duration: 0.2 }}
           >
             {activeTab === "profile" && <ProfileTab onSave={handleSave} isSaving={isSaving} />}
-            {activeTab === "notifications" && <NotificationsTab />}
             {activeTab === "security" && <SecurityTab onLogoutAll={handleLogoutAll} />}
             {activeTab === "accounts" && (
               <AccountsTab
@@ -205,254 +202,311 @@ export const UserSettings: React.FC = () => {
 };
 
 // --- 1. Profile ---
-const ProfileTab = ({ onSave, isSaving }: { onSave?: () => void; isSaving?: boolean } = {}) => (
-  <div className="space-y-6">
-    <h3 className="text-xl font-bold text-[#0A0A0A] mb-6">My Profile</h3>
+const ProfileTab = ({ onSave, isSaving }: { onSave?: () => void; isSaving?: boolean } = {}) => {
+  const { profile, setProfile } = useUserProfile();
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);
+  const [tempAvatarPreviewUrl, setTempAvatarPreviewUrl] = useState<string | null>(null);
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
+  const toast = useToast();
 
-    {/* Task Snapshot */}
-    <div className="bg-gradient-to-br from-[#0A0A0A] to-[#222] rounded-xl p-6 text-white shadow-lg flex items-center justify-between">
-      <div>
-        <div className="flex items-center gap-2 mb-2">
-          <CheckCircle2 size={18} className="text-[#E43632]" />
-          <span className="text-sm font-bold uppercase tracking-wider text-gray-400">
-            Pending Tasks
-          </span>
-        </div>
-        <div className="flex items-baseline gap-3">
-          <span className="text-3xl font-bold">4</span>
-          <span className="text-sm text-gray-400">assigned to you</span>
-        </div>
-        <div className="mt-2 flex gap-2">
-          <Badge
-            variant="outline"
-            className="bg-white/10 border-white/10 text-white hover:bg-white/20"
-          >
-            2 Approval Requests
-          </Badge>
-          <Badge
-            variant="outline"
-            className="bg-white/10 border-white/10 text-white hover:bg-white/20"
-          >
-            2 Reviews
-          </Badge>
-        </div>
-      </div>
-      <Button
-        variant="outline"
-        className="border-white/20 text-black hover:bg-white hover:text-black"
-      >
-        View All Tasks <ChevronRight size={16} className="ml-1" />
-      </Button>
-    </div>
+  const ALLOWED_AVATAR_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+  const MAX_AVATAR_FILE_MB = 4;
+  const MAX_AVATAR_FILE_BYTES = MAX_AVATAR_FILE_MB * 1024 * 1024;
 
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 space-y-8">
-      {/* Avatar */}
-      <div className="flex items-center gap-6">
-        <div className="relative group">
-          <Avatar className="w-24 h-24 border-4 border-gray-50">
-            <AvatarImage src={currentUser.avatar} />
-            <AvatarFallback className="text-2xl bg-gray-100">AM</AvatarFallback>
-          </Avatar>
-          <div className="absolute inset-0 bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
-            <Camera className="text-white" size={24} />
+  const handleAvatarButtonClick = () => {
+    avatarInputRef.current?.click();
+  };
+
+  const handleAvatarFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    
+    // Wait for profile to be available
+    if (!profile) {
+      setAvatarUploadError("Profile not loaded yet. Please try again.");
+      return;
+    }
+
+    if (!ALLOWED_AVATAR_TYPES.includes(file.type as (typeof ALLOWED_AVATAR_TYPES)[number])) {
+      setAvatarUploadError("Avatar must be a PNG, JPEG, or WebP image.");
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size === 0) {
+      setAvatarUploadError("Uploaded file cannot be empty.");
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size > MAX_AVATAR_FILE_BYTES) {
+      setAvatarUploadError(`Avatar must be smaller than ${MAX_AVATAR_FILE_MB}MB.`);
+      event.target.value = "";
+      return;
+    }
+
+    let objectUrl: string | null = null;
+    try {
+      objectUrl = URL.createObjectURL(file);
+      setTempAvatarPreviewUrl(objectUrl);
+      setAvatarUploadError(null);
+      setIsUploadingAvatar(true);
+
+      const data = new FormData();
+      data.append("file", file);
+
+      const response = await fetch("/api/me/avatar", {
+        method: "POST",
+        body: data,
+      });
+
+      const body = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        setTempAvatarPreviewUrl(null);
+        const message = body?.error ?? "Unable to upload avatar.";
+        setAvatarUploadError(message);
+        toast({
+          title: "Avatar upload failed",
+          description: message,
+          variant: "error",
+        });
+        return;
+      }
+
+      setProfile(body.profile, body.lastUpdatedAt);
+      setTempAvatarPreviewUrl(null);
+      toast({
+        title: "Avatar updated",
+        description: "Your new avatar is live.",
+        variant: "success",
+      });
+    } catch (error) {
+      console.error("[profile] avatar upload failed", error);
+      setTempAvatarPreviewUrl(null);
+      setAvatarUploadError("Unexpected error uploading avatar. Please try again.");
+      toast({
+        title: "Avatar upload failed",
+        description: "We could not upload that file. Please try again.",
+        variant: "error",
+      });
+    } finally {
+      setIsUploadingAvatar(false);
+      event.target.value = "";
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }
+  };
+
+  const getInitials = (profile: typeof profile) => {
+    if (!profile) return "";
+    if (profile.firstName && profile.lastName) {
+      return `${profile.firstName.charAt(0)}${profile.lastName.charAt(0)}`.toUpperCase();
+    }
+    if (profile.name) {
+      const parts = profile.name.split(/\s+/).filter(Boolean);
+      return parts
+        .slice(0, 2)
+        .map((segment) => segment.charAt(0).toUpperCase())
+        .join("");
+    }
+    return profile.email.charAt(0).toUpperCase();
+  };
+
+  const avatarPreview = tempAvatarPreviewUrl || profile?.avatarUrl || null;
+
+  // Use profile data or empty defaults to prevent hydration mismatch
+  const displayProfile = profile || {
+    id: "",
+    firstName: null,
+    lastName: null,
+    name: "",
+    email: "",
+    title: null,
+    avatarUrl: null,
+    timezone: null,
+    notificationPreference: "all" as const,
+  };
+
+  return (
+    <div className="space-y-6">
+      <h3 className="text-xl font-bold text-[#0A0A0A] mb-6">My Profile</h3>
+
+      {/* Task Snapshot */}
+      <div className="bg-gradient-to-br from-[#0A0A0A] to-[#222] rounded-xl p-6 text-white shadow-lg flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <CheckCircle2 size={18} className="text-[#E43632]" />
+            <span className="text-sm font-bold uppercase tracking-wider text-gray-400">
+              Pending Tasks
+            </span>
+          </div>
+          <div className="flex items-baseline gap-3">
+            <span className="text-3xl font-bold">4</span>
+            <span className="text-sm text-gray-400">assigned to you</span>
+          </div>
+          <div className="mt-2 flex gap-2">
+            <Badge
+              variant="outline"
+              className="bg-white/10 border-white/10 text-white hover:bg-white/20"
+            >
+              2 Approval Requests
+            </Badge>
+            <Badge
+              variant="outline"
+              className="bg-white/10 border-white/10 text-white hover:bg-white/20"
+            >
+              2 Reviews
+            </Badge>
           </div>
         </div>
-        <div className="space-y-1">
-          <h4 className="font-bold text-[#0A0A0A]">Profile Picture</h4>
-          <p className="text-sm text-gray-500">JPG, GIF or PNG. Max 1MB.</p>
-          <Button size="sm" variant="outline" className="mt-2 text-xs">
-            Upload New
+        <Button
+          variant="outline"
+          className="border-white/20 text-black hover:bg-white hover:text-black"
+        >
+          View All Tasks <ChevronRight size={16} className="ml-1" />
+        </Button>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 space-y-8">
+        {/* Avatar */}
+        <div className="flex items-center gap-6">
+          <div className="relative group">
+            <button
+              type="button"
+              onClick={handleAvatarButtonClick}
+              className="rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E43632]"
+              title="Click to upload a new photo"
+            >
+              <Avatar className="w-24 h-24 border-4 border-gray-50">
+                {avatarPreview ? <AvatarImage src={avatarPreview} alt={displayProfile.name} /> : null}
+                <AvatarFallback className="text-2xl bg-gray-100">{getInitials(displayProfile)}</AvatarFallback>
+              </Avatar>
+            </button>
+            <div className="absolute inset-0 bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer pointer-events-none">
+              <Camera className="text-white" size={24} />
+            </div>
+            <input
+              ref={avatarInputRef}
+              type="file"
+              accept={ALLOWED_AVATAR_TYPES.join(",")}
+              className="hidden"
+              onChange={handleAvatarFileChange}
+            />
+          </div>
+          <div className="space-y-1">
+            <h4 className="font-bold text-[#0A0A0A]">Profile Picture</h4>
+            <p className="text-sm text-gray-500">JPG, PNG or WebP. Max {MAX_AVATAR_FILE_MB}MB.</p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2 text-xs"
+              onClick={handleAvatarButtonClick}
+              disabled={isUploadingAvatar}
+            >
+              {isUploadingAvatar ? "Uploading..." : "Upload New"}
+            </Button>
+            {avatarUploadError ? <p className="text-xs text-red-500">{avatarUploadError}</p> : null}
+          </div>
+        </div>
+
+        <Separator />
+
+        {/* Fields */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-gray-700">First Name</label>
+            <Input defaultValue={displayProfile.firstName ?? ""} />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-gray-700">Last Name</label>
+            <Input defaultValue={displayProfile.lastName ?? ""} />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-gray-700">Email Address</label>
+            <div className="relative">
+              <Input
+                defaultValue={displayProfile.email}
+                readOnly
+                className="bg-gray-50 pr-12 text-gray-500"
+              />
+              <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                <Badge variant="secondary" className="text-[10px] h-5 bg-gray-200 text-gray-600">
+                  SSO
+                </Badge>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-gray-700">Title</label>
+            <Input defaultValue={displayProfile.title ?? ""} />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-gray-700">Phone Number</label>
+            <div className="relative">
+              <Smartphone
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                size={16}
+              />
+              <Input className="pl-9" placeholder="+1 (555) 000-0000" />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-gray-700">Preferred Language</label>
+            <div className="relative">
+              <Globe className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+              <Select defaultValue="en">
+                <SelectTrigger className="pl-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="en">English (US)</SelectItem>
+                  <SelectItem value="fr">French</SelectItem>
+                  <SelectItem value="es">Spanish</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-gray-700">Timezone</label>
+            <div className="relative">
+              <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+              <Select defaultValue={displayProfile.timezone ?? "est"}>
+                <SelectTrigger className="pl-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="est">Eastern Time (US & Canada)</SelectItem>
+                  <SelectItem value="pst">Pacific Time (US & Canada)</SelectItem>
+                  <SelectItem value="utc">UTC</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end pt-4">
+          <Button
+            className="bg-[#E43632] hover:bg-[#C12E2A] text-white"
+            onClick={() => onSave?.()}
+            disabled={isSaving}
+          >
+            {isSaving ? "Saving..." : "Save Changes"}
           </Button>
         </div>
       </div>
-
-      <Separator />
-
-      {/* Fields */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-gray-700">Full Name</label>
-          <Input defaultValue={currentUser.name} />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-gray-700">Email Address</label>
-          <div className="relative">
-            <Input
-              defaultValue="adrian@wrk.com"
-              readOnly
-              className="bg-gray-50 pr-12 text-gray-500"
-            />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2">
-              <Badge variant="secondary" className="text-[10px] h-5 bg-gray-200 text-gray-600">
-                SSO
-              </Badge>
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-gray-700">Role</label>
-          <Input defaultValue="Engineering Lead" readOnly className="bg-gray-50 text-gray-500" />
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-gray-700">Phone Number</label>
-          <div className="relative">
-            <Smartphone
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-              size={16}
-            />
-            <Input className="pl-9" placeholder="+1 (555) 000-0000" />
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-gray-700">Preferred Language</label>
-          <div className="relative">
-            <Globe className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <Select defaultValue="en">
-              <SelectTrigger className="pl-9">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="en">English (US)</SelectItem>
-                <SelectItem value="fr">French</SelectItem>
-                <SelectItem value="es">Spanish</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-gray-700">Timezone</label>
-          <div className="relative">
-            <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <Select defaultValue="est">
-              <SelectTrigger className="pl-9">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="est">Eastern Time (US & Canada)</SelectItem>
-                <SelectItem value="pst">Pacific Time (US & Canada)</SelectItem>
-                <SelectItem value="utc">UTC</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex justify-end pt-4">
-        <Button
-          className="bg-[#E43632] hover:bg-[#C12E2A] text-white"
-          onClick={() => onSave?.()}
-          disabled={isSaving}
-        >
-          {isSaving ? "Saving..." : "Save Changes"}
-        </Button>
-      </div>
     </div>
-  </div>
-);
+  );
+};
 
-// --- 2. Notifications ---
-const NotificationsTab = () => (
-  <div className="space-y-6">
-    <h3 className="text-xl font-bold text-[#0A0A0A] mb-2">Notification Preferences</h3>
-
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-8">
-      <div className="grid grid-cols-3 gap-4 bg-gray-50 p-4 rounded-lg">
-        <div className="col-span-3 md:col-span-1">
-          <h4 className="font-bold text-[#0A0A0A]">Channels</h4>
-          <p className="text-xs text-gray-500">Where should we send alerts?</p>
-        </div>
-        <div className="col-span-3 md:col-span-2 flex flex-wrap gap-6">
-          <div className="flex items-center gap-2">
-            <Switch defaultChecked id="email-notif" />
-            <label htmlFor="email-notif" className="text-sm font-medium flex items-center gap-2">
-              <Mail size={14} /> Email
-            </label>
-          </div>
-          <div className="flex items-center gap-2">
-            <Switch defaultChecked id="slack-notif" />
-            <label htmlFor="slack-notif" className="text-sm font-medium flex items-center gap-2">
-              <Slack size={14} /> Slack
-            </label>
-          </div>
-          <div className="flex items-center gap-2">
-            <Switch defaultChecked id="inapp-notif" />
-            <label htmlFor="inapp-notif" className="text-sm font-medium flex items-center gap-2">
-              <Bell size={14} /> In-App
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        <h4 className="font-bold text-[#0A0A0A] border-b border-gray-100 pb-2">Activity Alerts</h4>
-
-        {[
-          {
-            label: "Approval Requests",
-            desc: "When a quote or automation needs your approval",
-            default: true,
-          },
-          {
-            label: "Review Requests",
-            desc: "When you are tagged for a peer review",
-            default: true,
-          },
-          {
-            label: "Missing Information",
-            desc: "When a workflow is blocked by missing data",
-            default: true,
-          },
-          {
-            label: "Exceptions & Errors",
-            desc: "Critical failures in your owned automations",
-            default: true,
-          },
-          {
-            label: "Version Approved",
-            desc: "When a version you created is approved",
-            default: false,
-          },
-          { label: "Build Completed", desc: "When an automation build finishes", default: true },
-          {
-            label: "Access Issues",
-            desc: "When a user requests access to your resources",
-            default: false,
-          },
-        ].map((item, i) => (
-          <div key={i} className="flex items-center justify-between py-1">
-            <div>
-              <p className="text-sm font-bold text-gray-700">{item.label}</p>
-              <p className="text-xs text-gray-500">{item.desc}</p>
-            </div>
-            <Switch defaultChecked={item.default} />
-          </div>
-        ))}
-      </div>
-
-      <div className="space-y-4 pt-2">
-        <h4 className="font-bold text-[#0A0A0A] border-b border-gray-100 pb-2">Digests</h4>
-        <div className="flex items-center justify-between py-1">
-          <div>
-            <p className="text-sm font-bold text-gray-700">Daily Digest</p>
-            <p className="text-xs text-gray-500">Summary of day&apos;s activity at 9:00 AM</p>
-          </div>
-          <Switch />
-        </div>
-        <div className="flex items-center justify-between py-1">
-          <div>
-            <p className="text-sm font-bold text-gray-700">Weekly Report</p>
-            <p className="text-xs text-gray-500">Performance insights every Monday</p>
-          </div>
-          <Switch defaultChecked />
-        </div>
-      </div>
-    </div>
-  </div>
-);
 
 // --- 3. Connected Accounts ---
 const AccountsTab = ({
