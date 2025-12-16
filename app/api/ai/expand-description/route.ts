@@ -49,6 +49,14 @@ CRITICAL REQUIREMENT: Your expanded description MUST always include these 4 sect
 3. Success Criteria - How we measure if the automation is successful
 4. Systems Required - All systems, tools, and platforms needed for this automation
 
+CRITICAL RESTRICTION - NEVER mention automation or integration platforms:
+- NEVER mention automation platforms like Zapier, MuleSoft, Make.com, n8n, Microsoft Power Automate, or any other integration middleware
+- NEVER mention "integration middleware", "integration platforms", "workflow automation tools", or similar generic integration solutions
+- The user is using WRK.com for automation, and WRK.com will handle all integrations and connectors
+- In the "Systems Required" section, ONLY list the actual business systems (e.g., procurement systems, inventory systems, CRMs, ERPs, email platforms, databases)
+- Do NOT list integration platforms, middleware, or automation tools as separate systems
+- Assume that WRK.com connectors will handle all integrations between business systems
+
 Guidelines:
 - Keep the original intent and meaning
 - Add more specific details about triggers, steps, systems, and outcomes
@@ -68,6 +76,8 @@ Expand this process description with more detail. Your response MUST include the
 2. Business Objective
 3. Success Criteria
 4. Systems Required
+
+IMPORTANT: In the "Systems Required" section, ONLY list the actual business systems and applications (e.g., procurement systems, inventory systems, CRMs, ERPs, email platforms, databases). Do NOT mention automation platforms, integration middleware, or workflow tools like Zapier, MuleSoft, Make.com, or any other integration platforms. WRK.com will handle all integrations and connectors.
 
 Original description:\n\n${description}`,
         },

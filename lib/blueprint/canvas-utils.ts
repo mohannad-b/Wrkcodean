@@ -39,12 +39,19 @@ export function blueprintToNodes(
   blueprint: Blueprint | null,
   taskLookup?: Map<string, { status?: string | null }>
 ): Node<CanvasNodeData>[] {
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:38',message:'blueprintToNodes entry',data:{hasBlueprint:!!blueprint,hasSteps:!!blueprint?.steps,stepCount:blueprint?.steps?.length??0,steps:blueprint?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber,parentStepId:s.parentStepId,nextStepIds:s.nextStepIds,type:s.type}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'E'})}).catch(()=>{});
+  // #endregion
   if (!blueprint || !blueprint.steps) {
     return [];
   }
 
   // Generate step numbers for all steps
   const numbering = generateStepNumbers(blueprint);
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:47',message:'After generateStepNumbers',data:{numberingSize:numbering.size,numbering:Array.from(numbering.entries()).map(([id,info])=>({id,stepNumber:info.stepNumber,displayLabel:info.displayLabel}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'E'})}).catch(()=>{});
+  // #endregion
 
   // Calculate positions - use stored positions if available, otherwise compute layout
   const storedPositions = blueprint.metadata?.nodePositions;
@@ -61,11 +68,19 @@ export function blueprintToNodes(
     });
   }
 
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:64',message:'Before mapping steps to nodes',data:{stepCount:blueprint.steps.length,positionsSize:positions.size,storedPositionsCount:storedPositions?Object.keys(storedPositions).length:0},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'E'})}).catch(()=>{});
+  // #endregion
+  
   return blueprint.steps.map((step, index) => {
     const position = positions.get(step.id) ?? { x: 0, y: index * CANVAS_LAYOUT.NODE_Y_GAP };
 
     // Get numbering info for this step
     const stepNumbering = numbering.get(step.id);
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:68',message:'Creating node for step',data:{stepId:step.id,stepName:step.name,stepNumber:step.stepNumber,index,position,hasNumbering:!!stepNumbering},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
 
     let totalTaskCount = step.taskIds?.length ?? 0;
     let pendingTaskCount = totalTaskCount;
@@ -249,6 +264,9 @@ export function reconnectEdge(blueprint: Blueprint, oldEdgeId: string, newConnec
  * @returns Position object with x and y coordinates
  */
 function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number; y: number }> {
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:251',message:'computeLayoutPositions entry',data:{stepCount:steps.length,steps:steps.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber,parentStepId:s.parentStepId,nextStepIds:s.nextStepIds}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
   const adjacency = new Map<string, Set<string>>();
   const indegree = new Map<string, number>();
 
@@ -264,13 +282,22 @@ function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number
       }
     }
   }
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:266',message:'After initial indegree calculation',data:{indegreeMap:Array.from(indegree.entries()).map(([id,count])=>({id,count,parentStepId:steps.find(s=>s.id===id)?.parentStepId,hasParentButNoIncoming:steps.find(s=>s.id===id)?.parentStepId&&count===0}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
 
   const queue: string[] = [];
   const levels = new Map<string, number>();
+  const stepById = new Map(steps.map((step) => [step.id, step]));
 
   indegree.forEach((count, id) => {
     if (count === 0) {
       queue.push(id);
+      const step = stepById.get(id);
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:271',message:'Root node found',data:{id,count,parentStepId:step?.parentStepId,stepNumber:step?.stepNumber,name:step?.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       levels.set(id, 0);
     }
   });
@@ -279,6 +306,10 @@ function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number
     const current = queue.shift() as string;
     const level = levels.get(current) ?? 0;
     const targets = adjacency.get(current);
+    // #region agent log
+    const currentStep = stepById.get(current);
+    fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:278',message:'Processing node in queue',data:{current,level,targetCount:targets?.size??0,targets:Array.from(targets??[]),currentStep:{name:currentStep?.name,stepNumber:currentStep?.stepNumber,parentStepId:currentStep?.parentStepId}},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     if (!targets) {
       continue;
     }
@@ -292,6 +323,10 @@ function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number
       }
     }
   }
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:294',message:'After topological sort',data:{levels:Array.from(levels.entries()).map(([id,level])=>({id,level,parentStepId:stepById.get(id)?.parentStepId,stepNumber:stepById.get(id)?.stepNumber,name:stepById.get(id)?.name}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
 
   const levelGroups = new Map<number, string[]>();
   for (const step of steps) {
@@ -303,8 +338,11 @@ function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number
   }
 
   const positions = new Map<string, { x: number; y: number }>();
-  const stepById = new Map(steps.map((step) => [step.id, step]));
   const sortedLevels = Array.from(levelGroups.entries()).sort((a, b) => a[0] - b[0]);
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:305',message:'Level groups before positioning',data:{levelGroups:Array.from(levelGroups.entries()).map(([level,ids])=>({level,ids,steps:ids.map(id=>({id,name:stepById.get(id)?.name,stepNumber:stepById.get(id)?.stepNumber,parentStepId:stepById.get(id)?.parentStepId}))}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
 
   sortedLevels.forEach(([level, ids]) => {
     if (ids.length === 0) {
@@ -337,6 +375,10 @@ function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number
       const { parentId, ids: childIds } = group;
       const groupSize = childIds.length;
       const parentPosition = parentId ? positions.get(parentId) : undefined;
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:336',message:'Positioning group',data:{level,parentId,groupSize,childIds,parentPosition,hasParentPosition:!!parentPosition},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
 
       if (!parentPosition) {
         childIds.forEach((childId) => {
@@ -355,10 +397,16 @@ function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number
         CANVAS_LAYOUT.MIN_BRANCH_SPACING,
         CANVAS_LAYOUT.BRANCH_X_GAP + (groupSize > 2 ? (groupSize - 2) * 100 : 0)
       );
-      const branchOffset = (groupSize - 1) / 2;
+      
+      // For single branch, position it to the right of parent to ensure visibility
+      // For multiple branches, center them around the parent
+      const branchOffset = groupSize === 1 ? 0 : (groupSize - 1) / 2;
       
       childIds.forEach((childId, index) => {
-        let x = parentPosition.x + (index - branchOffset) * branchSpacing;
+        // For single branch, position to the right; for multiple, center around parent
+        let x = groupSize === 1 
+          ? parentPosition.x + branchSpacing
+          : parentPosition.x + (index - branchOffset) * branchSpacing;
         
         // Ensure no overlap with other nodes at this level
         // If there's a conflict, shift the position
@@ -369,10 +417,17 @@ function computeLayoutPositions(steps: BlueprintStep[]): Map<string, { x: number
         
         positions.set(childId, { x, y });
         positionedX.add(x);
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:370',message:'Positioned branch node',data:{childId,index,x,y,parentId,stepNumber:stepById.get(childId)?.stepNumber,name:stepById.get(childId)?.name,groupSize},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'D'})}).catch(()=>{});
+        // #endregion
       });
       cursor += groupSize;
     });
   });
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'canvas-utils.ts:377',message:'Final positions computed',data:{positions:Array.from(positions.entries()).map(([id,pos])=>({id,x:pos.x,y:pos.y,stepNumber:stepById.get(id)?.stepNumber,name:stepById.get(id)?.name,parentStepId:stepById.get(id)?.parentStepId}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
 
   return positions;
 }

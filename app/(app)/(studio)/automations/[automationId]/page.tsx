@@ -397,7 +397,13 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         setSelectedVersionId(nextSelected);
         const version = data.automation.versions.find((v) => v.id === nextSelected);
         setNotes(version?.intakeNotes ?? "");
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:398',message:'Blueprint loaded from API',data:{versionId:version?.id,hasWorkflowJson:!!version?.workflowJson,stepCount:version?.workflowJson?.steps?.length??0,steps:version?.workflowJson?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber,parentStepId:s.parentStepId,nextStepIds:s.nextStepIds}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'F'})}).catch(()=>{});
+        // #endregion
         const blueprint = version?.workflowJson ? cloneBlueprint(version.workflowJson) : createEmptyBlueprint();
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:400',message:'Blueprint after clone',data:{stepCount:blueprint?.steps?.length??0,steps:blueprint?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'F'})}).catch(()=>{});
+        // #endregion
         setBlueprint(blueprint);
         setBlueprintError(null);
         setBlueprintDirty(false);
@@ -510,8 +516,14 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   useEffect(() => {
     if (selectedVersion) {
       setNotes(selectedVersion.intakeNotes ?? "");
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:510',message:'Selected version workflowJson',data:{versionId:selectedVersion.id,hasWorkflowJson:!!selectedVersion.workflowJson,stepCount:selectedVersion.workflowJson?.steps?.length??0,steps:selectedVersion.workflowJson?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber,parentStepId:s.parentStepId,nextStepIds:s.nextStepIds}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'F'})}).catch(()=>{});
+      // #endregion
       const nextBlueprint = selectedVersion.workflowJson ? cloneBlueprint(selectedVersion.workflowJson) : createEmptyBlueprint();
       const safeBlueprint = nextBlueprint ?? createEmptyBlueprint();
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:514',message:'Blueprint after clone in useEffect',data:{stepCount:safeBlueprint?.steps?.length??0,steps:safeBlueprint?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'F'})}).catch(()=>{});
+      // #endregion
       setBlueprint(safeBlueprint);
       setBlueprintError(null);
       setBlueprintDirty(false);
@@ -625,6 +637,19 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         return;
       }
       const payload = { ...blueprint, ...overrides, updatedAt: new Date().toISOString() };
+      const stepCountBeforeSave = blueprint.steps.length;
+      const stepCountInPayload = payload.steps.length;
+      
+      // #region agent log - Track step counts before save
+      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:639',message:'Frontend blueprint save - before request',data:{versionId:selectedVersion.id,stepCountBeforeSave,stepCountInPayload,stepIds:payload.steps.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+      // #endregion
+      
+      // Safeguard: Warn if steps are missing in payload
+      if (stepCountInPayload < stepCountBeforeSave) {
+        console.warn(`⚠️ Step count decreased before save: ${stepCountBeforeSave} → ${stepCountInPayload}`);
+        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:644',message:'⚠️ STEP COUNT DECREASED BEFORE SAVE',data:{versionId:selectedVersion.id,stepCountBeforeSave,stepCountInPayload,stepsLost:stepCountBeforeSave-stepCountInPayload},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+      }
+      
       console.log("💾 Saving blueprint:", {
         versionId: selectedVersion.id,
         stepCount: payload.steps.length,
@@ -641,10 +666,28 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           throw new Error(data.error ?? "Failed to save blueprint");
         }
         const cloned = cloneBlueprint(payload);
+        const stepCountAfterSave = cloned?.steps?.length ?? 0;
+        
+        // #region agent log - Track step counts after save
+        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:655',message:'Frontend blueprint save - after response',data:{versionId:selectedVersion.id,stepCountBeforeSave,stepCountInPayload,stepCountAfterSave,stepIds:cloned?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+        // #endregion
+        
+        // Safeguard: Verify steps were preserved
+        if (stepCountAfterSave < stepCountBeforeSave) {
+          console.error(`⚠️ Step count decreased after save: ${stepCountBeforeSave} → ${stepCountAfterSave}`);
+          fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:660',message:'⚠️ STEP COUNT DECREASED AFTER SAVE',data:{versionId:selectedVersion.id,stepCountBeforeSave,stepCountAfterSave,stepsLost:stepCountBeforeSave-stepCountAfterSave},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+          toast({ 
+            title: "Warning: Steps may have been lost", 
+            description: `Step count changed from ${stepCountBeforeSave} to ${stepCountAfterSave}. Please verify your workflow.`, 
+            variant: "warning" 
+          });
+        } else {
+          toast({ title: "Blueprint saved", description: "Metadata updated successfully.", variant: "success" });
+        }
+        
         setBlueprint(cloned);
         setBlueprintDirty(false);
         await fetchAutomation({ preserveSelection: options?.preserveSelection });
-        toast({ title: "Blueprint saved", description: "Metadata updated successfully.", variant: "success" });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unable to save blueprint";
         setBlueprintError(message);
@@ -1092,7 +1135,16 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     return map;
   }, [versionTasks]);
 
-  const flowNodes = useMemo<Node[]>(() => blueprintToNodes(blueprint, taskLookup), [blueprint, taskLookup]);
+  const flowNodes = useMemo<Node[]>(() => {
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:1095',message:'flowNodes useMemo entry',data:{hasBlueprint:!!blueprint,stepCount:blueprint?.steps?.length??0,blueprintStatus:blueprint?.status,steps:blueprint?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber,parentStepId:s.parentStepId,nextStepIds:s.nextStepIds}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
+    const nodes = blueprintToNodes(blueprint, taskLookup);
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:1095',message:'flowNodes useMemo exit',data:{nodeCount:nodes.length,nodes:nodes.map(n=>({id:n.id,position:n.position,title:n.data.title}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
+    return nodes;
+  }, [blueprint, taskLookup]);
   
   const handleEdgeDelete = useCallback(
     (edgeId: string) => {
@@ -1708,6 +1760,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
               onDelete={handleDeleteStep}
               tasks={inspectorTasks}
               onViewTask={handleInspectTask}
+              automationVersionId={selectedVersion?.id ?? null}
             />
           </div>
         )}

@@ -239,6 +239,27 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       throw new ApiError(404, "Automation version not found");
     }
     const previousBlueprint = parseBlueprint(existingDetail.version.workflowJson ?? existingDetail.version.blueprintJson);
+    
+    // #region agent log - Track step counts before save
+    const previousStepCount = previousBlueprint?.steps?.length ?? 0;
+    const newStepCount = blueprintJson?.steps?.length ?? 0;
+    if (blueprintJson !== undefined) {
+      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:237',message:'Blueprint save - step count check',data:{versionId:params.id,previousStepCount,newStepCount,stepLoss:previousStepCount>newStepCount?previousStepCount-newStepCount:0,previousStepIds:previousBlueprint?.steps?.map(s=>s.id)??[],newStepIds:blueprintJson?.steps?.map(s=>s.id)??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+      
+      // Safeguard: Warn if significant step loss detected (more than 1 step lost)
+      if (previousStepCount > 0 && newStepCount < previousStepCount - 1) {
+        const stepsLost = previousStepCount - newStepCount;
+        console.error(`⚠️ Step loss detected: ${previousStepCount} → ${newStepCount} steps (lost ${stepsLost} steps)`);
+        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:243',message:'⚠️ STEP LOSS DETECTED',data:{versionId:params.id,previousStepCount,newStepCount,stepsLost,previousStepIds:previousBlueprint?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))??[],newStepIds:blueprintJson?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+        
+        // Prevent save if more than 50% of steps are lost (safety threshold)
+        const lossPercentage = (stepsLost / previousStepCount) * 100;
+        if (lossPercentage > 50 && previousStepCount >= 3) {
+          throw new ApiError(400, `Cannot save: ${stepsLost} of ${previousStepCount} steps would be lost (${lossPercentage.toFixed(0)}%). This may indicate a data corruption issue. Please refresh and try again.`);
+        }
+      }
+    }
+    // #endregion
 
     const updated = await updateAutomationVersionMetadata({
       tenantId: session.tenantId,
@@ -274,6 +295,17 @@ export async function PATCH(request: Request, { params }: RouteParams) {
         branchesAdded: blueprintDiff.branchesAdded?.length ?? 0,
         branchesRemoved: blueprintDiff.branchesRemoved?.length ?? 0,
       };
+      
+      // #region agent log - Track step counts after save
+      const savedStepCount = nextBlueprint?.steps?.length ?? 0;
+      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:265',message:'Blueprint save - after save verification',data:{versionId:params.id,previousStepCount,newStepCount,savedStepCount,stepsLost:previousStepCount>savedStepCount?previousStepCount-savedStepCount:0,stepsAdded:blueprintDiff.stepsAdded?.length??0,stepsRemoved:blueprintDiff.stepsRemoved?.length??0},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+      
+      // Safeguard: Verify steps were saved correctly
+      if (savedStepCount !== newStepCount) {
+        console.error(`⚠️ Step count mismatch after save: expected ${newStepCount}, got ${savedStepCount}`);
+        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:272',message:'⚠️ STEP COUNT MISMATCH AFTER SAVE',data:{versionId:params.id,expectedStepCount:newStepCount,actualStepCount:savedStepCount},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+      }
+      // #endregion
     }
 
     await logAudit({

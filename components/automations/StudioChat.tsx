@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Mic, Sparkles, AlertCircle, Paperclip, MonitorPlay, CheckCircle2, RefreshCw, Lightbulb, Loader2 } from "lucide-react";
+import { Send, Sparkles, AlertCircle, Paperclip, CheckCircle2, RefreshCw, Lightbulb, Loader2, X, FileText, Image as ImageIcon } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
@@ -95,7 +95,10 @@ export function StudioChat({
   const typingIntervalRef = useRef<number | null>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const prevBlueprintEmptyRef = useRef<boolean>(blueprintEmpty);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const actionButtonsDisabled = disabled || !automationVersionId;
+  const [attachedFiles, setAttachedFiles] = useState<Array<{ id: string; filename: string; url: string; type: string }>>([]);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
 
   const getUserInitials = () => {
     if (!profile) return "ME";
@@ -352,9 +355,63 @@ useEffect(() => {
   );
   const activeThinkingIndex = visibleThinkingSteps.length > 0 ? visibleThinkingSteps.length - 1 : -1;
 
+  const handleFileSelect = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0 || !automationVersionId) return;
+
+    setIsUploadingFile(true);
+    setLocalError(null);
+
+    try {
+      const uploadPromises = Array.from(files).map(async (file) => {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("purpose", "automation_doc");
+        formData.append("resourceType", "automation_version");
+        formData.append("resourceId", automationVersionId);
+
+        const response = await fetch("/api/uploads", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error ?? "Failed to upload file");
+        }
+
+        const data = await response.json();
+        return {
+          id: data.version.id,
+          filename: data.version.filename,
+          url: data.downloadUrl || data.version.storageUrl,
+          type: data.version.mimeType || "application/octet-stream",
+        };
+      });
+
+      const uploadedFiles = await Promise.all(uploadPromises);
+      setAttachedFiles((prev) => [...prev, ...uploadedFiles]);
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : "Failed to upload file");
+    } finally {
+      setIsUploadingFile(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }, [automationVersionId]);
+
+  const handleRemoveFile = useCallback((fileId: string) => {
+    setAttachedFiles((prev) => prev.filter((f) => f.id !== fileId));
+  }, []);
+
+  const isImageFile = (mimeType: string) => {
+    return mimeType.startsWith("image/");
+  };
+
   const handleSend = useCallback(async () => {
     const content = input.trim();
-    if (!content) return;
+    if (!content && attachedFiles.length === 0) return;
     if (!automationVersionId) {
       setLocalError("Select an automation version to chat.");
       return;
@@ -363,16 +420,24 @@ useEffect(() => {
       return;
     }
 
+    // Build message content with file references
+    let messageContent = content;
+    if (attachedFiles.length > 0) {
+      const fileReferences = attachedFiles.map((f) => `[File: ${f.filename}]`).join(" ");
+      messageContent = content ? `${content}\n\n${fileReferences}` : fileReferences;
+    }
+
     const optimisticMessage: CopilotMessage = {
       id: `temp-${Date.now()}`,
       role: "user",
-      content,
+      content: messageContent,
       createdAt: new Date().toISOString(),
       optimistic: true,
     };
 
     setMessages((prev) => [...dropTransientMessages(prev), optimisticMessage]);
     setInput("");
+    setAttachedFiles([]);
     setLocalError(null);
     setAssistantError(null);
     setIsSending(true);
@@ -383,7 +448,7 @@ useEffect(() => {
       const messageResponse = await fetch(`/api/automation-versions/${automationVersionId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, role: "user" }),
+        body: JSON.stringify({ content: messageContent, role: "user" }),
       });
       if (!messageResponse.ok) {
         throw new Error("Failed to send message");
@@ -492,6 +557,7 @@ useEffect(() => {
     dropTransientMessages,
     durableMessages,
     input,
+    attachedFiles,
     isAwaitingReply,
     isSending,
     mapApiMessage,
@@ -682,17 +748,64 @@ useEffect(() => {
           </div>
         </div>
 
+        {/* Hidden file input */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileSelect}
+          multiple
+          accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls"
+          className="hidden"
+        />
+
+        {/* Attached files display */}
+        {attachedFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
+            {attachedFiles.map((file) => (
+              <div
+                key={file.id}
+                className="flex items-center gap-2 px-2 py-1.5 bg-white rounded-md border border-gray-200 text-xs"
+              >
+                {isImageFile(file.type) ? (
+                  <ImageIcon className="h-3.5 w-3.5 text-[#E43632]" />
+                ) : (
+                  <FileText className="h-3.5 w-3.5 text-[#E43632]" />
+                )}
+                <span className="text-gray-700 max-w-[150px] truncate">{file.filename}</span>
+                <button
+                  onClick={() => handleRemoveFile(file.id)}
+                  className="p-0.5 text-gray-400 hover:text-red-600 transition-colors"
+                  type="button"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="relative flex items-center gap-2">
           <div className="flex items-center gap-2">
-            <button className="p-1.5 text-gray-400 hover:text-[#0A0A0A] hover:bg-gray-100 rounded-md transition-colors">
-              <Paperclip size={16} />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled || !automationVersionId || isUploadingFile || isSending || isAwaitingReply}
+              className="p-1.5 text-gray-400 hover:text-[#0A0A0A] hover:bg-gray-100 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              type="button"
+              title="Attach file"
+            >
+              {isUploadingFile ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Paperclip size={16} />
+              )}
             </button>
-            <button className="p-1.5 text-gray-400 hover:text-[#0A0A0A] hover:bg-gray-100 rounded-md transition-colors">
+            {/* Video and audio buttons - hidden for now, will be added later */}
+            {/* <button className="p-1.5 text-gray-400 hover:text-[#0A0A0A] hover:bg-gray-100 rounded-md transition-colors">
               <MonitorPlay size={16} />
             </button>
             <button className="p-1.5 text-gray-400 hover:text-[#0A0A0A] hover:bg-gray-100 rounded-md transition-colors">
               <Mic size={16} />
-            </button>
+            </button> */}
           </div>
           <input
             type="text"
@@ -708,7 +821,7 @@ useEffect(() => {
           />
           <button
             onClick={() => handleSend()}
-            disabled={!input.trim() || disabled || isSending || !automationVersionId || isAwaitingReply}
+            disabled={(!input.trim() && attachedFiles.length === 0) || disabled || isSending || !automationVersionId || isAwaitingReply}
             className="absolute right-1.5 p-2 bg-[#E43632] text-white rounded-lg hover:bg-[#C12E2A] transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Send size={14} />

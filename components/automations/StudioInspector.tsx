@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Trash2, X, Settings, Sparkles, Zap, Shield } from "lucide-react";
+import { Trash2, X, Settings, Sparkles, Zap, Shield, Paperclip, ExternalLink, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
@@ -19,6 +18,7 @@ interface StudioInspectorProps {
   clientName?: string;
   tasks?: StepTaskSummary[];
   onViewTask?: (taskId: string) => void;
+  automationVersionId?: string | null;
 }
 
 type StepTaskSummary = {
@@ -85,8 +85,19 @@ function formatTaskStatus(status: StepTaskSummary["status"]) {
   }
 }
 
-export function StudioInspector({ step, onClose, onChange, onDelete, clientName, tasks = [], onViewTask }: StudioInspectorProps) {
+type FileReference = {
+  id: string;
+  versionId: string;
+  filename: string;
+  url: string;
+  mimeType: string;
+  sizeBytes: number;
+};
+
+export function StudioInspector({ step, onClose, onChange, onDelete, clientName, tasks = [], onViewTask, automationVersionId }: StudioInspectorProps) {
   const [responsibilityTab, setResponsibilityTab] = useState<ResponsibilityTab>("automated");
+  const [referencedFiles, setReferencedFiles] = useState<FileReference[]>([]);
+
   const parsedExceptions = useMemo(() => {
     if (!step?.notesExceptions) return [];
     return step.notesExceptions
@@ -99,6 +110,85 @@ export function StudioInspector({ step, onClose, onChange, onDelete, clientName,
       })
       .filter((item) => item.condition);
   }, [step?.notesExceptions]);
+
+  // Extract file references from step summary/description/notes
+  const fileReferences = useMemo(() => {
+    if (!step) return [];
+    // Search in all text fields where file references might appear
+    const text = `${step.summary || ""} ${step.description || ""} ${step.notesForOps || ""} ${step.notesExceptions || ""}`;
+    const filePattern = /\[File:\s*([^\]]+)\]/gi;
+    const matches: string[] = [];
+    let match;
+    while ((match = filePattern.exec(text)) !== null) {
+      const filename = match[1].trim();
+      if (filename && !matches.includes(filename)) {
+        matches.push(filename);
+      }
+    }
+    return matches;
+  }, [step?.summary, step?.description, step?.notesForOps, step?.notesExceptions]);
+
+  // Fetch files for the automation version - only when explicitly referenced
+  useEffect(() => {
+    if (!automationVersionId || fileReferences.length === 0) {
+      setReferencedFiles([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchFiles = async () => {
+      try {
+        const response = await fetch(
+          `/api/uploads?resourceType=automation_version&resourceId=${automationVersionId}&purpose=automation_doc`
+        );
+        if (!response.ok) {
+          throw new Error("Failed to fetch files");
+        }
+        const data = (await response.json()) as { files: Array<{ id: string; latest: { id: string; filename: string; storageUrl: string; mimeType: string; sizeBytes: number } | null }> };
+        
+        if (cancelled) return;
+
+        // Match referenced filenames (case-insensitive, flexible matching)
+        // Only show files that are explicitly referenced in the step
+        const matchedFiles: FileReference[] = [];
+        const seenVersionIds = new Set<string>();
+        
+        // Match specific file references
+        for (const refFilename of fileReferences) {
+          const normalizedRef = refFilename.toLowerCase().trim();
+          const file = data.files.find((f) => {
+            if (!f.latest || seenVersionIds.has(f.latest.id)) return false;
+            const normalizedFile = f.latest.filename.toLowerCase().trim();
+            return normalizedFile === normalizedRef || normalizedFile.includes(normalizedRef) || normalizedRef.includes(normalizedFile);
+          });
+          if (file?.latest) {
+            seenVersionIds.add(file.latest.id);
+            matchedFiles.push({
+              id: file.id,
+              versionId: file.latest.id,
+              filename: file.latest.filename,
+              url: file.latest.storageUrl || `/api/uploads/${file.latest.id}?download=1`,
+              mimeType: file.latest.mimeType,
+              sizeBytes: file.latest.sizeBytes,
+            });
+          }
+        }
+        
+        setReferencedFiles(matchedFiles);
+      } catch (error) {
+        console.error("[StudioInspector] Failed to fetch files:", error);
+        if (!cancelled) {
+          setReferencedFiles([]);
+        }
+      }
+    };
+
+    fetchFiles();
+    return () => {
+      cancelled = true;
+    };
+  }, [automationVersionId, fileReferences]);
 
   useEffect(() => {
     if (!step) return;
@@ -257,8 +347,8 @@ export function StudioInspector({ step, onClose, onChange, onDelete, clientName,
               <Label className="text-xs font-bold text-[#0A0A0A] uppercase tracking-wider flex items-center gap-2">
                 Goal / Outcome <span className="text-[#E43632]">*</span>
               </Label>
-              <Input
-                className="h-11 bg-gray-50/50 border-gray-200 hover:bg-white focus-visible:ring-[#E43632] transition-all text-sm"
+              <Textarea
+                className="min-h-[80px] text-sm bg-gray-50/50 border-gray-200 hover:bg-white focus-visible:ring-[#E43632] resize-none p-3 transition-all"
                 value={step.goalOutcome}
                 onChange={(event) => handleChange({ goalOutcome: event.target.value })}
                 placeholder="What should this step accomplish?"
@@ -352,6 +442,39 @@ export function StudioInspector({ step, onClose, onChange, onDelete, clientName,
                 )}
               </div>
             </div>
+
+            {referencedFiles.length > 0 && (
+              <div className="space-y-2">
+                <Label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                  <Paperclip size={12} />
+                  Referenced Files
+                </Label>
+                <div className="space-y-2">
+                  {referencedFiles.map((file) => (
+                      <div
+                        key={file.versionId}
+                        className="flex items-center justify-between gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors"
+                      >
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <Paperclip size={14} className="text-[#E43632] shrink-0" />
+                          <span className="text-xs text-gray-700 truncate font-medium" title={file.filename}>
+                            {file.filename}
+                          </span>
+                        </div>
+                        <a
+                          href={`/api/uploads/${file.versionId}?download=1`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-xs text-[#E43632] hover:text-[#C12E2A] transition-colors shrink-0"
+                        >
+                          <ExternalLink size={12} />
+                          Download
+                        </a>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Notes for Ops Team</Label>
