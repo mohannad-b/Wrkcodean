@@ -18,8 +18,10 @@ export interface ActivityItem {
 export interface DashboardAutomation {
   id: string;
   name: string;
+  description?: string | null;
   version: string;
-  status: string;
+  status: string; // Display status (e.g., "Build in Progress")
+  statusEnum?: string; // Original enum status (e.g., "BuildInProgress") for filtering
   runs: number;
   success: number;
   spend: number;

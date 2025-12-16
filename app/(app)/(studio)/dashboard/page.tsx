@@ -1,25 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { StatCard } from "@/components/ui/StatCard";
 import { DashboardAutomationCard } from "@/components/ui/DashboardAutomationCard";
 import { ActivityFeedItem } from "@/components/ui/ActivityFeedItem";
-import { UsageChart } from "@/components/charts/UsageChart";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
 } from "@/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -29,15 +28,13 @@ import {
   Search,
   Briefcase,
   ChevronDown,
-  AlertTriangle,
   X,
 } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
-import { mockActivityFeed, mockUsageData } from "@/lib/mock-dashboard";
+import type { ActivityItem } from "@/lib/mock-dashboard";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { summarizeCounts, toDashboardAutomation, type ApiAutomationSummary } from "@/lib/dashboard/mapper";
+import { toDashboardAutomation, type ApiAutomationSummary } from "@/lib/dashboard/mapper";
 import type { DashboardAutomation } from "@/lib/mock-dashboard";
 import { buildKpiStats, type KpiStat, type VersionMetric } from "@/lib/metrics/kpi";
 
@@ -51,7 +48,6 @@ type TenantMembership = {
 export default function DashboardPage() {
   const router = useRouter();
   const { profile } = useUserProfile();
-  const [showAlert, setShowAlert] = useState(true);
   const [automations, setAutomations] = useState<DashboardAutomation[]>([]);
   const [automationSummaries, setAutomationSummaries] = useState<ApiAutomationSummary[]>([]);
   const [loadingAutomations, setLoadingAutomations] = useState(true);
@@ -59,6 +55,12 @@ export default function DashboardPage() {
   const [tenantMemberships, setTenantMemberships] = useState<TenantMembership[]>([]);
   const [currentTenant, setCurrentTenant] = useState<{ id: string; name: string } | null>(null);
   const [loadingTenants, setLoadingTenants] = useState(true);
+  const [activityFeed, setActivityFeed] = useState<ActivityItem[]>([]);
+  const [loadingActivity, setLoadingActivity] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set(["all"]));
+  const [showSearch, setShowSearch] = useState(false);
+  const [showFilter, setShowFilter] = useState(false);
 
   useEffect(() => {
     const loadAutomations = async () => {
@@ -111,6 +113,51 @@ export default function DashboardPage() {
     void loadTenants();
   }, []);
 
+  useEffect(() => {
+    const loadActivity = async () => {
+      setLoadingActivity(true);
+      try {
+        const response = await fetch("/api/dashboard/activity?limit=10", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("Failed to load activity");
+        }
+        const data = (await response.json()) as {
+          activities: Array<{
+            id: string;
+            action: string;
+            displayText: string;
+            user: string;
+            userAvatarUrl: string | null;
+            userFirstName: string | null;
+            userLastName: string | null;
+            timestamp: string;
+          }>;
+        };
+        // Convert API response to ActivityItem format
+        const formattedActivities: ActivityItem[] = data.activities.map((activity, index) => ({
+          id: index + 1,
+          user: activity.user,
+          avatar: activity.userAvatarUrl || "",
+          action: activity.action,
+          target: activity.displayText,
+          time: formatRelativeTime(activity.timestamp),
+          // Include extended fields for ActivityFeedItem compatibility
+          userAvatarUrl: activity.userAvatarUrl,
+          userFirstName: activity.userFirstName,
+          userLastName: activity.userLastName,
+        } as ActivityItem & { userAvatarUrl?: string | null; userFirstName?: string | null; userLastName?: string | null }));
+        setActivityFeed(formattedActivities);
+      } catch (err) {
+        console.error("[dashboard] failed to load activity", err);
+        setActivityFeed([]);
+      } finally {
+        setLoadingActivity(false);
+      }
+    };
+
+    void loadActivity();
+  }, []);
+
   const handleTenantSwitch = async (tenantId: string) => {
     try {
       const response = await fetch("/api/auth/switch-workspace", {
@@ -136,9 +183,73 @@ export default function DashboardPage() {
     return "there";
   };
 
-  const { total, live, building } = summarizeCounts(automations);
+  const formatRelativeTime = (timestamp: string): string => {
+    const now = new Date();
+    const time = new Date(timestamp);
+    const diffInSeconds = Math.floor((now.getTime() - time.getTime()) / 1000);
+
+    if (diffInSeconds < 60) {
+      return "just now";
+    }
+
+    const diffInMinutes = Math.floor(diffInSeconds / 60);
+    if (diffInMinutes < 60) {
+      return `${diffInMinutes}m ago`;
+    }
+
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) {
+      return `${diffInHours}h ago`;
+    }
+
+    const diffInDays = Math.floor(diffInHours / 24);
+    if (diffInDays < 7) {
+      return `${diffInDays}d ago`;
+    }
+
+    const diffInWeeks = Math.floor(diffInDays / 7);
+    if (diffInWeeks < 4) {
+      return `${diffInWeeks}w ago`;
+    }
+
+    const diffInMonths = Math.floor(diffInDays / 30);
+    return `${diffInMonths}mo ago`;
+  };
+
   const aggregatedMetric = useMemo(() => aggregateMetrics(automationSummaries), [automationSummaries]);
   const kpiStats = useMemo(() => buildKpiStats(aggregatedMetric, null), [aggregatedMetric]);
+
+  // Filter automations based on search and status filter
+  const filteredAutomations = useMemo(() => {
+    return automations.filter((auto) => {
+      // Search filter
+      const searchLower = searchQuery.trim().toLowerCase();
+      const matchesSearch =
+        searchLower === "" ||
+        auto.name.toLowerCase().includes(searchLower) ||
+        (auto.description && auto.description.toLowerCase().includes(searchLower)) ||
+        auto.version.toLowerCase().includes(searchLower);
+
+      // Status filter - compare against original enum status for accurate filtering
+      const matchesStatus =
+        statusFilter.has("all") || 
+        (auto.statusEnum && statusFilter.has(auto.statusEnum));
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [automations, searchQuery, statusFilter]);
+
+  const statusOptions = [
+    { value: "all", label: "All Statuses" },
+    { value: "IntakeInProgress", label: "Intake in Progress" },
+    { value: "NeedsPricing", label: "Needs Pricing" },
+    { value: "AwaitingClientApproval", label: "Awaiting Client Approval" },
+    { value: "ReadyForBuild", label: "Ready for Build" },
+    { value: "BuildInProgress", label: "Build in Progress" },
+    { value: "QATesting", label: "QA & Testing" },
+    { value: "Live", label: "Live" },
+    { value: "Archived", label: "Archived" },
+  ];
 
   return (
     <div className="flex-1 h-full overflow-y-auto bg-gray-50/50">
@@ -211,51 +322,6 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* Alert Bar */}
-        <AnimatePresence>
-          {showAlert && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              exit={{ opacity: 0, height: 0 }}
-              className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
-            >
-              <div className="flex items-start gap-3">
-                <div className="p-2 bg-amber-100 rounded-lg text-amber-600 shrink-0">
-                  <AlertTriangle size={20} />
-                </div>
-                <div>
-                  <h3 className="font-bold text-amber-900 text-sm">
-                    Action Required: Payment Method Expiring
-                  </h3>
-                  <p className="text-xs text-amber-700 mt-0.5">
-                    Your primary card ending in 4242 expires in 3 days. Update now to avoid service
-                    interruption.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 w-full sm:w-auto">
-                <Link href="/workspace-settings">
-                  <Button
-                    size="sm"
-                    className="bg-amber-600 hover:bg-amber-700 text-white border-none w-full sm:w-auto"
-                  >
-                    Update Payment
-                  </Button>
-                </Link>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setShowAlert(false)}
-                  className="text-amber-700 hover:bg-amber-100 hidden sm:flex"
-                >
-                  <X size={16} />
-                </Button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* LEFT COLUMN (2/3 width on large screens) */}
           <div className="lg:col-span-2 space-y-8">
@@ -268,13 +334,126 @@ export default function DashboardPage() {
                 >
                   Active Automations
                 </h2>
-                <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" className="text-gray-500">
-                    <Filter size={16} />
-                  </Button>
-                  <Button variant="ghost" size="sm" className="text-gray-500">
-                    <Search size={16} />
-                  </Button>
+                <div className="flex items-center gap-1 bg-white rounded-lg border border-gray-200 shadow-sm p-1.5">
+                  <Popover open={showFilter} onOpenChange={setShowFilter}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={cn(
+                          "h-8 px-3 text-gray-500 bg-white border-transparent hover:bg-gray-50 hover:border-gray-200 shadow-none",
+                          statusFilter.size > 1 || (statusFilter.size === 1 && !statusFilter.has("all"))
+                            ? "text-[#E43632] bg-red-50 hover:bg-red-100 border-red-100"
+                            : ""
+                        )}
+                      >
+                        <Filter size={16} />
+                        {statusFilter.size > 1 || (statusFilter.size === 1 && !statusFilter.has("all")) ? (
+                          <span className="ml-1 text-xs font-semibold">
+                            {statusFilter.has("all") ? statusFilter.size - 1 : statusFilter.size}
+                          </span>
+                        ) : null}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-56 p-2 !bg-white">
+                      <div className="space-y-1">
+                        <div className="px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                          Filter by Status
+                        </div>
+                        {statusOptions.map((option) => (
+                          <button
+                            key={option.value}
+                            onClick={() => {
+                              const newFilter = new Set(statusFilter);
+                              if (option.value === "all") {
+                                if (newFilter.has("all")) {
+                                  newFilter.clear();
+                                  newFilter.add("all");
+                                } else {
+                                  newFilter.clear();
+                                  newFilter.add("all");
+                                }
+                              } else {
+                                newFilter.delete("all");
+                                if (newFilter.has(option.value)) {
+                                  newFilter.delete(option.value);
+                                  if (newFilter.size === 0) {
+                                    newFilter.add("all");
+                                  }
+                                } else {
+                                  newFilter.add(option.value);
+                                }
+                              }
+                              setStatusFilter(newFilter);
+                            }}
+                            className={cn(
+                              "w-full text-left px-2 py-1.5 text-sm rounded-md hover:bg-gray-50 flex items-center gap-2",
+                              statusFilter.has(option.value) ? "bg-gray-100 font-medium" : ""
+                            )}
+                          >
+                            <div
+                              className={cn(
+                                "w-4 h-4 rounded border-2 flex items-center justify-center",
+                                statusFilter.has(option.value)
+                                  ? "bg-[#E43632] border-[#E43632]"
+                                  : "border-gray-300"
+                              )}
+                            >
+                              {statusFilter.has(option.value) && (
+                                <div className="w-2 h-2 bg-white rounded-sm" />
+                              )}
+                            </div>
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+
+                  <Popover open={showSearch} onOpenChange={setShowSearch}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={cn(
+                          "h-8 px-3 text-gray-500 bg-white border-transparent hover:bg-gray-50 hover:border-gray-200 shadow-none",
+                          searchQuery.trim() !== "" ? "text-[#E43632] bg-red-50 hover:bg-red-100 border-red-100" : ""
+                        )}
+                      >
+                        <Search size={16} />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-80 p-3 !bg-white">
+                      <div className="space-y-2">
+                        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                          Search Automations
+                        </div>
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                          <Input
+                            placeholder="Search by name, description, or version..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="pl-9 pr-9 h-9"
+                            autoFocus
+                          />
+                          {searchQuery && (
+                            <button
+                              onClick={() => setSearchQuery("")}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                            >
+                              <X size={14} />
+                            </button>
+                          )}
+                        </div>
+                        {searchQuery && (
+                          <div className="text-xs text-gray-500 pt-1">
+                            {filteredAutomations.length} result{filteredAutomations.length !== 1 ? "s" : ""} found
+                          </div>
+                        )}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -286,100 +465,93 @@ export default function DashboardPage() {
                   <div className="col-span-2 rounded-lg border border-red-200 bg-red-50 text-red-700 p-4 text-sm">
                     {automationsError}
                   </div>
-                ) : automations.length === 0 ? (
-                  <div className="col-span-2 rounded-lg border border-dashed border-gray-200 bg-white p-6 text-sm text-gray-600">
-                    No automations yet. Create one to see metrics here.
-                  </div>
                 ) : (
-                  automations.map((auto) => <DashboardAutomationCard key={auto.id} automation={auto} />)
+                  <>
+                    {/* Create New Card - First in grid */}
+                    <Link href="/automations/new">
+                      <button className="group relative border-2 border-dashed border-gray-200 rounded-xl p-6 flex flex-col items-center justify-center text-center hover:border-[#E43632]/40 hover:bg-[#E43632]/5 transition-all min-h-[200px] w-full overflow-hidden">
+                        {/* Background Image/Pattern */}
+                        <div className="absolute inset-0 opacity-5 group-hover:opacity-10 transition-opacity">
+                          <div
+                            className="w-full h-full"
+                            style={{
+                              backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23E43632' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+                              backgroundSize: "60px 60px",
+                            }}
+                          />
+                        </div>
+                        <div className="relative z-10 w-12 h-12 rounded-full bg-gray-50 group-hover:bg-white flex items-center justify-center mb-4 group-hover:shadow-md transition-all">
+                          <Plus className="text-gray-400 group-hover:text-[#E43632]" />
+                        </div>
+                        <h3 className="relative z-10 font-bold text-gray-900 mb-1">Create New Automation</h3>
+                      </button>
+                    </Link>
+
+                    {/* Filtered Automation Cards */}
+                    {filteredAutomations.length === 0 && !loadingAutomations ? (
+                      <div className="col-span-1 md:col-span-1 rounded-lg border border-dashed border-gray-200 bg-white p-6 text-sm text-gray-600 flex items-center justify-center min-h-[200px]">
+                        {searchQuery || (statusFilter.size > 0 && !statusFilter.has("all")) ? (
+                          <div className="text-center">
+                            <p className="font-medium text-gray-900 mb-1">No automations match your filters</p>
+                            <p className="text-xs text-gray-500">
+                              Try adjusting your search or filter criteria
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="text-center">
+                            <p className="font-medium text-gray-900 mb-1">No automations yet</p>
+                            <p className="text-xs text-gray-500">Create one to see metrics here</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      filteredAutomations.map((auto) => <DashboardAutomationCard key={auto.id} automation={auto} />)
+                    )}
+                  </>
                 )}
-
-                {/* Create New Card */}
-                <Link href="/automations/new">
-                  <button className="group border-2 border-dashed border-gray-200 rounded-xl p-6 flex flex-col items-center justify-center text-center hover:border-[#E43632]/40 hover:bg-[#E43632]/5 transition-all min-h-[200px] w-full">
-                    <div className="w-12 h-12 rounded-full bg-gray-50 group-hover:bg-white flex items-center justify-center mb-4 group-hover:shadow-md transition-all">
-                      <Plus className="text-gray-400 group-hover:text-[#E43632]" />
-                    </div>
-                    <h3 className="font-bold text-gray-900 mb-1">Create New Automation</h3>
-                  </button>
-                </Link>
-              </div>
-            </section>
-
-            {/* Usage & Spend Overview */}
-            <section>
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-bold text-[#0A0A0A]">Usage & Spend</h2>
-                <Select defaultValue="30d">
-                  <SelectTrigger className="h-8 w-[120px] text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="7d">Last 7 Days</SelectItem>
-                    <SelectItem value="30d">Last 30 Days</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-                <div className="h-[250px] w-full mb-6">
-                  <UsageChart data={mockUsageData} />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 border-t border-gray-50 pt-6">
-                  <div>
-                    <p className="text-xs text-gray-500 mb-1">Total Spend (Oct)</p>
-                    <p className="text-2xl font-bold text-[#0A0A0A]">$3,450</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 mb-1">Cost per Unit</p>
-                    <p className="text-2xl font-bold text-[#0A0A0A]">$0.024</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 mb-1">Highest Volume</p>
-                    <p className="text-sm font-bold text-[#0A0A0A] truncate">Invoice Processing</p>
-                    <p className="text-[10px] text-gray-400">14.2k units</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 mb-1">Forecast (Nov)</p>
-                    <p className="text-2xl font-bold text-gray-400">~$3,800</p>
-                  </div>
-                </div>
               </div>
             </section>
           </div>
 
           {/* RIGHT COLUMN (1/3 width on large screens) */}
           <div className="space-y-8">
-            {/* Stats Cards */}
-            <div className="grid grid-cols-1 gap-6">
-              <StatCard
-                label="Total Automations"
-                value={total}
-                icon={<Zap size={18} />}
-              />
-              <StatCard label="Live" value={live} />
-              <StatCard label="Building" value={building} />
-            </div>
-
             {/* Build Activity Feed */}
             <section>
               <h2 className="text-lg font-bold text-[#0A0A0A] mb-4">Build Activity</h2>
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                <div className="divide-y divide-gray-100">
-                  {mockActivityFeed.map((item) => (
-                    <ActivityFeedItem key={item.id} item={item} />
-                  ))}
-                  <div className="p-2 text-center">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-xs text-gray-400 hover:text-[#0A0A0A] w-full"
-                      onClick={() => router.push("/automations")}
-                    >
-                      View All Activity
-                    </Button>
+                {loadingActivity ? (
+                  <div className="p-4 space-y-4">
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className="animate-pulse flex gap-3">
+                        <div className="h-8 w-8 rounded-full bg-gray-200" />
+                        <div className="flex-1 space-y-2">
+                          <div className="h-3 bg-gray-200 rounded w-3/4" />
+                          <div className="h-3 bg-gray-200 rounded w-1/2" />
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                </div>
+                ) : activityFeed.length === 0 ? (
+                  <div className="p-6 text-center text-sm text-gray-500">
+                    No activity yet. Start building automations to see updates here.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-gray-100">
+                    {activityFeed.map((item) => (
+                      <ActivityFeedItem key={item.id} item={item} />
+                    ))}
+                    <div className="p-2 text-center">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-xs text-gray-400 hover:text-[#0A0A0A] w-full"
+                        onClick={() => router.push("/automations")}
+                      >
+                        View All Activity
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             </section>
           </div>

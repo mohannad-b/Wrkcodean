@@ -33,9 +33,7 @@ interface StudioChatProps {
   onProgressUpdate?: (progress: BlueprintProgressSnapshot | null) => void;
   injectedMessage?: CopilotMessage | null;
   onInjectedMessageConsumed?: () => void;
-  onOptimizeWorkflow?: () => void;
   onSuggestNextSteps?: () => void;
-  isOptimizingWorkflow?: boolean;
   isRequestingSuggestions?: boolean;
   suggestionStatus?: string | null;
 }
@@ -76,9 +74,7 @@ export function StudioChat({
   onProgressUpdate,
   injectedMessage = null,
   onInjectedMessageConsumed,
-  onOptimizeWorkflow,
   onSuggestNextSteps,
-  isOptimizingWorkflow = false,
   isRequestingSuggestions = false,
   suggestionStatus = null,
 }: StudioChatProps) {
@@ -667,20 +663,6 @@ useEffect(() => {
       <div className="p-4 bg-white border-t border-gray-200 space-y-3">
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={onOptimizeWorkflow}
-              disabled={isOptimizingWorkflow || actionButtonsDisabled}
-              className="text-xs font-semibold"
-            >
-              {isOptimizingWorkflow ? (
-                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 h-3 w-3" />
-              )}
-              Optimize workflow
-            </Button>
             <Button
               size="sm"
               onClick={onSuggestNextSteps}

@@ -34,13 +34,16 @@ export type ApiAutomationSummary = {
 
 export function toDashboardAutomation(api: ApiAutomationSummary): DashboardAutomation {
   const version = api.latestVersion;
-  const status = version ? mapStatusForCards(version.status as AutomationLifecycleStatus) : "Intake in Progress";
+  const statusEnum = version?.status as AutomationLifecycleStatus | undefined;
+  const status = statusEnum ? mapStatusForCards(statusEnum) : "Intake in Progress";
   const metrics = version?.latestMetrics;
   return {
     id: api.id,
     name: api.name,
+    description: api.description,
     version: version?.versionLabel ?? "v1.0",
     status,
+    statusEnum: statusEnum || "IntakeInProgress", // Store original enum for filtering
     runs: metrics?.totalExecutions ?? 0,
     success: metrics?.successRate ?? 0,
     spend: metrics?.spendUsd ? Number(metrics.spendUsd) : 0,
@@ -59,10 +62,14 @@ export function summarizeCounts(automations: DashboardAutomation[]) {
 
 function mapStatusForCards(status: AutomationLifecycleStatus): DashboardAutomation["status"] {
   switch (status) {
+    case "IntakeInProgress":
+      return "Intake in Progress";
     case "NeedsPricing":
       return "Needs Pricing";
     case "AwaitingClientApproval":
       return "Awaiting Client Approval";
+    case "ReadyForBuild":
+      return "Ready for Build";
     case "BuildInProgress":
       return "Build in Progress";
     case "QATesting":

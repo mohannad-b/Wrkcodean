@@ -1565,9 +1565,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             onBlueprintRefresh={refreshAutomationPreservingSelection}
             injectedMessage={injectedChatMessage}
             onInjectedMessageConsumed={() => setInjectedChatMessage(null)}
-            onOptimizeWorkflow={handleOptimizeFlow}
             onSuggestNextSteps={handleSuggestNextSteps}
-            isOptimizingWorkflow={isOptimizingFlow}
             isRequestingSuggestions={isRequestingSuggestions}
             suggestionStatus={suggestionStatus}
           />
@@ -1575,49 +1573,72 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
 
         <div className="flex-1 relative h-full z-10 bg-gray-50 min-h-0 flex flex-col">
           {/* View Mode Toggle */}
-          <div className="absolute top-4 left-4 z-50 flex gap-2 bg-white rounded-lg border border-gray-200 shadow-sm p-1">
-            <Button
-              size="sm"
-              variant={canvasViewMode === "requirements" ? "default" : "ghost"}
-              onClick={() => setCanvasViewMode("requirements")}
-              className={cn(
-                "text-xs font-semibold h-8 px-3",
-                canvasViewMode === "requirements"
-                  ? "bg-gray-900 text-white hover:bg-gray-800"
-                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
-              )}
-            >
-              <FileText className="h-3.5 w-3.5 mr-1.5" />
-              Requirements
-            </Button>
-            <Button
-              size="sm"
-              variant={canvasViewMode === "flowchart" ? "default" : "ghost"}
-              onClick={() => setCanvasViewMode("flowchart")}
-              className={cn(
-                "text-xs font-semibold h-8 px-3",
-                canvasViewMode === "flowchart"
-                  ? "bg-gray-900 text-white hover:bg-gray-800"
-                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
-              )}
-            >
-              <GitBranch className="h-3.5 w-3.5 mr-1.5" />
-              Flowchart
-            </Button>
-            <Button
-              size="sm"
-              variant={canvasViewMode === "tasks" ? "default" : "ghost"}
-              onClick={() => setCanvasViewMode("tasks")}
-              className={cn(
-                "text-xs font-semibold h-8 px-3",
-                canvasViewMode === "tasks"
-                  ? "bg-gray-900 text-white hover:bg-gray-800"
-                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
-              )}
-            >
-              <CheckSquare className="h-3.5 w-3.5 mr-1.5" />
-              Tasks
-            </Button>
+          <div className="absolute top-4 left-4 z-50 flex gap-2 items-center">
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-1 flex gap-2">
+              <Button
+                size="sm"
+                variant={canvasViewMode === "requirements" ? "default" : "ghost"}
+                onClick={() => setCanvasViewMode("requirements")}
+                className={cn(
+                  "text-xs font-semibold h-8 px-3",
+                  canvasViewMode === "requirements"
+                    ? "bg-gray-900 text-white hover:bg-gray-800"
+                    : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+                )}
+              >
+                <FileText className="h-3.5 w-3.5 mr-1.5" />
+                Requirements
+              </Button>
+              <Button
+                size="sm"
+                variant={canvasViewMode === "flowchart" ? "default" : "ghost"}
+                onClick={() => setCanvasViewMode("flowchart")}
+                className={cn(
+                  "text-xs font-semibold h-8 px-3",
+                  canvasViewMode === "flowchart"
+                    ? "bg-gray-900 text-white hover:bg-gray-800"
+                    : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+                )}
+              >
+                <GitBranch className="h-3.5 w-3.5 mr-1.5" />
+                Flowchart
+              </Button>
+              <Button
+                size="sm"
+                variant={canvasViewMode === "tasks" ? "default" : "ghost"}
+                onClick={() => setCanvasViewMode("tasks")}
+                className={cn(
+                  "text-xs font-semibold h-8 px-3",
+                  canvasViewMode === "tasks"
+                    ? "bg-gray-900 text-white hover:bg-gray-800"
+                    : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+                )}
+              >
+                <CheckSquare className="h-3.5 w-3.5 mr-1.5" />
+                Tasks
+              </Button>
+            </div>
+            {canvasViewMode === "flowchart" && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={handleOptimizeFlow}
+                disabled={isOptimizingFlow || blueprintIsEmpty}
+                className="text-xs font-semibold h-8 px-3 bg-white border border-gray-200 shadow-sm hover:bg-gray-50"
+              >
+                {isOptimizingFlow ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                    Re-arranging...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                    Re-arrange Workflow
+                  </>
+                )}
+              </Button>
+            )}
           </div>
 
           {/* View Content */}
