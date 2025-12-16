@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -44,29 +44,6 @@ import {
 
 type AutomationType = "starter" | "intermediate" | "advanced";
 const DEFAULT_AUTOMATION_TYPE: AutomationType = "intermediate";
-type ExpansionLevel = "basic" | "medium" | "expert";
-
-const EXPANSION_OPTIONS: Array<{
-  id: ExpansionLevel;
-  title: string;
-  description: string;
-}> = [
-  {
-    id: "basic",
-    title: "Basic expand",
-    description: "Fill gaps and clarify intent without changing the tone or length too much.",
-  },
-  {
-    id: "medium",
-    title: "Medium expand",
-    description: "Polish and enrich with clearer structure, steps, and data flow.",
-  },
-  {
-    id: "expert",
-    title: "Expert expand",
-    description: "Build out the whole workflow with triggers, actors, systems, and edge cases.",
-  },
-];
 
 const INDUSTRIES = [
   "Retail & E-commerce",
@@ -955,15 +932,37 @@ export default function NewAutomationPage() {
   const [isExpanding, setIsExpanding] = useState(false);
   const [originalDescription, setOriginalDescription] = useState<string>("");
   const [showUndo, setShowUndo] = useState(false);
-  const [showExpandOptions, setShowExpandOptions] = useState(false);
   const [suggestedUseCases, setSuggestedUseCases] = useState<Array<{ text: string; description: string; icon: React.ReactNode }>>([]);
   const [isSuggestingUseCases, setIsSuggestingUseCases] = useState(false);
   const [suggestUseCasesError, setSuggestUseCasesError] = useState<string | null>(null);
   const [suggestionsPage, setSuggestionsPage] = useState(0);
   const [suggestionCache, setSuggestionCache] = useState<Record<string, Array<{ text: string; description: string; icon: React.ReactNode }>>>({});
+  const [isLoadingUseCases, setIsLoadingUseCases] = useState(false);
+  const [aiThinkingSeconds, setAiThinkingSeconds] = useState(0);
+  const [expandingSeconds, setExpandingSeconds] = useState(0);
   const selectionKey = `${selectedIndustry || "none"}|${selectedDepartment || "none"}`;
 
-  const handleAIExpand = async (level: ExpansionLevel) => {
+  // Clear suggested use cases and show loading when selections change
+  useEffect(() => {
+    if (selectedIndustry) {
+      setIsLoadingUseCases(true);
+      setSuggestedUseCases([]);
+      setSuggestionsPage(0);
+      setSuggestUseCasesError(null);
+      // Simulate a brief loading state for smooth transition
+      const timer = setTimeout(() => {
+        setIsLoadingUseCases(false);
+      }, 300);
+      return () => clearTimeout(timer);
+    } else {
+      // If no industry selected, clear everything
+      setSuggestedUseCases([]);
+      setSuggestionsPage(0);
+      setIsLoadingUseCases(false);
+    }
+  }, [selectedIndustry, selectedDepartment, selectedSystem]);
+
+  const handleAIExpand = async () => {
     if (!processDescription.trim()) {
       return;
     }
@@ -971,7 +970,14 @@ export default function NewAutomationPage() {
     setIsExpanding(true);
     setOriginalDescription(processDescription);
     setError(null);
-    setShowExpandOptions(false);
+    setExpandingSeconds(0);
+
+    // Start timer to track seconds
+    const startTime = Date.now();
+    const timerInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      setExpandingSeconds(elapsed);
+    }, 1000);
 
     try {
       const response = await fetch("/api/ai/expand-description", {
@@ -979,7 +985,7 @@ export default function NewAutomationPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           description: processDescription.trim(),
-          expansionLevel: level,
+          expansionLevel: "medium",
         }),
       });
 
@@ -998,7 +1004,9 @@ export default function NewAutomationPage() {
         variant: "error",
       });
     } finally {
+      clearInterval(timerInterval);
       setIsExpanding(false);
+      setExpandingSeconds(0);
     }
   };
 
@@ -1065,6 +1073,14 @@ export default function NewAutomationPage() {
 
     setIsSuggestingUseCases(true);
     setSuggestUseCasesError(null);
+    setAiThinkingSeconds(0);
+
+    // Start timer to track seconds
+    const startTime = Date.now();
+    const timerInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      setAiThinkingSeconds(elapsed);
+    }, 1000);
 
     try {
       const availableSystems = selectedIndustry ? SYSTEMS_BY_INDUSTRY[selectedIndustry] || [] : [];
@@ -1119,48 +1135,148 @@ export default function NewAutomationPage() {
         variant: "error",
       });
     } finally {
+      clearInterval(timerInterval);
       setIsSuggestingUseCases(false);
+      setAiThinkingSeconds(0);
     }
   };
 
   const baseUseCases = useMemo(() => {
-    const comboKey = `${selectedIndustry || ""}|${selectedDepartment || ""}`;
-    const combo = COMBO_USE_CASES[comboKey];
-    let useCasesToFilter: typeof combo = [];
-    
-    if (combo && combo.length > 0) {
-      useCasesToFilter = combo;
-    } else {
-      const departmentUseCases = selectedDepartment ? COMMON_USE_CASES[selectedDepartment] ?? [] : [];
-      const industryUseCases = selectedIndustry ? COMMON_USE_CASES[selectedIndustry] ?? [] : [];
-      const combined: typeof departmentUseCases = [];
-      const seen = new Set<string>();
-      let d = 0;
-      let i = 0;
+    // If no industry selected, return empty array
+    if (!selectedIndustry) {
+      return [];
+    }
 
-      // Interleave department and industry to ensure both influence the set
-      while (combined.length < 6 && (d < departmentUseCases.length || i < industryUseCases.length)) {
-        if (d < departmentUseCases.length) {
-          const item = departmentUseCases[d++];
-          if (!seen.has(item.text)) {
-            seen.add(item.text);
-            combined.push(item);
-          }
+    // Case 3: Industry + Department + System (handle this first for better relevance)
+    if (selectedDepartment && selectedSystem) {
+      const systemLower = selectedSystem.toLowerCase();
+      const result: Array<{ text: string; description: string; icon: React.ReactNode }> = [];
+      const seen = new Set<string>();
+
+      // Priority 1: Check combo use cases that mention the system
+      const comboKey = `${selectedIndustry}|${selectedDepartment}`;
+      const combo = COMBO_USE_CASES[comboKey] ?? [];
+      for (const useCase of combo) {
+        const textLower = useCase.text.toLowerCase();
+        const descLower = useCase.description.toLowerCase();
+        if ((textLower.includes(systemLower) || descLower.includes(systemLower)) && !seen.has(useCase.text)) {
+          result.push(useCase);
+          seen.add(useCase.text);
+          if (result.length >= 6) break;
         }
-        if (combined.length >= 6) break;
-        if (i < industryUseCases.length) {
-          const item = industryUseCases[i++];
-          if (!seen.has(item.text)) {
-            seen.add(item.text);
-            combined.push(item);
+      }
+
+      // Priority 2: Industry use cases that mention the system
+      if (result.length < 6) {
+        const industryUseCases = COMMON_USE_CASES[selectedIndustry] ?? [];
+        for (const useCase of industryUseCases) {
+          const textLower = useCase.text.toLowerCase();
+          const descLower = useCase.description.toLowerCase();
+          if ((textLower.includes(systemLower) || descLower.includes(systemLower)) && !seen.has(useCase.text)) {
+            result.push(useCase);
+            seen.add(useCase.text);
+            if (result.length >= 6) break;
           }
         }
       }
-      useCasesToFilter = combined as typeof combo;
+
+      // Priority 3: Department use cases that mention the system
+      if (result.length < 6) {
+        const departmentUseCases = COMMON_USE_CASES[selectedDepartment] ?? [];
+        for (const useCase of departmentUseCases) {
+          const textLower = useCase.text.toLowerCase();
+          const descLower = useCase.description.toLowerCase();
+          if ((textLower.includes(systemLower) || descLower.includes(systemLower)) && !seen.has(useCase.text)) {
+            result.push(useCase);
+            seen.add(useCase.text);
+            if (result.length >= 6) break;
+          }
+        }
+      }
+
+      // Priority 4: If we still don't have 6, add combo use cases (even without system mention)
+      if (result.length < 6) {
+        for (const useCase of combo) {
+          if (!seen.has(useCase.text)) {
+            result.push(useCase);
+            seen.add(useCase.text);
+            if (result.length >= 6) break;
+          }
+        }
+      }
+
+      // Priority 5: If still not enough, add industry use cases that are relevant
+      if (result.length < 6) {
+        const industryUseCases = COMMON_USE_CASES[selectedIndustry] ?? [];
+        for (const useCase of industryUseCases) {
+          if (!seen.has(useCase.text)) {
+            result.push(useCase);
+            seen.add(useCase.text);
+            if (result.length >= 6) break;
+          }
+        }
+      }
+
+      // Priority 6: If still not enough, add department use cases
+      if (result.length < 6) {
+        const departmentUseCases = COMMON_USE_CASES[selectedDepartment] ?? [];
+        for (const useCase of departmentUseCases) {
+          if (!seen.has(useCase.text)) {
+            result.push(useCase);
+            seen.add(useCase.text);
+            if (result.length >= 6) break;
+          }
+        }
+      }
+
+      return result.slice(0, 6);
     }
 
-    // Filter by selected system if one is selected
-    if (selectedSystem) {
+    // Case 1: Industry + Department (no system)
+    let useCasesToFilter: Array<{ text: string; description: string; icon: React.ReactNode }> = [];
+    if (selectedDepartment) {
+      const comboKey = `${selectedIndustry}|${selectedDepartment}`;
+      const combo = COMBO_USE_CASES[comboKey];
+      
+      if (combo && combo.length > 0) {
+        useCasesToFilter = combo;
+      } else {
+        // Interleave department and industry use cases
+        const departmentUseCases = COMMON_USE_CASES[selectedDepartment] ?? [];
+        const industryUseCases = COMMON_USE_CASES[selectedIndustry] ?? [];
+        const combined: typeof departmentUseCases = [];
+        const seen = new Set<string>();
+        let d = 0;
+        let i = 0;
+
+        // Interleave department and industry to ensure both influence the set
+        while (combined.length < 6 && (d < departmentUseCases.length || i < industryUseCases.length)) {
+          if (d < departmentUseCases.length) {
+            const item = departmentUseCases[d++];
+            if (!seen.has(item.text)) {
+              seen.add(item.text);
+              combined.push(item);
+            }
+          }
+          if (combined.length >= 6) break;
+          if (i < industryUseCases.length) {
+            const item = industryUseCases[i++];
+            if (!seen.has(item.text)) {
+              seen.add(item.text);
+              combined.push(item);
+            }
+          }
+        }
+        useCasesToFilter = combined;
+      }
+    } else {
+      // Case 2: Industry only
+      const industryUseCases = COMMON_USE_CASES[selectedIndustry] ?? [];
+      useCasesToFilter = industryUseCases;
+    }
+
+    // Filter by selected system if one is selected (but no department)
+    if (selectedSystem && !selectedDepartment) {
       const systemLower = selectedSystem.toLowerCase();
       // Prioritize workflows that mention the system in the title (text field)
       const matchingInTitle = useCasesToFilter.filter((useCase) =>
@@ -1174,12 +1290,56 @@ export default function NewAutomationPage() {
       );
       // Combine with title matches first
       const filtered = [...matchingInTitle, ...matchingInDescription];
-      // If we have matches, return them (up to 6)
+      
+      // If we have matches, use them (up to 6)
       if (filtered.length > 0) {
+        // If we have fewer than 6, pad with non-matching use cases from the original list
+        if (filtered.length < 6) {
+          const remaining = useCasesToFilter.filter(
+            (useCase) =>
+              !useCase.text.toLowerCase().includes(systemLower) &&
+              !useCase.description.toLowerCase().includes(systemLower)
+          );
+          const needed = 6 - filtered.length;
+          filtered.push(...remaining.slice(0, needed));
+        }
         return filtered.slice(0, 6);
       }
+      // If no matches for the system, fall back to unfiltered list
     }
 
+    // Ensure we always return exactly 6 use cases
+    if (useCasesToFilter.length >= 6) {
+      return useCasesToFilter.slice(0, 6);
+    }
+    
+    // If we have fewer than 6, try to supplement from other sources
+    if (useCasesToFilter.length < 6) {
+      const seen = new Set(useCasesToFilter.map(uc => uc.text));
+      
+      // If we have a department, try to get more from industry use cases
+      if (selectedDepartment) {
+        const industryUseCases = COMMON_USE_CASES[selectedIndustry] ?? [];
+        const additional = industryUseCases.filter(uc => !seen.has(uc.text));
+        useCasesToFilter.push(...additional.slice(0, 6 - useCasesToFilter.length));
+      }
+      
+      // If still not enough, try to get from department use cases (if we have a department)
+      if (useCasesToFilter.length < 6 && selectedDepartment) {
+        const departmentUseCases = COMMON_USE_CASES[selectedDepartment] ?? [];
+        const additional = departmentUseCases.filter(uc => !seen.has(uc.text));
+        useCasesToFilter.push(...additional.slice(0, 6 - useCasesToFilter.length));
+      }
+      
+      // If still not enough and we have a system, try other industry use cases
+      if (useCasesToFilter.length < 6 && selectedSystem) {
+        const industryUseCases = COMMON_USE_CASES[selectedIndustry] ?? [];
+        const additional = industryUseCases.filter(uc => !seen.has(uc.text));
+        useCasesToFilter.push(...additional.slice(0, 6 - useCasesToFilter.length));
+      }
+    }
+    
+    // Return what we have (up to 6)
     return useCasesToFilter.slice(0, 6);
   }, [selectedDepartment, selectedIndustry, selectedSystem]);
 
@@ -1194,7 +1354,26 @@ export default function NewAutomationPage() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center bg-gradient-to-br bg-[radial-gradient(circle_at_10%_20%,rgba(228,54,50,0.08),transparent_35%),radial-gradient(circle_at_80%_0%,rgba(59,130,246,0.08),transparent_30%),radial-gradient(circle_at_50%_80%,rgba(16,185,129,0.08),transparent_25%)] from-slate-50 via-white to-rose-50 px-4 py-10">
+      {/* Animated gradient overlay */}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/60 via-transparent to-white/40 animate-[pulse_12s_ease-in-out_infinite]" aria-hidden />
+      {/* Subtle texture pattern */}
+      <div 
+        className="pointer-events-none absolute inset-0 opacity-[0.03]"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11 18c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm48 25c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm-43-7c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm63 31c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM34 90c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm56-76c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM12 86c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm28-65c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm23-11c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-6 60c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm29 22c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zM32 63c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm57-13c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-9-21c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM60 91c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM35 41c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM12 60c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2z' fill='%23000000' fill-opacity='1' fill-rule='evenodd'/%3E%3C/svg%3E")`,
+          backgroundSize: '200px 200px',
+        }}
+        aria-hidden
+      />
+      {/* Grid pattern overlay */}
+      <div 
+        className="pointer-events-none absolute inset-0 opacity-[0.02]"
+        style={{
+          backgroundImage: `linear-gradient(rgba(0,0,0,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.1) 1px, transparent 1px)`,
+          backgroundSize: '40px 40px',
+        }}
+        aria-hidden
+      />
       <div className="relative w-full max-w-4xl space-y-6">
         <div className="space-y-2 text-center">
           <h1 className="text-3xl md:text-4xl font-bold text-gray-900">Describe Your Process</h1>
@@ -1222,10 +1401,9 @@ export default function NewAutomationPage() {
                     value={selectedIndustry}
                     onValueChange={(value) => {
                       setSelectedIndustry(value);
+                      setSelectedDepartment(""); // Reset department when industry changes
                       setSelectedSystem(""); // Reset system when industry changes
-                      const nextKey = `${value || "none"}|${selectedDepartment || "none"}`;
-                      const cached = suggestionCache[nextKey] ?? [];
-                      setSuggestedUseCases(cached);
+                      setSuggestedUseCases([]); // Clear suggested use cases
                       setSuggestionsPage(0);
                       setSuggestUseCasesError(null);
                     }}
@@ -1258,15 +1436,15 @@ export default function NewAutomationPage() {
                     value={selectedDepartment}
                     onValueChange={(value) => {
                       setSelectedDepartment(value);
-                      const nextKey = `${selectedIndustry || "none"}|${value || "none"}`;
-                      const cached = suggestionCache[nextKey] ?? [];
-                      setSuggestedUseCases(cached);
+                      setSelectedSystem(""); // Reset system when department changes
+                      setSuggestedUseCases([]); // Clear suggested use cases
                       setSuggestionsPage(0);
                       setSuggestUseCasesError(null);
                     }}
+                    disabled={!selectedIndustry}
                   >
                     <SelectTrigger id="department" className="bg-white">
-                      <SelectValue placeholder="Select a department" />
+                      <SelectValue placeholder={selectedIndustry ? "Select a department" : "Select industry first"} />
                     </SelectTrigger>
                     <SelectContent className="bg-white">
                       <SelectGroup>
@@ -1291,11 +1469,16 @@ export default function NewAutomationPage() {
                   </label>
                   <Select
                     value={selectedSystem}
-                    onValueChange={(value) => setSelectedSystem(value)}
-                    disabled={!selectedIndustry}
+                    onValueChange={(value) => {
+                      setSelectedSystem(value);
+                      setSuggestedUseCases([]); // Clear suggested use cases
+                      setSuggestionsPage(0);
+                      setSuggestUseCasesError(null);
+                    }}
+                    disabled={!selectedIndustry || !selectedDepartment}
                   >
                     <SelectTrigger id="system" className="bg-white">
-                      <SelectValue placeholder={selectedIndustry ? "Select a system" : "Select industry first"} />
+                      <SelectValue placeholder={!selectedIndustry || !selectedDepartment ? "Select industry and department first" : "Select a system"} />
                     </SelectTrigger>
                     <SelectContent className="bg-white">
                       <SelectGroup>
@@ -1321,86 +1504,101 @@ export default function NewAutomationPage() {
                 </div>
               </div>
 
-              {selectedIndustry && availableUseCases.length > 0 && (
+              {selectedIndustry && (isLoadingUseCases || availableUseCases.length > 0) && (
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-gray-700">Most common use cases</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    {availableUseCases.map((useCase, index) => (
-                      <button
-                        key={index}
-                        type="button"
-                        onClick={() => setProcessDescription(useCase.description)}
-                        className="text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200 hover:border-[#E43632] transition-all group flex items-start gap-3"
-                      >
-                        <div className="text-[#E43632] shrink-0 mt-0.5">
-                          {useCase.icon}
+                  {isLoadingUseCases ? (
+                    <div className="grid grid-cols-2 gap-3">
+                      {Array.from({ length: 6 }).map((_, index) => (
+                        <div
+                          key={index}
+                          className="p-3 bg-gray-50 rounded-lg border border-gray-200 flex items-center justify-center min-h-[60px]"
+                        >
+                          <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
                         </div>
-                        <div className="text-sm font-medium text-gray-900 group-hover:text-[#E43632] transition-colors">
-                          {useCase.text}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-xs text-gray-500">
-                      Click any use case above to auto-fill the form, or describe your own process below.
-                    </p>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {suggestUseCasesError ? (
-                        <span className="text-[11px] text-red-600">{suggestUseCasesError}</span>
-                      ) : null}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={handleAISuggestUseCases}
-                        disabled={isSuggestingUseCases}
-                        className="h-8 text-xs"
-                      >
-                        {isSuggestingUseCases ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
-                            AI suggesting...
-                          </>
-                        ) : (
-                          <>
-                            <SparklesIcon className="h-3.5 w-3.5 mr-2 text-[#E43632]" />
-                            AI suggest more
-                          </>
-                        )}
-                      </Button>
-
-                      {suggestedUseCases.length > SUGGESTIONS_PER_PAGE ? (
-                        <div className="flex items-center gap-2 text-[11px] text-gray-600">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 px-2 text-xs"
-                            disabled={currentSuggestionsPage === 0}
-                            onClick={() => setSuggestionsPage((p) => Math.max(0, p - 1))}
-                          >
-                            Previous
-                          </Button>
-                          <span>
-                            Page {currentSuggestionsPage + 1} of {totalSuggestionPages}
-                          </span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 px-2 text-xs"
-                            disabled={currentSuggestionsPage >= totalSuggestionPages - 1}
-                            onClick={() =>
-                              setSuggestionsPage((p) => Math.min(totalSuggestionPages - 1, p + 1))
-                            }
-                          >
-                            Next
-                          </Button>
-                        </div>
-                      ) : null}
+                      ))}
                     </div>
-                  </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      {availableUseCases.map((useCase, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          onClick={() => setProcessDescription(useCase.description)}
+                          className="text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200 hover:border-[#E43632] transition-all group flex items-start gap-3"
+                        >
+                          <div className="text-[#E43632] shrink-0 mt-0.5">
+                            {useCase.icon}
+                          </div>
+                          <div className="text-sm font-medium text-gray-900 group-hover:text-[#E43632] transition-colors">
+                            {useCase.text}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {!isLoadingUseCases && (
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-xs text-gray-500">
+                        Click any use case above to auto-fill the form, or describe your own process below.
+                      </p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {suggestUseCasesError ? (
+                          <span className="text-[11px] text-red-600">{suggestUseCasesError}</span>
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleAISuggestUseCases}
+                          disabled={isSuggestingUseCases}
+                          className="h-8 text-xs"
+                        >
+                          {isSuggestingUseCases ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                              AI thinking for {aiThinkingSeconds} second{aiThinkingSeconds !== 1 ? "s" : ""}
+                            </>
+                          ) : (
+                            <>
+                              <SparklesIcon className="h-3.5 w-3.5 mr-2 text-[#E43632]" />
+                              AI suggest more
+                            </>
+                          )}
+                        </Button>
+
+                        {suggestedUseCases.length > SUGGESTIONS_PER_PAGE ? (
+                          <div className="flex items-center gap-2 text-[11px] text-gray-600">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 px-2 text-xs"
+                              disabled={currentSuggestionsPage === 0}
+                              onClick={() => setSuggestionsPage((p) => Math.max(0, p - 1))}
+                            >
+                              Previous
+                            </Button>
+                            <span>
+                              Page {currentSuggestionsPage + 1} of {totalSuggestionPages}
+                            </span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 px-2 text-xs"
+                              disabled={currentSuggestionsPage >= totalSuggestionPages - 1}
+                              onClick={() =>
+                                setSuggestionsPage((p) => Math.min(totalSuggestionPages - 1, p + 1))
+                              }
+                            >
+                              Next
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1416,7 +1614,6 @@ export default function NewAutomationPage() {
                     onChange={(event) => {
                       setProcessDescription(event.target.value);
                       setShowUndo(false);
-                      setShowExpandOptions(false);
                     }}
                     rows={8}
                     required
@@ -1432,7 +1629,6 @@ export default function NewAutomationPage() {
                           onClick={() => {
                             setProcessDescription(originalDescription);
                             setShowUndo(false);
-                            setShowExpandOptions(false);
                           }}
                           className="h-8 text-xs bg-white hover:bg-gray-50"
                         >
@@ -1440,50 +1636,26 @@ export default function NewAutomationPage() {
                           Undo
                         </Button>
                       ) : (
-                        <div className="relative">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setShowExpandOptions((prev) => !prev)}
-                            disabled={isExpanding}
-                            className="h-8 text-xs bg-white hover:bg-gray-50"
-                          >
-                            {isExpanding ? (
-                              <>
-                                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                                Expanding...
-                              </>
-                            ) : (
-                              <>
-                                <SparklesIcon className="h-3.5 w-3.5 mr-1 text-[#E43632]" />
-                                AI Expand It
-                              </>
-                            )}
-                          </Button>
-
-                          {showExpandOptions ? (
-                            <div className="absolute bottom-11 right-0 w-72 rounded-lg border border-gray-200 bg-white shadow-lg">
-                              <div className="p-2 space-y-1">
-                                {EXPANSION_OPTIONS.map((option) => (
-                                  <button
-                                    key={option.id}
-                                    type="button"
-                                    disabled={isExpanding}
-                                    onClick={() => handleAIExpand(option.id)}
-                                    className="w-full rounded-md px-3 py-2 text-left hover:bg-gray-100 focus:outline-none disabled:opacity-60"
-                                  >
-                                    <div className="flex items-center justify-between">
-                                      <span className="text-sm font-medium text-gray-900">{option.title}</span>
-                                      <span className="text-[11px] uppercase text-gray-500">{option.id}</span>
-                                    </div>
-                                    <p className="text-xs text-gray-600 mt-1">{option.description}</p>
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleAIExpand}
+                          disabled={isExpanding}
+                          className="h-8 text-xs bg-white hover:bg-gray-50"
+                        >
+                          {isExpanding ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                              Expanding for {expandingSeconds} second{expandingSeconds !== 1 ? "s" : ""}
+                            </>
+                          ) : (
+                            <>
+                              <SparklesIcon className="h-3.5 w-3.5 mr-1 text-[#E43632]" />
+                              AI Expand It
+                            </>
+                          )}
+                        </Button>
                       )}
                     </div>
                   )}

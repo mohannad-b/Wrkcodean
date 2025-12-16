@@ -43,6 +43,12 @@ export async function POST(request: Request) {
           content: `You are a helpful assistant that expands process descriptions for automation workflows. 
 Your task is to take a brief or high-level process description and expand it into a more detailed, thorough description.
 
+CRITICAL REQUIREMENT: Your expanded description MUST always include these 4 sections in this exact order:
+1. Business Requirements - What the business needs from this automation
+2. Business Objective - The goal or purpose this automation serves
+3. Success Criteria - How we measure if the automation is successful
+4. Systems Required - All systems, tools, and platforms needed for this automation
+
 Guidelines:
 - Keep the original intent and meaning
 - Add more specific details about triggers, steps, systems, and outcomes
@@ -50,16 +56,23 @@ Guidelines:
 - Make it more actionable and complete
 - Maintain a professional, clear tone
 - Do not add information that wasn't implied in the original description
-- Return only the expanded description, no additional commentary`,
+- Always structure the response with the 4 required sections clearly labeled
+- Return only the expanded description with the 4 sections, no additional commentary`,
         },
         {
           role: "user",
           content: `Expansion style: ${expansionStyles[level]}
 
-Expand this process description with more detail:\n\n${description}`,
+Expand this process description with more detail. Your response MUST include these 4 sections:
+1. Business Requirements
+2. Business Objective
+3. Success Criteria
+4. Systems Required
+
+Original description:\n\n${description}`,
         },
       ],
-      max_tokens: 1000,
+      max_tokens: 1500,
     });
 
     const expandedDescription = completion.choices[0]?.message?.content?.trim();
