@@ -29,6 +29,31 @@ export async function GET(request: Request, { params }: RouteParams) {
     headers.set("Content-Length", buffer.length.toString());
     headers.set("Content-Disposition", `${download ? "attachment" : "inline"}; filename="${encodeURIComponent(version.filename)}"`);
 
+    // Add caching headers for images (especially avatars)
+    const isImage = version.mimeType?.startsWith("image/");
+    const isAvatar = file.resourceType === "user_avatar";
+    
+    if (isImage && !download) {
+      // Cache images aggressively, especially avatars
+      // Avatars can be cached for 1 year since they have unique URLs per version
+      // Regular images can be cached for 30 days
+      const maxAge = isAvatar ? 31536000 : 2592000; // 1 year for avatars, 30 days for other images
+      headers.set("Cache-Control", `public, max-age=${maxAge}, immutable`);
+      
+      // Add ETag for better cache validation
+      const etag = `"${version.id}-${version.sizeBytes}"`;
+      headers.set("ETag", etag);
+      
+      // Check if client has cached version
+      const ifNoneMatch = request.headers.get("If-None-Match");
+      if (ifNoneMatch === etag) {
+        return new NextResponse(null, { status: 304, headers });
+      }
+    } else if (!download) {
+      // For non-image files, use shorter cache
+      headers.set("Cache-Control", "public, max-age=3600"); // 1 hour
+    }
+
     await logAudit({
       tenantId: session.tenantId,
       userId: session.userId,

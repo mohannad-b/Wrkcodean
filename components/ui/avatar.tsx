@@ -15,11 +15,18 @@ function Avatar({ className, ...props }: React.ComponentProps<typeof AvatarPrimi
   );
 }
 
-function AvatarImage({ className, ...props }: React.ComponentProps<typeof AvatarPrimitive.Image>) {
+function AvatarImage({ 
+  className, 
+  loading = "lazy" as React.ImgHTMLAttributes<HTMLImageElement>["loading"],
+  fetchPriority = "low" as React.ImgHTMLAttributes<HTMLImageElement>["fetchPriority"],
+  ...props 
+}: React.ComponentProps<typeof AvatarPrimitive.Image>) {
   return (
     <AvatarPrimitive.Image
       data-slot="avatar-image"
       className={cn("aspect-square size-full object-cover", className)}
+      loading={loading}
+      fetchPriority={fetchPriority}
       {...props}
     />
   );

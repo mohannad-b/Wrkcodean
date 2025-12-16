@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Building2, CreditCard, Save, Download, CheckCircle2, Globe, Clock, Mail, FileText, LogOut, Upload, Link2, Sparkles, Check, Loader2, Palette } from "lucide-react";
 import { motion } from "motion/react";
 import {
@@ -177,6 +177,7 @@ const ProfileSettings = ({
   const [timezone, setTimezone] = useState("est");
   const [loading, setLoading] = useState(true);
   const [originalSlug, setOriginalSlug] = useState("");
+  const loadWorkspaceRef = useRef<Promise<void> | null>(null);
 
   const MIN_SLUG_LENGTH = 3;
   const MAX_SLUG_LENGTH = 50;
@@ -191,11 +192,22 @@ const ProfileSettings = ({
 
   // Load initial workspace data
   useEffect(() => {
+    let cancelled = false;
+
+    // Prevent duplicate requests from React Strict Mode
+    if (loadWorkspaceRef.current) {
+      return;
+    }
+
     async function loadWorkspace() {
       try {
         const res = await fetch("/api/workspaces");
+        if (cancelled) return;
+
         if (res.ok) {
           const data = await res.json();
+          if (cancelled) return;
+
           if (data.tenant) {
             setWorkspaceName(data.tenant.name || "");
             setSlug(data.tenant.slug || "");
@@ -211,12 +223,22 @@ const ProfileSettings = ({
           }
         }
       } catch (err) {
-        console.error("Failed to load workspace:", err);
+        if (!cancelled) {
+          console.error("Failed to load workspace:", err);
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
+        loadWorkspaceRef.current = null;
       }
     }
-    loadWorkspace();
+
+    loadWorkspaceRef.current = loadWorkspace();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

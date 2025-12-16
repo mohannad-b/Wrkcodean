@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { Save } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -94,21 +95,6 @@ export function ProfileScreen() {
       fallback: initialsFromProfile(profile),
     };
   }, [profile, tempAvatarPreviewUrl]);
-
-  const lastUpdatedLabel = useMemo(() => {
-    if (!lastUpdatedAt) {
-      return null;
-    }
-    try {
-      return new Intl.DateTimeFormat("en-US", {
-        dateStyle: "medium",
-        timeStyle: "short",
-        hour12: true,
-      }).format(new Date(lastUpdatedAt));
-    } catch {
-      return null;
-    }
-  }, [lastUpdatedAt]);
 
   const normalizeString = (value: string) => {
     const trimmed = value.trim();
@@ -309,156 +295,199 @@ export function ProfileScreen() {
 
   if (!profile || !formState) {
     return (
-      <div className="max-w-4xl mx-auto p-6 md:p-10 space-y-6">
+      <div className="max-w-4xl mx-auto p-8 md:p-12">
         <ProfileFormSkeleton />
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-6 md:p-10 space-y-6">
-      <div className="space-y-2">
-        <p className="text-sm text-gray-500 uppercase tracking-wide font-semibold">Account</p>
-        <h1 className="text-3xl font-bold text-[#0A0A0A]">Profile</h1>
-        <p className="text-sm text-gray-500">
-          Update how your teammates see you across WRK. Email comes from your SSO provider and cannot be edited
-          here.
-        </p>
-        {lastUpdatedLabel && (
-          <p className="text-xs text-gray-400">
-            Last updated <span className="font-medium text-gray-500">{lastUpdatedLabel}</span>
-          </p>
-        )}
+    <div className="max-w-4xl mx-auto p-8 md:p-12">
+      <div className="flex justify-between items-center mb-6">
+        <h3 className="text-xl font-bold text-[#0A0A0A]">Personal Information</h3>
+        <Button
+          type="submit"
+          form="profile-form"
+          className="bg-[#0A0A0A] hover:bg-gray-800 text-white"
+          disabled={!hasChanges || isSaving}
+        >
+          <Save size={16} className="mr-2" /> {isSaving ? "Saving..." : "Save Changes"}
+        </Button>
       </div>
 
-      <Card className="border-gray-200 shadow-sm bg-white">
-        <CardHeader className="border-b border-gray-100">
-          <div>
-            <CardTitle className="text-xl font-semibold">Personal details</CardTitle>
-            <CardDescription>Control how your name, avatar, and notifications appear.</CardDescription>
-          </div>
-        </CardHeader>
-        <form onSubmit={handleSubmit}>
-          <CardContent className="space-y-8 py-6">
-            <section className="flex flex-col gap-6 md:flex-row md:items-center">
-              <div className="flex items-center gap-4">
+      <Card className="border-gray-200 shadow-sm bg-white overflow-hidden">
+        <form id="profile-form" onSubmit={handleSubmit}>
+          <CardContent className="p-8 space-y-10">
+            {/* Avatar Section */}
+            <section className="flex flex-col sm:flex-row gap-8 items-start">
+              <div className="flex-shrink-0">
                 <button
                   type="button"
                   onClick={handleAvatarButtonClick}
-                  className="rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E43632]"
+                  className="group relative rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E43632] transition-transform hover:scale-105"
                   title="Click to upload a new photo"
                 >
-                  <Avatar className="w-16 h-16 border border-gray-200">
+                  <Avatar className="w-24 h-24 border-4 border-gray-100 shadow-lg ring-2 ring-white">
                     {avatarPreview.src ? <AvatarImage src={avatarPreview.src} alt={profile.name} /> : null}
-                    <AvatarFallback>{avatarPreview.fallback}</AvatarFallback>
+                    <AvatarFallback className="text-2xl font-semibold bg-gradient-to-br from-[#E43632] to-[#C12E2A] text-white">
+                      {avatarPreview.fallback}
+                    </AvatarFallback>
                   </Avatar>
-                </button>
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-gray-900">Profile photo</p>
-                  <p className="text-xs text-gray-500">Click the avatar or use the button to upload (PNG, JPG, WebP up to {MAX_AVATAR_FILE_MB}MB).</p>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={handleAvatarButtonClick}
-                      disabled={isUploadingAvatar}
-                    >
-                      {isUploadingAvatar ? "Uploading…" : "Change avatar"}
-                    </Button>
-                    <input
-                      ref={avatarInputRef}
-                      type="file"
-                      accept={ALLOWED_AVATAR_TYPES.join(",")}
-                      className="hidden"
-                      onChange={handleAvatarFileChange}
-                    />
+                  <div className="absolute inset-0 rounded-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <span className="text-white text-xs font-medium">Change</span>
                   </div>
-                  {avatarUploadError ? <p className="text-xs text-red-500">{avatarUploadError}</p> : null}
+                </button>
+              </div>
+              <div className="flex-1 space-y-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-[#0A0A0A] mb-1">Profile Photo</h3>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Upload a profile picture to help your team recognize you. Supported formats: PNG, JPG, WebP (max {MAX_AVATAR_FILE_MB}MB).
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={handleAvatarButtonClick}
+                    disabled={isUploadingAvatar}
+                    className="border-gray-300 hover:bg-gray-50"
+                  >
+                    {isUploadingAvatar ? "Uploading…" : "Change Photo"}
+                  </Button>
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept={ALLOWED_AVATAR_TYPES.join(",")}
+                    className="hidden"
+                    onChange={handleAvatarFileChange}
+                  />
+                </div>
+                {avatarUploadError && (
+                  <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+                    {avatarUploadError}
+                  </p>
+                )}
+              </div>
+            </section>
+
+            <Separator className="bg-gray-200" />
+
+            {/* Form Fields */}
+            <section className="space-y-6">
+              <div>
+                <h3 className="text-lg font-semibold text-[#0A0A0A] mb-6">Contact Information</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <Label htmlFor="firstName" className="text-sm font-medium text-gray-700">
+                      First Name
+                    </Label>
+                    <Input
+                      id="firstName"
+                      autoComplete="given-name"
+                      value={formState.firstName}
+                      onChange={(event) => handleFieldChange("firstName", event.target.value)}
+                      className="h-11 border-gray-300 focus:border-[#E43632] focus:ring-[#E43632]"
+                      placeholder="Enter your first name"
+                    />
+                    {errors.firstName && (
+                      <p className="text-sm text-red-600 mt-1">{errors.firstName}</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="lastName" className="text-sm font-medium text-gray-700">
+                      Last Name
+                    </Label>
+                    <Input
+                      id="lastName"
+                      autoComplete="family-name"
+                      value={formState.lastName}
+                      onChange={(event) => handleFieldChange("lastName", event.target.value)}
+                      className="h-11 border-gray-300 focus:border-[#E43632] focus:ring-[#E43632]"
+                      placeholder="Enter your last name"
+                    />
+                    {errors.lastName && (
+                      <p className="text-sm text-red-600 mt-1">{errors.lastName}</p>
+                    )}
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="email" className="text-sm font-medium text-gray-700">
+                      Email Address
+                    </Label>
+                    <Input
+                      id="email"
+                      value={profile.email}
+                      readOnly
+                      className="h-11 bg-gray-50 text-gray-600 border-gray-200 cursor-not-allowed"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Your email is managed by your SSO provider and cannot be changed here.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <Separator className="bg-gray-200" />
+
+              <div>
+                <h3 className="text-lg font-semibold text-[#0A0A0A] mb-6">Professional Details</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <Label htmlFor="title" className="text-sm font-medium text-gray-700">
+                      Job Title
+                    </Label>
+                    <Input
+                      id="title"
+                      placeholder="e.g. Automation Lead, Product Manager"
+                      value={formState.title}
+                      onChange={(event) => handleFieldChange("title", event.target.value)}
+                      className="h-11 border-gray-300 focus:border-[#E43632] focus:ring-[#E43632]"
+                    />
+                    {errors.title && (
+                      <p className="text-sm text-red-600 mt-1">{errors.title}</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="timezone" className="text-sm font-medium text-gray-700">
+                      Timezone
+                    </Label>
+                    <Select
+                      value={formState.timezone || "__unset"}
+                      onValueChange={(value) => handleFieldChange("timezone", value === "__unset" ? "" : value)}
+                    >
+                      <SelectTrigger id="timezone" className="h-11 border-gray-300 focus:border-[#E43632] focus:ring-[#E43632]">
+                        <SelectValue placeholder="Select your timezone" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__unset">No preference</SelectItem>
+                        {TIMEZONE_OPTIONS.map((tz) => (
+                          <SelectItem key={tz.value} value={tz.value}>
+                            {tz.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {errors.timezone && (
+                      <p className="text-sm text-red-600 mt-1">{errors.timezone}</p>
+                    )}
+                  </div>
                 </div>
               </div>
             </section>
-
-            <Separator />
-
-            <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <Label htmlFor="firstName">First name</Label>
-                <Input
-                  id="firstName"
-                  autoComplete="given-name"
-                  value={formState.firstName}
-                  onChange={(event) => handleFieldChange("firstName", event.target.value)}
-                />
-                {errors.firstName ? <p className="text-xs text-red-500">{errors.firstName}</p> : null}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="lastName">Last name</Label>
-                <Input
-                  id="lastName"
-                  autoComplete="family-name"
-                  value={formState.lastName}
-                  onChange={(event) => handleFieldChange("lastName", event.target.value)}
-                />
-                {errors.lastName ? <p className="text-xs text-red-500">{errors.lastName}</p> : null}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input id="email" value={profile.email} readOnly className="bg-gray-50 text-gray-500" />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="title">Title</Label>
-                <Input
-                  id="title"
-                  placeholder="e.g. Automation Lead"
-                  value={formState.title}
-                  onChange={(event) => handleFieldChange("title", event.target.value)}
-                />
-                {errors.title ? <p className="text-xs text-red-500">{errors.title}</p> : null}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="timezone">Timezone</Label>
-                <Select
-                  value={formState.timezone || "__unset"}
-                  onValueChange={(value) => handleFieldChange("timezone", value === "__unset" ? "" : value)}
-                >
-                  <SelectTrigger id="timezone">
-                    <SelectValue placeholder="Choose timezone" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__unset">No preference</SelectItem>
-                    {TIMEZONE_OPTIONS.map((tz) => (
-                      <SelectItem key={tz.value} value={tz.value}>
-                        {tz.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {errors.timezone ? <p className="text-xs text-red-500">{errors.timezone}</p> : null}
-              </div>
-            </section>
           </CardContent>
-          <CardFooter className="flex flex-col gap-3 border-t border-gray-100 md:flex-row md:items-center md:justify-end">
-            <div className="flex items-center gap-3 w-full md:w-auto">
-              <Button type="button" variant="ghost" disabled={!hasChanges || isSaving} onClick={handleReset}>
-                Reset
-              </Button>
-              <Button
-                type="submit"
-                className="bg-[#E43632] hover:bg-[#C12E2A] text-white"
-                disabled={!hasChanges || isSaving}
-              >
-                {isSaving ? "Saving…" : "Save changes"}
-              </Button>
-            </div>
-          </CardFooter>
         </form>
       </Card>
 
       {isHydrating && (
-        <div className="text-xs text-gray-400">
-          Syncing profile changes…{" "}
-          <Button type="button" variant="link" className="text-xs p-0" onClick={() => refreshProfile()}>
+        <div className="text-sm text-gray-500 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex items-center justify-between">
+          <span>Syncing profile changes…</span>
+          <Button
+            type="button"
+            variant="link"
+            className="text-sm p-0 h-auto text-blue-600 hover:text-blue-700"
+            onClick={() => refreshProfile()}
+          >
             Refresh now
           </Button>
         </div>
@@ -469,42 +498,38 @@ export function ProfileScreen() {
 
 function ProfileFormSkeleton() {
   return (
-    <Card className="border-gray-200 shadow-sm bg-white">
-      <CardHeader className="border-b border-gray-100 space-y-2">
-        <Skeleton className="h-6 w-40" />
-        <Skeleton className="h-4 w-72" />
-      </CardHeader>
-      <CardContent className="space-y-6 py-6">
-        <div className="flex items-center gap-4">
-          <Skeleton className="w-16 h-16 rounded-full" />
-          <div className="space-y-2 w-full">
-            <Skeleton className="h-4 w-28" />
-            <Skeleton className="h-4 w-20" />
-          </div>
-        </div>
-        <Separator />
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {Array.from({ length: 4 }).map((_, index) => (
-            <div key={index} className="space-y-2">
-              <Skeleton className="h-4 w-20" />
-              <Skeleton className="h-10 w-full" />
+    <Card className="border-gray-200 shadow-sm bg-white overflow-hidden">
+        <CardHeader className="bg-gradient-to-r from-gray-50 to-white border-b border-gray-100 pb-6">
+          <Skeleton className="h-7 w-48 mb-2" />
+          <Skeleton className="h-4 w-72" />
+        </CardHeader>
+        <CardContent className="p-8 space-y-10">
+          <div className="flex flex-col sm:flex-row gap-8 items-start">
+            <Skeleton className="w-24 h-24 rounded-full" />
+            <div className="flex-1 space-y-3 w-full">
+              <Skeleton className="h-6 w-32" />
+              <Skeleton className="h-4 w-full max-w-md" />
+              <Skeleton className="h-9 w-32" />
             </div>
-          ))}
-        </div>
-        <div className="space-y-3">
-          <Skeleton className="h-4 w-32" />
-          <div className="grid sm:grid-cols-3 gap-3">
-            {Array.from({ length: 3 }).map((_, index) => (
-              <Skeleton key={index} className="h-20 w-full rounded-lg" />
-            ))}
           </div>
-        </div>
-      </CardContent>
-      <CardFooter className="justify-end gap-3 border-t border-gray-100">
-        <Skeleton className="h-10 w-24" />
-        <Skeleton className="h-10 w-32" />
-      </CardFooter>
-    </Card>
+          <Separator />
+          <div className="space-y-6">
+            <Skeleton className="h-6 w-40" />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div key={index} className="space-y-2">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-11 w-full" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </CardContent>
+        <CardFooter className="flex justify-end gap-3 border-t border-gray-100 bg-gray-50/50 px-8 py-6">
+          <Skeleton className="h-10 w-24" />
+          <Skeleton className="h-10 w-32" />
+        </CardFooter>
+      </Card>
   );
 }
 

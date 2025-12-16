@@ -8,10 +8,11 @@ import {
   LayoutDashboard,
   MessageSquare,
   Users,
-  UserCog,
   Shield,
   Briefcase,
   ArrowRightLeft,
+  LogOut,
+  Settings,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
@@ -22,6 +23,14 @@ import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const navItems = [
   { id: "dashboard", icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
@@ -34,7 +43,6 @@ const navItems = [
     href: "/workspace-settings",
   },
   { id: "team", icon: Users, label: "Team", href: "/team" },
-  { id: "profile", icon: UserCog, label: "Profile", href: "/profile" },
 ];
 
 const adminNavItems = [
@@ -256,45 +264,86 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
       {/* User Profile */}
       <div className={cn("mt-auto border-t border-white/10 mb-2", collapsed ? "p-1 mx-1" : "p-4 mx-2")}>
-        <Link
-          href="/profile"
-          className={cn(
-            "flex items-center group cursor-pointer rounded-lg hover:bg-white/5 transition-colors",
-            collapsed ? "justify-center p-1" : "gap-3 p-2",
-            pathname === "/profile" ? "bg-white/10" : ""
-          )}
-        >
-          {profile ? (
-            <Avatar className="w-8 h-8 border border-white/20 group-hover:border-white/40 transition-colors">
-              {profile.avatarUrl ? <AvatarImage src={profile.avatarUrl} alt={profile.name} /> : null}
-              <AvatarFallback>{userInitials}</AvatarFallback>
-            </Avatar>
-          ) : (
-            <Skeleton className="w-8 h-8 rounded-full bg-white/10 border border-white/20" />
-          )}
-          {!collapsed && (
-            <div className="flex-1 min-w-0 text-left">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className={cn(
+                "flex items-center group cursor-pointer rounded-lg hover:bg-white/5 transition-colors w-full",
+                collapsed ? "justify-center p-1" : "gap-3 p-2",
+                pathname === "/profile" ? "bg-white/10" : ""
+              )}
+            >
               {profile ? (
-                <>
-                  <p className="text-sm font-medium text-white truncate">{profile.name}</p>
-                  <p className="text-[11px] text-gray-500 truncate group-hover:text-gray-400">
-                    {profile.title ?? "View profile"}
-                  </p>
-                </>
+                <Avatar className="w-8 h-8 border border-white/20 group-hover:border-white/40 transition-colors">
+                  {profile.avatarUrl ? <AvatarImage src={profile.avatarUrl} alt={profile.name} /> : null}
+                  <AvatarFallback>{userInitials}</AvatarFallback>
+                </Avatar>
               ) : (
-                <div className="space-y-1 py-0.5">
-                  <Skeleton className="h-3 w-24 bg-white/10" />
-                  <Skeleton className="h-3 w-16 bg-white/5" />
+                <Skeleton className="w-8 h-8 rounded-full bg-white/10 border border-white/20" />
+              )}
+              {!collapsed && (
+                <div className="flex-1 min-w-0 text-left">
+                  {profile ? (
+                    <>
+                      <p className="text-sm font-medium text-white truncate">{profile.name}</p>
+                      <p className="text-[11px] text-gray-500 truncate group-hover:text-gray-400">
+                        {profile.title ?? "View profile"}
+                      </p>
+                    </>
+                  ) : (
+                    <div className="space-y-1 py-0.5">
+                      <Skeleton className="h-3 w-24 bg-white/10" />
+                      <Skeleton className="h-3 w-16 bg-white/5" />
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
-        </Link>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align={collapsed ? "center" : "start"}
+            side={collapsed ? "right" : "top"}
+            className="w-56 bg-white border-gray-200 shadow-lg"
+          >
+            <DropdownMenuLabel className="px-3 py-2">
+              <div className="flex flex-col space-y-1">
+                {profile ? (
+                  <>
+                    <p className="text-sm font-semibold text-gray-900">{profile.name}</p>
+                    <p className="text-xs text-gray-500 truncate">{profile.email}</p>
+                  </>
+                ) : (
+                  <p className="text-sm text-gray-500">Loading...</p>
+                )}
+              </div>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link
+                href="/profile"
+                className="flex items-center gap-2 cursor-pointer focus:bg-gray-100"
+              >
+                <Settings size={16} className="text-gray-600" />
+                <span>Profile Settings</span>
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => {
+                window.location.href = "/auth/logout";
+              }}
+              className="flex items-center gap-2 cursor-pointer text-red-600 focus:bg-red-50 focus:text-red-700"
+            >
+              <LogOut size={16} />
+              <span>Log Out</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {!collapsed && profile && !profile.avatarUrl && (
-          <p className="text-[10px] text-gray-500 mt-1">Add an avatar to personalize your account.</p>
+          <p className="text-[10px] text-gray-500 mt-1 px-2">Add an avatar to personalize your account.</p>
         )}
         {!collapsed && isHydrating && !profile && (
-          <p className="text-[10px] text-gray-500 mt-1">Loading profile…</p>
+          <p className="text-[10px] text-gray-500 mt-1 px-2">Loading profile…</p>
         )}
       </div>
     </div>
