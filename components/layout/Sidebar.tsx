@@ -46,7 +46,6 @@ const navItems = [
 ];
 
 const adminNavItems = [
-  { id: "admin", icon: LayoutDashboard, label: "Admin Console", href: "/admin" },
   { id: "admin-clients", icon: Users, label: "Clients", href: "/admin/clients" },
   { id: "admin-projects", icon: Building2, label: "Projects", href: "/admin/projects" },
 ];
@@ -152,7 +151,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               <Shield size={14} className="shrink-0" />
               {!collapsed && (
                 <>
-                  <span className="flex-1 text-left">Admin Mode</span>
+                  <span className="flex-1 text-left">User Console</span>
                   <ArrowRightLeft size={12} className="shrink-0 opacity-50" />
                 </>
               )}
@@ -162,7 +161,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               <Briefcase size={14} className="shrink-0" />
               {!collapsed && (
                 <>
-                  <span className="flex-1 text-left">Studio Mode</span>
+                  <span className="flex-1 text-left">Admin Console</span>
                   <ArrowRightLeft size={12} className="shrink-0 opacity-50" />
                 </>
               )}

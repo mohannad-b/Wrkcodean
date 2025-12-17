@@ -68,13 +68,13 @@ export const Navbar: React.FC = () => {
             variant="ghost"
             className="text-sm font-semibold text-gray-600 hover:text-[#0A0A0A]"
           >
-            <Link href="/trust">Trust</Link>
+            <Link href="/auth/login">Login</Link>
           </Button>
           <Button
             asChild
             className="rounded-full bg-[#0A0A0A] px-6 text-white transition-colors hover:bg-black"
           >
-            <Link href="/pricing">Start designing my workflow</Link>
+            <Link href="/auth/login?returnTo=/workspace-setup">Start designing my workflow</Link>
           </Button>
         </div>
 
@@ -106,16 +106,16 @@ export const Navbar: React.FC = () => {
             <div className="space-y-3 pt-2">
               <Button
                 asChild
-                className="w-full rounded-full bg-[#0A0A0A] text-white"
-              >
-                <Link href="/pricing">Try WRK Copilot</Link>
-              </Button>
-              <Button
-                asChild
                 variant="ghost"
                 className="w-full text-gray-600"
               >
-                <Link href="/trust">Security &amp; Trust</Link>
+                <Link href="/auth/login">Login</Link>
+              </Button>
+              <Button
+                asChild
+                className="w-full rounded-full bg-[#0A0A0A] text-white"
+              >
+                <Link href="/auth/login?returnTo=/workspace-setup">Start designing my workflow</Link>
               </Button>
             </div>
           </div>

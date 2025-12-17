@@ -45,8 +45,14 @@ import { useToast } from "@/components/ui/use-toast";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SectionCard } from "@/components/ui/SectionCard";
-import { PageHeader } from "@/components/ui/PageHeader";
-import { SectionCard } from "@/components/ui/SectionCard";
+
+type ProjectCreator = {
+  id: string;
+  name: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  avatarUrl: string | null;
+};
 
 type ProjectListItem = {
   id: string;
@@ -56,6 +62,7 @@ type ProjectListItem = {
   automation: { id: string; name: string } | null;
   version: { id: string; versionLabel: string; status: string } | null;
   latestQuote: { id: string; status: string } | null;
+  createdBy: ProjectCreator | null;
 };
 
 type QuoteFilter = "ALL" | "NO_QUOTE" | "DRAFT" | "SENT" | "SIGNED";
@@ -72,6 +79,7 @@ type AdminProjectCard = {
   checklistProgress: number;
   pricingStatus: PricingStatus;
   owner: { name: string; avatar: string };
+  requester: { name: string; avatar: string };
   eta: string;
   lastUpdated: string;
   lastUpdatedRelative: string;
@@ -258,6 +266,13 @@ const mapProjectToPresentation = (project: ProjectListItem): AdminProjectCard =>
   const ownerName = OWNER_POOL[seed % OWNER_POOL.length];
   const lifecycleStatus = project.status ?? "IntakeInProgress";
   const quoteStatus = project.latestQuote?.status ?? null;
+  const requesterName =
+    project.createdBy?.name ||
+    [project.createdBy?.firstName, project.createdBy?.lastName]
+      .filter((value): value is string => Boolean(value))
+      .join(" ") ||
+    "Unknown requester";
+  const requesterAvatar = project.createdBy?.avatarUrl ?? getOwnerAvatar(requesterName);
 
   return {
     id: project.id,
@@ -273,6 +288,10 @@ const mapProjectToPresentation = (project: ProjectListItem): AdminProjectCard =>
     owner: {
       name: ownerName,
       avatar: getOwnerAvatar(ownerName),
+    },
+    requester: {
+      name: requesterName,
+      avatar: requesterAvatar,
     },
     eta: ETA_OPTIONS[seed % ETA_OPTIONS.length],
     lastUpdated: project.updatedAt ?? new Date().toISOString(),
@@ -509,6 +528,7 @@ export default function AdminProjectsPage() {
               <th className="px-6 py-4">Version</th>
               <th className="px-6 py-4">Status</th>
               <th className="px-6 py-4">Pricing</th>
+              <th className="px-6 py-4">Requested By</th>
               <th className="px-6 py-4">Owner</th>
               <th className="px-6 py-4">ETA</th>
               <th className="px-6 py-4">Last Updated</th>
@@ -584,6 +604,24 @@ export default function AdminProjectsPage() {
                   >
                     {project.pricingStatus}
                   </Badge>
+                </td>
+                <td className="px-6 py-4">
+                  {project.requester ? (
+                    <div className="flex items-center gap-2">
+                      <Avatar className="w-6 h-6 border border-gray-200">
+                        <AvatarImage src={project.requester.avatar} />
+                        <AvatarFallback className="text-[9px] bg-gray-100">
+                          {project.requester.name
+                            .split(" ")
+                            .map((n) => n[0])
+                            .join("")}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="text-xs text-gray-600">{project.requester.name}</span>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-gray-400">—</span>
+                  )}
                 </td>
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-2">
@@ -673,6 +711,20 @@ export default function AdminProjectsPage() {
                         >
                           {project.versionLabel}
                         </Badge>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[11px] text-gray-600">
+                        <Avatar className="w-5 h-5 border border-gray-100">
+                          <AvatarImage src={project.requester?.avatar} />
+                          <AvatarFallback className="text-[8px] bg-gray-50">
+                            {(project.requester?.name ?? "??")
+                              .split(" ")
+                              .map((n) => n[0])
+                              .join("")}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span>
+                          {project.requester ? `Requested by ${project.requester.name}` : "Requester unavailable"}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between text-xs">
                         <div className="flex items-center gap-1.5">
@@ -928,8 +980,6 @@ export default function AdminProjectsPage() {
             <span>{error}</span>
           </div>
         ) : null}
-      </div>
-
       <div className="flex-1 overflow-hidden relative bg-gray-50/50">
         {loading ? (
           <div className="flex items-center justify-center py-20">
@@ -943,7 +993,7 @@ export default function AdminProjectsPage() {
           renderKanban()
         )}
       </div>
-      </div>
+    </div>
 
       <Dialog open={statusModal.isOpen} onOpenChange={(open) => !open && closeStatusModal()}>
         <DialogContent>

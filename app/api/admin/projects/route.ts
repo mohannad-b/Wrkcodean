@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { listAutomationRequestsForTenant, listProjectsForTenant } from "@/lib/services/projects";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
 import { db } from "@/db";
-import { automationVersions } from "@/db/schema";
+import { automationVersions, users } from "@/db/schema";
 import { ensureProjectForVersion } from "@/lib/services/automations";
 
 type CreateProjectPayload = {
@@ -36,6 +36,28 @@ export async function GET() {
     const seenVersionIds = new Set(items.map((item) => item.version?.id).filter(Boolean) as string[]);
     const requests = await listAutomationRequestsForTenant(session.tenantId, seenVersionIds);
     const combined = [...items, ...requests];
+    const creatorIds = Array.from(
+      new Set(
+        combined
+          .map((item) => item.automation?.createdBy)
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+
+    const creators =
+      creatorIds.length > 0
+        ? await db
+            .select({
+              id: users.id,
+              name: users.name,
+              firstName: users.firstName,
+              lastName: users.lastName,
+              avatarUrl: users.avatarUrl,
+            })
+            .from(users)
+            .where(inArray(users.id, creatorIds))
+        : [];
+    const creatorMap = new Map(creators.map((creator) => [creator.id, creator]));
 
     return NextResponse.json({
       projects: combined.map((item) => ({
@@ -62,6 +84,23 @@ export async function GET() {
               status: fromDbQuoteStatus(item.latestQuote.status),
             }
           : null,
+        createdBy: (() => {
+          const creator = item.automation?.createdBy ? creatorMap.get(item.automation.createdBy) : null;
+          if (!creator && item.automation?.createdBy) {
+            return { id: item.automation.createdBy, name: null, avatarUrl: null };
+          }
+          if (!creator) return null;
+
+          const nameFromParts = [creator.firstName, creator.lastName]
+            .filter((part): part is string => Boolean(part))
+            .join(" ");
+
+          return {
+            id: creator.id,
+            name: creator.name ?? (nameFromParts ? nameFromParts : null),
+            avatarUrl: creator.avatarUrl,
+          };
+        })(),
       })),
     });
   } catch (error) {

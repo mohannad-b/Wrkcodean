@@ -48,6 +48,7 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [workspaceDisplayName, setWorkspaceDisplayName] = useState<string>("");
 
   // Effect to update activeTab if defaultTab changes
   useEffect(() => {
@@ -81,7 +82,9 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
       <div className="w-64 bg-white border-r border-gray-200 flex flex-col h-full shrink-0">
         <div className="p-6 pb-4">
           <h2 className="text-lg font-bold text-[#0A0A0A]">Workspace</h2>
-          <p className="text-xs text-gray-500">Acme Corp Global Settings</p>
+          <p className="text-xs text-gray-500">
+            {workspaceDisplayName ? `${workspaceDisplayName} Settings` : "Workspace Settings"}
+          </p>
         </div>
         <div className="flex-1 py-2 px-3 space-y-1 overflow-y-auto">
           {tabs.map((tab) => (
@@ -125,6 +128,7 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
                 isSaving={isSaving}
                 saveError={saveError}
                 saveSuccess={saveSuccess}
+                onWorkspaceNameChange={setWorkspaceDisplayName}
                 onSaveStateChange={(error, success, saving) => {
                   setSaveError(error);
                   setSaveSuccess(success);
@@ -153,12 +157,14 @@ const ProfileSettings = ({
   saveError,
   saveSuccess,
   onSaveStateChange,
+  onWorkspaceNameChange,
 }: { 
   onSave?: () => void; 
   isSaving?: boolean;
   saveError?: string | null;
   saveSuccess?: boolean;
   onSaveStateChange?: (error: string | null, success: boolean, saving?: boolean) => void;
+  onWorkspaceNameChange?: (name: string) => void;
 } = {}) => {
   const [workspaceName, setWorkspaceName] = useState("");
   const [slug, setSlug] = useState("");
@@ -210,6 +216,8 @@ const ProfileSettings = ({
 
           if (data.tenant) {
             setWorkspaceName(data.tenant.name || "");
+            onWorkspaceNameChange?.(data.tenant.name || "");
+            onWorkspaceNameChange?.(data.tenant.name || "");
             setSlug(data.tenant.slug || "");
             setOriginalSlug(data.tenant.slug || "");
             setIndustry(data.tenant.industry || "tech");
@@ -550,9 +558,13 @@ const ProfileSettings = ({
             <label className="text-sm font-semibold text-gray-800">Workspace Name</label>
             <input
               value={workspaceName}
-              onChange={(e) => setWorkspaceName(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setWorkspaceName(next);
+                onWorkspaceNameChange?.(next);
+              }}
               className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-medium text-gray-900 shadow-inner focus:border-[#E43632] focus:bg-white focus:outline-none"
-              placeholder="Acme Corp"
+              placeholder={workspaceName || "Workspace name"}
             />
           </div>
           <div className="space-y-2">
@@ -563,7 +575,7 @@ const ProfileSettings = ({
                 value={slug}
                 onChange={(e) => setSlug(e.target.value.toLowerCase())}
                 className="ml-2 w-full bg-transparent text-sm font-medium text-gray-900 outline-none"
-                placeholder="acme"
+                placeholder={slug || originalSlug || "workspace"}
               />
               {slugStatus === "checking" && <Loader2 className="h-4 w-4 animate-spin text-gray-400" />}
               {slugStatus === "available" && <Check className="h-4 w-4 text-emerald-600" />}

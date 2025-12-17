@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { Auth0Provider } from "@auth0/nextjs-auth0/client";
 import { AppShell } from "@/components/layout/AppShell";
 import { Toaster } from "@/components/ui/sonner";
@@ -14,7 +15,7 @@ async function ensureUserProvisioned() {
     await getSession();
   } catch (error) {
     if (error instanceof Error && error.message.includes("not authenticated")) {
-      return;
+      redirect("/auth/login");
     }
     if (error instanceof NoTenantMembershipError) {
       // User is authenticated but has no tenant yet; allow workspace-setup flow to proceed.

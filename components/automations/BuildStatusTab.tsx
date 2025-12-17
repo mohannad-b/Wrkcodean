@@ -92,6 +92,7 @@ export function BuildStatusTab({
   const currentIndex = BUILD_STATUS_ORDER.indexOf(currentStatus);
   const attentionTasks = getAttentionTasks(tasks);
   const onTrack = currentIndex >= BUILD_STATUS_ORDER.indexOf("BuildInProgress");
+  const pricingLocked = currentStatus === "IntakeInProgress";
   const versionDisplay = versionLabel ? `Version ${versionLabel}` : "Version";
   const minVolume = 100;
   const maxVolume = 15000;
@@ -222,7 +223,29 @@ export function BuildStatusTab({
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
-            <Card className="p-6 space-y-5 shadow-sm border border-gray-200">
+            {pricingLocked ? (
+              <div className="flex items-start gap-3 rounded-lg border border-dashed border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
+                <AlertTriangle size={16} className="mt-0.5 text-yellow-700" />
+                <p className="leading-relaxed">
+                  Pricing will be generated once the workflow is submitted for building. Submit the intake to unlock the
+                  one-time build fee and recurring pricing.
+                </p>
+              </div>
+            ) : null}
+
+            <Card
+              className={cn(
+                "relative overflow-hidden p-6 space-y-5 shadow-sm border border-gray-200",
+                pricingLocked && "opacity-60"
+              )}
+            >
+              {pricingLocked ? (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <span className="select-none text-6xl font-black uppercase text-gray-300/60 -rotate-12 tracking-widest">
+                    Draft
+                  </span>
+                </div>
+              ) : null}
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h3 className="text-2xl font-bold text-[#0A0A0A]">One-Time Build Fee</h3>
@@ -250,16 +273,20 @@ export function BuildStatusTab({
               <div className="text-sm text-gray-600">Have a discount code? Apply it to your build fee.</div>
               <div className="flex gap-2 w-full sm:w-auto">
                 <input
-                  className="flex-1 rounded-md border border-gray-200 px-3 py-2 text-sm"
+                  className={cn(
+                    "flex-1 rounded-md border border-gray-200 px-3 py-2 text-sm",
+                    pricingLocked && "cursor-not-allowed bg-gray-50 text-gray-400"
+                  )}
                   placeholder="Enter code"
                   value={discountCode}
                   onChange={(e) => setDiscountCode(e.target.value)}
+                  disabled={pricingLocked}
                 />
                 <Button
                   size="sm"
                   variant="secondary"
                   onClick={applyDiscountCode}
-                  disabled={applyingDiscount || !discountCode.trim()}
+                  disabled={pricingLocked || applyingDiscount || !discountCode.trim()}
                   className="min-w-[90px]"
                 >
                   {applyingDiscount ? "Applying…" : "Apply"}
@@ -319,7 +346,19 @@ export function BuildStatusTab({
               </Card>
             ) : null}
 
-            <Card className="p-0 overflow-hidden border border-gray-200 shadow-sm">
+            <Card
+              className={cn(
+                "relative p-0 overflow-hidden border border-gray-200 shadow-sm",
+                pricingLocked && "opacity-60"
+              )}
+            >
+              {pricingLocked ? (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <span className="select-none text-6xl font-black uppercase text-gray-300/60 -rotate-12 tracking-widest">
+                    Draft
+                  </span>
+                </div>
+              ) : null}
               <div className="flex flex-col gap-2 px-6 py-5 border-b border-gray-100">
                 <div className="flex items-start justify-between gap-3">
                 <div>
@@ -362,7 +401,8 @@ export function BuildStatusTab({
                           step={100}
                           value={sliderVolume}
                           onChange={(event) => setSliderVolume(Number(event.target.value))}
-                          className="w-full accent-black h-3"
+                          className={cn("w-full accent-black h-3", pricingLocked && "cursor-not-allowed opacity-60")}
+                          disabled={pricingLocked}
                         />
                         <span className="text-xs text-gray-500 w-16 text-right">{sliderVolume.toLocaleString()}</span>
           </div>
@@ -403,6 +443,7 @@ export function BuildStatusTab({
                     <Button
                       className="mt-2 w-full bg-[#E43632] hover:bg-[#d12f2c] text-white text-base font-semibold h-12 shadow-md"
                       onClick={() => setShowQuoteModal(true)}
+                      disabled={pricingLocked}
                     >
                       Review & Sign Agreement
                     </Button>
