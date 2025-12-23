@@ -106,10 +106,8 @@ export function bundleMissingRequirements(
 
   const bundledQuestion =
     candidates.length === 1
-      ? `Before I lock this in, can you tell me about ${labelList[0]}?`
-      : `To set this up properly, I just need a quick sense of ${formatLabelList(
-          labelList
-        )}. Can you describe that in one message?`;
+      ? `I'm assuming ${labelList[0]} follows your usual process — is that right?`
+      : `I'm assuming we handle ${formatLabelList(labelList)} with standard defaults — okay?`;
 
   return {
     bundledQuestion,

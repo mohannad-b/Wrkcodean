@@ -174,9 +174,6 @@ export function BuildStatusTab({
                 <span>
                   Created from <span className="font-semibold text-[#0A0A0A]">{versionLabel ? `v${versionLabel}` : "v1.0"}</span>
                 </span>
-                <button className="text-sm font-semibold text-[#E43632] hover:underline inline-flex items-center gap-1">
-                  View Version Changes
-                </button>
               </div>
             </div>
           </div>

@@ -43,7 +43,7 @@ async function loadHandlers() {
   return await import("@/app/api/me/profile/route");
 }
 
-const session = { userId: "user-1", tenantId: "tenant-1", roles: ["client_admin"] };
+const session = { userId: "user-1", tenantId: "tenant-1", roles: ["admin"] };
 const profileResult: UserProfileResult = {
   profile: {
     id: "user-1",

@@ -144,7 +144,7 @@ async function ensureMembershipRecord(tenantId: string, userId: string) {
   const [membership] = await db.insert(memberships).values({
     tenantId,
     userId,
-    role: "client_admin",
+    role: "owner",
   }).returning();
 
   return membership;

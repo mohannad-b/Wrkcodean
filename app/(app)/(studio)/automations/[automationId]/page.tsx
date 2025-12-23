@@ -1620,6 +1620,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             onSuggestNextSteps={handleSuggestNextSteps}
             isRequestingSuggestions={isRequestingSuggestions}
             suggestionStatus={suggestionStatus}
+            onBlueprintUpdatingChange={setIsSynthesizingBlueprint}
           />
         </div>
 

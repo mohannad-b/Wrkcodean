@@ -1,4 +1,10 @@
-type TenantResourceType = "automation" | "automation_version" | "project" | "quote";
+type TenantResourceType =
+  | "automation"
+  | "automation_version"
+  | "project"
+  | "quote"
+  | "task"
+  | "workspace";
 
 export type RbacAction =
   | "automation:read"
@@ -7,6 +13,23 @@ export type RbacAction =
   | "automation:metadata:update"
   | "automation:version:create"
   | "automation:version:transition"
+  | "automation:delete"
+  | "automation:run"
+  | "automation:run:production"
+  | "automation:deploy"
+  | "automation:pause"
+  | "copilot:read"
+  | "copilot:write"
+  | "observability:view"
+  | "integrations:manage"
+  | "billing:view"
+  | "billing:manage"
+  | "workspace:members:view"
+  | "workspace:members:invite"
+  | "workspace:members:update_role"
+  | "workspace:members:remove"
+  | "workspace:ownership:transfer"
+  | "workspace:update"
   | "admin:project:read"
   | "admin:project:write"
   | "admin:quote:create"
@@ -29,19 +52,22 @@ export type RbacSubject = {
 };
 
 const ROLE_ALIASES: Record<string, string> = {
-  member: "workspace_member",
-  client_member: "workspace_member",
-  client_admin: "workspace_admin",
-  workspace_admin: "workspace_admin",
-  admin: "ops_admin",
+  member: "viewer",
+  client_member: "viewer",
+  client_admin: "owner",
+  workspace_admin: "admin",
+  admin: "admin",
+  ops_admin: "admin",
 };
 
-const WORKSPACE_ROLES = new Set(["workspace_member", "workspace_admin", "ops_admin"]);
-const WORKSPACE_WRITE_ROLES = new Set(["workspace_admin", "ops_admin"]);
-const ADMIN_ROLES = new Set(["ops_admin"]);
+const STUDIO_READ_ROLES = new Set(["owner", "admin", "editor", "viewer"]);
+const STUDIO_WRITE_ROLES = new Set(["owner", "admin", "editor"]);
+const ADMIN_ROLES = new Set(["owner", "admin"]);
+const OWNER_ONLY = new Set(["owner"]);
+const BILLING_ROLES = new Set(["owner", "billing"]);
 
 function normalizeRoles(roles: string[]): string[] {
-  return roles.map((role) => ROLE_ALIASES[role] ?? role);
+  return roles.map((role) => ROLE_ALIASES[role] ?? role).map((role) => role.toLowerCase());
 }
 
 function hasRole(roles: string[], allowed: Set<string>): boolean {
@@ -63,14 +89,35 @@ export function can(user: RbacSubject | null | undefined, action: RbacAction, re
 
   switch (action) {
     case "automation:read":
-      return hasRole(normalizedRoles, WORKSPACE_ROLES);
+    case "observability:view":
+    case "copilot:read":
+      return hasRole(normalizedRoles, STUDIO_READ_ROLES);
     case "automation:create":
     case "automation:update":
+    case "automation:metadata:update":
     case "automation:version:create":
     case "automation:version:transition":
-      return hasRole(normalizedRoles, WORKSPACE_WRITE_ROLES);
-    case "automation:metadata:update":
-      return hasRole(normalizedRoles, WORKSPACE_ROLES);
+    case "automation:run":
+    case "copilot:write":
+      return hasRole(normalizedRoles, STUDIO_WRITE_ROLES);
+    case "automation:run:production":
+    case "automation:deploy":
+    case "automation:pause":
+    case "automation:delete":
+    case "integrations:manage":
+    case "workspace:members:invite":
+    case "workspace:members:update_role":
+    case "workspace:members:remove":
+    case "workspace:update":
+      return hasRole(normalizedRoles, ADMIN_ROLES);
+    case "workspace:ownership:transfer":
+      return hasRole(normalizedRoles, OWNER_ONLY);
+    case "workspace:members:view":
+      return hasRole(normalizedRoles, STUDIO_READ_ROLES) || hasRole(normalizedRoles, ADMIN_ROLES);
+    case "billing:view":
+      return hasRole(normalizedRoles, BILLING_ROLES);
+    case "billing:manage":
+      return hasRole(normalizedRoles, OWNER_ONLY);
     case "admin:project:read":
     case "admin:project:write":
     case "admin:quote:create":
@@ -80,5 +127,4 @@ export function can(user: RbacSubject | null | undefined, action: RbacAction, re
       return false;
   }
 }
-
 

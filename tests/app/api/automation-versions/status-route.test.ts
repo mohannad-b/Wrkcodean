@@ -20,7 +20,7 @@ describe("PATCH /api/automation-versions/[id]/status", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    getSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: ["client_admin"] });
+    getSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: ["admin"] });
     canMock.mockReturnValue(true);
   });
 

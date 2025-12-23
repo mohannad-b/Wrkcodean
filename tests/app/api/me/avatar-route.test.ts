@@ -48,7 +48,7 @@ async function loadProfileHandlers() {
   return await import("@/app/api/me/profile/route");
 }
 
-const session = { userId: "user-1", tenantId: "tenant-1", roles: ["client_member"] };
+const session = { userId: "user-1", tenantId: "tenant-1", roles: ["viewer"] };
 
 const profileResult = {
   profile: {

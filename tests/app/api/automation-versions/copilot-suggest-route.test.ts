@@ -73,7 +73,7 @@ vi.mock("@/db", () => ({
 describe("POST /api/automation-versions/[id]/copilot/suggest-next-steps", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireTenantSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: ["client_admin"] });
+    requireTenantSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: ["editor"] });
     canMock.mockReturnValue(true);
     const blueprint = createEmptyBlueprint();
     getDetailMock.mockResolvedValue({

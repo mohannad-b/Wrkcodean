@@ -36,6 +36,7 @@ interface StudioChatProps {
   onSuggestNextSteps?: () => void;
   isRequestingSuggestions?: boolean;
   suggestionStatus?: string | null;
+  onBlueprintUpdatingChange?: (isUpdating: boolean) => void;
 }
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
@@ -60,6 +61,7 @@ const DEFAULT_USER_FACING_THINKING_STEPS: CopilotThinkingStep[] = [
   { id: "thinking-default-2", label: "Mapping how the systems should connect" },
   { id: "thinking-default-3", label: "Drafting the next blueprint updates" },
 ];
+const MAX_FOLLOWUP_QUESTIONS = 10;
 
 const formatTimestamp = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
@@ -77,6 +79,7 @@ export function StudioChat({
   onSuggestNextSteps,
   isRequestingSuggestions = false,
   suggestionStatus = null,
+  onBlueprintUpdatingChange,
 }: StudioChatProps) {
   const { profile } = useUserProfile();
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
@@ -276,9 +279,13 @@ useEffect(() => {
 
     const userMessages = durableMessages.filter((m) => m.role === "user");
     const assistantMessages = durableMessages.filter((m) => m.role === "assistant");
+    const assistantCount = assistantMessages.length;
     
     // If there's at least one user message but no assistant response, auto-trigger
     if (userMessages.length > 0 && assistantMessages.length === 0 && blueprintEmpty) {
+      if (assistantCount >= MAX_FOLLOWUP_QUESTIONS) {
+        return;
+      }
       const draftMessages = durableMessages
         .filter(
           (message) =>
@@ -323,13 +330,21 @@ useEffect(() => {
                 return updated;
               });
             }
-            if (data.blueprint) {
-              onBlueprintUpdates?.(data.blueprint);
-              await onBlueprintRefresh?.();
-            }
-            if (data.progress) {
-              onProgressUpdate?.(data.progress);
-            }
+            const runBlueprintUpdate = async () => {
+              if (data.blueprint) {
+                onBlueprintUpdatingChange?.(true);
+                try {
+                  onBlueprintUpdates?.(data.blueprint);
+                  await onBlueprintRefresh?.();
+                } finally {
+                  onBlueprintUpdatingChange?.(false);
+                }
+              }
+              if (data.progress) {
+                onProgressUpdate?.(data.progress);
+              }
+            };
+            void runBlueprintUpdate();
             if (data.thinkingSteps && data.thinkingSteps.length > 0) {
               setThinkingSteps(data.thinkingSteps);
             }
@@ -343,7 +358,20 @@ useEffect(() => {
           });
       }
     }
-  }, [automationVersionId, durableMessages, blueprintEmpty, isSending, isAwaitingReply, isLoadingThread, disabled, mapApiMessage, onBlueprintUpdates, onBlueprintRefresh, onProgressUpdate]);
+  }, [
+    automationVersionId,
+    durableMessages,
+    blueprintEmpty,
+    isSending,
+    isAwaitingReply,
+    isLoadingThread,
+    disabled,
+    mapApiMessage,
+    onBlueprintUpdates,
+    onBlueprintRefresh,
+    onProgressUpdate,
+    onBlueprintUpdatingChange,
+  ]);
 
   const displayedThinkingSteps = useMemo(
     () => (thinkingSteps.length > 0 ? thinkingSteps : DEFAULT_USER_FACING_THINKING_STEPS).slice(0, 3),
@@ -461,6 +489,24 @@ useEffect(() => {
       );
       setMessages(conversationAfterUser);
 
+      const assistantCount = countAssistantMessages(conversationAfterUser);
+      if (assistantCount >= MAX_FOLLOWUP_QUESTIONS) {
+        const limitMessage: CopilotMessage = {
+          id: `limit-${Date.now()}`,
+          role: "assistant",
+          content: "I have enough to propose the workflow. Want me to finalize the flowchart or adjust anything else?",
+          createdAt: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, limitMessage]);
+        setShowThinkingBubble(false);
+        setThinkingSteps([]);
+        setCurrentThinkingIndex(0);
+        setIsAwaitingReply(false);
+        setAssistantError(null);
+        setIsSending(false);
+        return;
+      }
+
       const draftMessages = conversationAfterUser
         .filter(
           (message) =>
@@ -516,13 +562,22 @@ useEffect(() => {
         });
       }
 
-      if (draftData.blueprint && onBlueprintUpdates) {
-        onBlueprintUpdates(mapBlueprintToUpdates(draftData.blueprint));
-      }
-
-      if (typeof onProgressUpdate === "function") {
-        onProgressUpdate(draftData.progress ?? null);
-      }
+      const runBlueprintUpdate = async () => {
+        const progressValue = draftData.progress ?? null;
+        if (draftData.blueprint && onBlueprintUpdates) {
+          onBlueprintUpdatingChange?.(true);
+          try {
+            onBlueprintUpdates(mapBlueprintToUpdates(draftData.blueprint));
+            await onBlueprintRefresh?.();
+          } finally {
+            onBlueprintUpdatingChange?.(false);
+          }
+        }
+        if (typeof onProgressUpdate === "function") {
+          onProgressUpdate(progressValue);
+        }
+      };
+      void runBlueprintUpdate();
 
       if (draftData.thinkingSteps && draftData.thinkingSteps.length > 0) {
         setThinkingSteps(draftData.thinkingSteps);
@@ -534,8 +589,6 @@ useEffect(() => {
       setCurrentThinkingIndex(0);
       setIsAwaitingReply(false);
       setAssistantError(null);
-
-      await onBlueprintRefresh?.();
     } catch (error) {
       console.error("[STUDIO-CHAT] Failed to process message:", error);
       if (!conversationAfterUser) {
@@ -563,6 +616,8 @@ useEffect(() => {
     mapApiMessage,
     onBlueprintRefresh,
     onBlueprintUpdates,
+    onBlueprintUpdatingChange,
+    onProgressUpdate,
   ]);
 
 
@@ -842,6 +897,10 @@ function stripBlueprintBlocks(content: string): string {
     .replace(BLUEPRINT_BLOCK_REGEX, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function countAssistantMessages(messages: CopilotMessage[]): number {
+  return messages.filter((message) => message.role === "assistant").length;
 }
 
 function mapBlueprintToUpdates(blueprint: Blueprint): BlueprintUpdates {

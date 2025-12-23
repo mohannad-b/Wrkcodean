@@ -1,10 +1,9 @@
 import { and, eq } from "drizzle-orm";
-import { cache as reactCache } from "react";
 import auth0 from "@/lib/auth/auth0";
 import { db } from "@/db";
 import { memberships, users, type MembershipRole } from "@/db/schema";
 
-const ALLOWED_DEFAULT_ROLES: readonly MembershipRole[] = ["client_admin", "client_member", "ops_admin", "admin"] as const;
+const ALLOWED_DEFAULT_ROLES: readonly MembershipRole[] = ["viewer", "editor", "admin", "owner", "billing"] as const;
 
 function resolveDefaultTenantRole(): MembershipRole {
   const raw = process.env.DEFAULT_TENANT_ROLE as MembershipRole | undefined;
@@ -18,16 +17,12 @@ function resolveDefaultTenantRole(): MembershipRole {
       )}.`
     );
   }
-  return "client_admin";
+  return "viewer";
 }
 
 const DEFAULT_TENANT_ROLE = resolveDefaultTenantRole();
 
-const withCache =
-  reactCache ??
-  (<T extends (...args: any[]) => Promise<AppSession>>(fn: T) => {
-    return fn;
-  });
+const withCache = <T extends (...args: any[]) => Promise<AppSession>>(fn: T) => fn;
 
 export class NoTenantMembershipError extends Error {
   code = "NO_TENANT_MEMBERSHIP";
@@ -207,7 +202,9 @@ async function getMockSession(): Promise<AppSession> {
   const membershipRows = await db
     .select({ role: memberships.role })
     .from(memberships)
-    .where(and(eq(memberships.tenantId, tenantId), eq(memberships.userId, userId)));
+    .where(
+      and(eq(memberships.tenantId, tenantId), eq(memberships.userId, userId), eq(memberships.status, "active"))
+    );
 
   if (membershipRows.length === 0) {
     throw new Error("Mock membership not found. Seed the database with the mock user before continuing.");
@@ -226,7 +223,7 @@ async function getAuth0BackedSession(): Promise<AppSession> {
   let membershipRows = await db
     .select({ role: memberships.role, tenantId: memberships.tenantId })
     .from(memberships)
-    .where(eq(memberships.userId, userRecord.id));
+    .where(and(eq(memberships.userId, userRecord.id), eq(memberships.status, "active")));
 
   if (membershipRows.length === 0) {
     const allowBackfill = process.env.ALLOW_DEFAULT_TENANT_BACKFILL === "true";
@@ -239,6 +236,7 @@ async function getAuth0BackedSession(): Promise<AppSession> {
           tenantId: fallbackTenantId,
           userId: userRecord.id,
           role: DEFAULT_TENANT_ROLE,
+          status: "active",
         })
         .onConflictDoNothing({
           target: [memberships.tenantId, memberships.userId],

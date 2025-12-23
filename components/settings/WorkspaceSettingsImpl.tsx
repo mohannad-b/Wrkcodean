@@ -1,7 +1,25 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Building2, CreditCard, Save, Download, CheckCircle2, Globe, Clock, Mail, FileText, LogOut, Upload, Link2, Sparkles, Check, Loader2, Palette } from "lucide-react";
+import {
+  Building2,
+  CreditCard,
+  Save,
+  Download,
+  CheckCircle2,
+  Globe,
+  Clock,
+  Mail,
+  FileText,
+  LogOut,
+  Upload,
+  Link2,
+  Sparkles,
+  Check,
+  Loader2,
+  Palette,
+  Users,
+} from "lucide-react";
 import { motion } from "motion/react";
 import {
   XAxis,
@@ -25,6 +43,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { TeamsPanel } from "@/components/settings/TeamsPanel";
 
 // --- Mock Data ---
 const USAGE_DATA = Array.from({ length: 12 }, (_, i) => ({
@@ -39,7 +58,7 @@ const INVOICES = [
   { id: "INV-2023-010", date: "Sep 01, 2023", amount: "$950.00", status: "Paid" },
 ];
 
-type SettingsTab = "profile" | "billing";
+type SettingsTab = "profile" | "billing" | "teams";
 
 export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
   defaultTab = "profile",
@@ -49,11 +68,41 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [workspaceDisplayName, setWorkspaceDisplayName] = useState<string>("");
+  const [membershipMeta, setMembershipMeta] = useState<{ primaryRole: string; canViewBilling: boolean }>({
+    primaryRole: "viewer",
+    canViewBilling: false,
+  });
 
   // Effect to update activeTab if defaultTab changes
   useEffect(() => {
     setActiveTab(defaultTab);
   }, [defaultTab]);
+
+  useEffect(() => {
+    async function loadMembership() {
+      try {
+        const res = await fetch("/api/me/membership", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = (await res.json()) as { primaryRole: string; canViewBilling: boolean };
+        setMembershipMeta({
+          primaryRole: json.primaryRole,
+          canViewBilling: Boolean(json.canViewBilling),
+        });
+        setActiveTab((prev) => {
+          if (!json.canViewBilling && prev === "billing") {
+            return "profile";
+          }
+          if (json.primaryRole === "billing") {
+            return "billing";
+          }
+          return prev;
+        });
+      } catch (err) {
+        console.warn("Unable to load membership metadata", err);
+      }
+    }
+    loadMembership().catch(() => null);
+  }, []);
 
   const handleSave = async () => {
     // Save is handled by ProfileSettings component via onSaveStateChange
@@ -73,7 +122,8 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
 
   const tabs = [
     { id: "profile", label: "Workspace Profile", icon: Building2 },
-    { id: "billing", label: "Billing & Usage", icon: CreditCard },
+    ...(membershipMeta.canViewBilling ? [{ id: "billing", label: "Billing & Usage", icon: CreditCard }] : []),
+    { id: "teams", label: "Teams", icon: Users },
   ];
 
   return (
@@ -143,6 +193,7 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
                 onAddContact={handleAddContact}
               />
             )}
+            {activeTab === "teams" && <TeamsPanel />}
           </motion.div>
         </div>
       </div>

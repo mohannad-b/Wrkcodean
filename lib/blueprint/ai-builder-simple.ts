@@ -10,7 +10,7 @@
 import { randomUUID } from "crypto";
 import type { Blueprint, BlueprintStep, BlueprintBranch, BlueprintStepType, BlueprintResponsibility } from "./types";
 import { applyStepNumbers } from "./step-numbering";
-import { BLUEPRINT_SYSTEM_PROMPT, formatBlueprintPrompt } from "@/lib/ai/prompts";
+import { BLUEPRINT_SYSTEM_PROMPT_COMPACT } from "@/lib/ai/prompts";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { sanitizeBlueprintTopology, type SanitizationSummary } from "./sanitizer";
 
@@ -24,6 +24,8 @@ interface BuildBlueprintParams {
   currentBlueprint: Blueprint;
   conversationHistory?: ConversationMessage[];
   requirementsText?: string | null;
+  memorySummary?: string | null;
+  memoryFacts?: Record<string, unknown>;
 }
 
 export type AITask = {
@@ -108,13 +110,38 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     throw new Error("OPENAI_API_KEY is not configured");
   }
 
-  const { userMessage, currentBlueprint, conversationHistory = [], requirementsText } = params;
+  const { userMessage, currentBlueprint, conversationHistory = [], requirementsText, memorySummary, memoryFacts } = params;
+
+  const windowedHistory = conversationHistory.slice(-8);
+  const userPrompt = buildCompactPrompt({
+    userMessage,
+    currentBlueprint,
+    requirementsText,
+    memorySummary,
+    memoryFacts,
+  });
 
   const messages: ConversationMessage[] = [
-    { role: "system", content: BLUEPRINT_SYSTEM_PROMPT },
-    ...conversationHistory.slice(-10),
-    { role: "user", content: formatBlueprintPrompt(userMessage, currentBlueprint, requirementsText) },
+    { role: "system", content: BLUEPRINT_SYSTEM_PROMPT_COMPACT },
+    ...windowedHistory,
+    { role: "user", content: userPrompt },
   ];
+
+  // Log the exact prompt being sent to OpenAI for debugging
+  copilotDebug("draft_blueprint.prompt_log", {
+    model: BLUEPRINT_MODEL,
+    temperature: 0.3,
+    messages: messages.map((msg, index) => ({
+      index,
+      role: msg.role,
+      content: msg.content,
+    })),
+  });
+  console.log("[copilot:draft-blueprint] prompt", {
+    model: BLUEPRINT_MODEL,
+    temperature: 0.3,
+    messages,
+  });
 
   try {
     const completion = await openai.chat.completions.create({
@@ -131,6 +158,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     }
 
     copilotDebug("draft_blueprint.raw_response", content);
+    console.log("[copilot:draft-blueprint] raw_response", content);
 
     const aiResponse = parseAIResponse(content);
     const normalizedSteps = Array.isArray(aiResponse.blueprint?.steps)
@@ -360,6 +388,87 @@ function mapTypeToResponsibility(type: BlueprintStepType): BlueprintResponsibili
     default:
       return "Automated";
   }
+}
+
+type CompactPromptArgs = {
+  userMessage: string;
+  currentBlueprint: Blueprint;
+  requirementsText?: string | null;
+  memorySummary?: string | null;
+  memoryFacts?: Record<string, unknown>;
+};
+
+function buildCompactPrompt({
+  userMessage,
+  currentBlueprint,
+  requirementsText,
+  memorySummary,
+  memoryFacts,
+}: CompactPromptArgs): string {
+  const parts: string[] = [];
+
+  if (memorySummary || (memoryFacts && Object.keys(memoryFacts).length > 0)) {
+    const factsBlock =
+      memoryFacts && Object.keys(memoryFacts).length > 0 ? JSON.stringify(memoryFacts, null, 2) : undefined;
+    const summary = memorySummary?.trim();
+    if (summary) {
+      parts.push(`MEMORY SUMMARY (compact):\n${truncate(summary, 1200)}`);
+    }
+    if (factsBlock) {
+      parts.push(`KNOWN FACTS:\n${factsBlock}`);
+    }
+  }
+
+  const clippedRequirements = requirementsText?.trim();
+  if (clippedRequirements) {
+    parts.push(`LATEST REQUIREMENTS (trimmed):\n${truncate(clippedRequirements, 800)}`);
+  }
+
+  parts.push(`CURRENT BLUEPRINT (compact JSON):\n${summarizeBlueprintCompact(currentBlueprint)}`);
+
+  parts.push(`USER INPUT:\n${userMessage}`);
+  parts.push("Return ONLY valid JSON matching the expected blueprint envelope.");
+
+  return parts.join("\n\n");
+}
+
+function summarizeBlueprintCompact(blueprint: Blueprint): string {
+  if (!blueprint?.steps?.length) {
+    return JSON.stringify({ summary: blueprint?.summary ?? null, steps: [], sections: {} }, null, 2);
+  }
+
+  const sections: Record<string, string> = {};
+  blueprint.sections?.forEach((section) => {
+    const content = section.content?.trim();
+    if (content) {
+      sections[section.key] = truncate(content, 280);
+    }
+  });
+
+  const steps = blueprint.steps.map((step) => ({
+    stepNumber: step.stepNumber,
+    type: step.type,
+    name: step.name,
+    systemsInvolved: step.systemsInvolved?.slice(0, 3) ?? [],
+    nextSteps: (step.nextStepIds ?? [])
+      .map((id) => blueprint.steps.find((candidate) => candidate.id === id)?.stepNumber ?? id)
+      .slice(0, 4),
+    branchLabel: step.branchLabel,
+  }));
+
+  const compact = {
+    summary: truncate(blueprint.summary ?? "", 240) || null,
+    sections,
+    stepCount: blueprint.steps.length,
+    steps,
+  };
+
+  return truncate(JSON.stringify(compact, null, 2), 1800);
+}
+
+function truncate(value: string, limit: number): string {
+  if (!value) return "";
+  return value.length > limit ? `${value.slice(0, limit)}…` : value;
 }
 
 function parseAIResponse(content: string): AIResponse {

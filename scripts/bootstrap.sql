@@ -24,6 +24,7 @@ DROP TABLE IF EXISTS automation_version_metrics CASCADE;
 DROP TABLE IF EXISTS automation_metric_configs CASCADE;
 DROP TABLE IF EXISTS automation_versions CASCADE;
 DROP TABLE IF EXISTS automations CASCADE;
+DROP TABLE IF EXISTS workspace_invites CASCADE;
 DROP TABLE IF EXISTS memberships CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS tenants CASCADE;
@@ -47,6 +48,8 @@ DROP TYPE IF EXISTS automation_status CASCADE;
 DROP TYPE IF EXISTS project_pricing_status CASCADE;
 DROP TYPE IF EXISTS project_type CASCADE;
 DROP TYPE IF EXISTS membership_role CASCADE;
+DROP TYPE IF EXISTS membership_status CASCADE;
+DROP TYPE IF EXISTS workspace_invite_status CASCADE;
 DROP TYPE IF EXISTS notification_preference CASCADE;
 
 -- ============================================================================
@@ -57,7 +60,9 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- ============================================================================
 -- STEP 4: Create enumerations
 -- ============================================================================
-CREATE TYPE membership_role AS ENUM ('client_admin','client_member','ops_admin','admin');
+CREATE TYPE membership_role AS ENUM ('owner','admin','editor','viewer','billing');
+CREATE TYPE membership_status AS ENUM ('active','invited','removed');
+CREATE TYPE workspace_invite_status AS ENUM ('pending','accepted','cancelled','expired');
 CREATE TYPE automation_status AS ENUM (
   'IntakeInProgress',
   'NeedsPricing',
@@ -129,9 +134,28 @@ CREATE TABLE memberships (
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role membership_role NOT NULL,
+  status membership_status NOT NULL DEFAULT 'active',
   created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT memberships_tenant_user_unique UNIQUE (tenant_id, user_id)
 );
+
+-- Workspace Invites
+CREATE TABLE workspace_invites (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  email text NOT NULL,
+  role membership_role NOT NULL,
+  token text NOT NULL,
+  status workspace_invite_status NOT NULL DEFAULT 'pending',
+  invited_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz,
+  CONSTRAINT workspace_invites_token_unique UNIQUE (token)
+);
+CREATE INDEX workspace_invites_tenant_idx ON workspace_invites(tenant_id);
+CREATE INDEX workspace_invites_email_idx ON workspace_invites(email);
 
 -- Automations
 CREATE TABLE automations (

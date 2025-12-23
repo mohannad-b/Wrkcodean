@@ -9,32 +9,39 @@ const baseUser = (overrides: Partial<RbacSubject> = {}): RbacSubject => ({
 });
 
 describe("can()", () => {
-  it("allows client_admins to create and update automations in their tenant", () => {
-    const user = baseUser({ roles: ["client_admin"] });
+  it("allows owners to create and update automations in their tenant", () => {
+    const user = baseUser({ roles: ["owner"] });
 
     expect(can(user, "automation:create", { type: "automation", tenantId: "tenant-1" })).toBe(true);
     expect(can(user, "automation:update", { type: "automation_version", tenantId: "tenant-1" })).toBe(true);
+    expect(can(user, "automation:deploy", { type: "automation_version", tenantId: "tenant-1" })).toBe(true);
   });
 
-  it("allows members to read but not update automations", () => {
-    const member = baseUser({ roles: ["member"] });
+  it("allows editors to write but not deploy", () => {
+    const member = baseUser({ roles: ["editor"] });
 
     expect(can(member, "automation:read", { type: "automation", tenantId: "tenant-1" })).toBe(true);
-    expect(can(member, "automation:update", { type: "automation", tenantId: "tenant-1" })).toBe(false);
-    expect(can(member, "automation:metadata:update", { type: "automation_version", tenantId: "tenant-1" })).toBe(true);
+    expect(can(member, "automation:update", { type: "automation", tenantId: "tenant-1" })).toBe(true);
+    expect(can(member, "automation:deploy", { type: "automation_version", tenantId: "tenant-1" })).toBe(false);
   });
 
-  it("grants ops_admins access to admin projects and quotes", () => {
-    const opsAdmin = baseUser({ roles: ["ops_admin"] });
+  it("grants admins access to admin actions", () => {
+    const admin = baseUser({ roles: ["admin"] });
 
-    expect(can(opsAdmin, "admin:project:read")).toBe(true);
-    expect(can(opsAdmin, "admin:quote:update")).toBe(true);
+    expect(can(admin, "admin:project:read")).toBe(true);
+    expect(can(admin, "admin:quote:update")).toBe(true);
   });
 
   it("blocks cross-tenant automation access regardless of role", () => {
     const admin = baseUser({ roles: ["admin"] });
 
     expect(can(admin, "automation:update", { type: "automation", tenantId: "tenant-2" })).toBe(false);
+  });
+
+  it("restricts billing role to billing endpoints", () => {
+    const billing = baseUser({ roles: ["billing"] });
+    expect(can(billing, "billing:view", { type: "workspace", tenantId: "tenant-1" })).toBe(true);
+    expect(can(billing, "automation:read", { type: "automation", tenantId: "tenant-1" })).toBe(false);
   });
 });
 

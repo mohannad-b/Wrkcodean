@@ -32,7 +32,7 @@ export async function POST(request: Request) {
   try {
     const session = await requireTenantSession();
 
-    if (!can(session, "automation:metadata:update", { type: "task", tenantId: session.tenantId })) {
+    if (!can(session, "integrations:manage", { type: "workspace", tenantId: session.tenantId })) {
       throw new ApiError(403, "Forbidden");
     }
 

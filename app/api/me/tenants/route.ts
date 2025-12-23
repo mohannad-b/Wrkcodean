@@ -20,7 +20,7 @@ export async function GET() {
       })
       .from(memberships)
       .innerJoin(tenants, eq(tenants.id, memberships.tenantId))
-      .where(eq(memberships.userId, userRecord.id))
+    .where(and(eq(memberships.userId, userRecord.id), eq(memberships.status, "active")))
       .orderBy(tenants.name);
 
     return NextResponse.json({ tenants: userMemberships });

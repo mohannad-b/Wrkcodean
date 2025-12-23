@@ -58,11 +58,34 @@ export interface CopilotAnalysisState {
   todos: CopilotTodoItem[];
   humanTouchpoints: CopilotHumanTouchpoint[];
   readiness: CopilotReadiness;
+  memory?: CopilotMemory;
   version?: string;
   lastUpdatedAt?: string;
   requirementsState?: RequirementsState;
   suggestedNextSteps?: SuggestedNextStep[];
   progress?: BlueprintProgressSnapshot | null;
+}
+
+export type CopilotStage = "requirements" | "objectives" | "success" | "systems" | "samples" | "done";
+
+export type CopilotMemoryFacts = {
+  trigger_cadence?: string | null;
+  trigger_time?: string | null;
+  primary_outcome?: string | null;
+  storage_destination?: string | null;
+  systems?: string[] | null;
+  exception_policy?: string | null;
+  human_review?: string | null;
+  success_criteria?: string | null;
+  samples?: string | null;
+};
+
+export interface CopilotMemory {
+  summary_compact: string | null;
+  facts: CopilotMemoryFacts;
+  question_count: number;
+  asked_questions_normalized: string[];
+  stage: CopilotStage;
 }
 
 export type BlueprintSectionProgressStatus = "not_started" | "in_progress" | "complete";
@@ -90,6 +113,7 @@ export function createEmptyCopilotAnalysisState(): CopilotAnalysisState {
     todos: [],
     humanTouchpoints: [],
     readiness: createEmptyReadiness(),
+    memory: createEmptyMemory(),
     version: COPILOT_ANALYSIS_VERSION,
     lastUpdatedAt: new Date().toISOString(),
     progress: null,
@@ -115,6 +139,15 @@ export function cloneCopilotAnalysisState(state: CopilotAnalysisState): CopilotA
       stateItemsMissing: [...state.readiness.stateItemsMissing],
       blockingTodos: [...state.readiness.blockingTodos],
     },
+    memory: state.memory
+      ? {
+          summary_compact: state.memory.summary_compact,
+          facts: { ...state.memory.facts },
+          question_count: state.memory.question_count,
+          asked_questions_normalized: [...state.memory.asked_questions_normalized],
+          stage: state.memory.stage,
+        }
+      : createEmptyMemory(),
     version: state.version ?? COPILOT_ANALYSIS_VERSION,
     lastUpdatedAt: state.lastUpdatedAt ?? new Date().toISOString(),
     requirementsState: state.requirementsState
@@ -184,6 +217,16 @@ export function createEmptyReadiness(): CopilotReadiness {
     stateItemsSatisfied: [],
     stateItemsMissing: [],
     blockingTodos: [],
+  };
+}
+
+export function createEmptyMemory(): CopilotMemory {
+  return {
+    summary_compact: null,
+    facts: {},
+    question_count: 0,
+    asked_questions_normalized: [],
+    stage: "requirements",
   };
 }
 

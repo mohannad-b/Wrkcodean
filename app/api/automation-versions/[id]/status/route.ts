@@ -46,6 +46,23 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
       throw new ApiError(400, "Invalid status");
     }
 
+    const isProductionPromotion = nextStatus === "Live";
+    const isArchive = nextStatus === "Archived";
+
+    if (
+      isProductionPromotion &&
+      !can(session, "automation:deploy", { type: "automation_version", tenantId: session.tenantId })
+    ) {
+      throw new ApiError(403, "Only Admins or Owners can deploy to production");
+    }
+
+    if (
+      isArchive &&
+      !can(session, "automation:delete", { type: "automation_version", tenantId: session.tenantId })
+    ) {
+      throw new ApiError(403, "Only Admins or Owners can archive workflows");
+    }
+
     const { version: updated, previousStatus } = await updateAutomationVersionStatus({
       tenantId: session.tenantId,
       automationVersionId: params.id,

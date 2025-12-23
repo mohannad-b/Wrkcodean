@@ -3,12 +3,9 @@ import { date, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uuid, 
 import type { Workflow } from "@/lib/blueprint/types";
 import type { CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
 
-const membershipRoleEnum = pgEnum("membership_role", [
-  "client_admin",
-  "client_member",
-  "ops_admin",
-  "admin",
-]);
+const membershipRoleEnum = pgEnum("membership_role", ["owner", "admin", "editor", "viewer", "billing"]);
+const membershipStatusEnum = pgEnum("membership_status", ["active", "invited", "removed"]);
+const inviteStatusEnum = pgEnum("workspace_invite_status", ["pending", "accepted", "cancelled", "expired"]);
 
 export const automationStatusEnum = pgEnum("automation_status", [
   "IntakeInProgress",
@@ -92,12 +89,37 @@ export const memberships = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     role: membershipRoleEnum("role").notNull(),
+    status: membershipStatusEnum("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     tenantUserUnique: uniqueIndex("memberships_tenant_user_unique").on(table.tenantId, table.userId),
     tenantIdx: index("memberships_tenant_idx").on(table.tenantId),
     userIdx: index("memberships_user_idx").on(table.userId),
+  })
+);
+
+export const workspaceInvites = pgTable(
+  "workspace_invites",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    role: membershipRoleEnum("role").notNull(),
+    token: text("token").notNull(),
+    status: inviteStatusEnum("status").notNull().default("pending"),
+    invitedBy: uuid("invited_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+  },
+  (table) => ({
+    tenantIdx: index("workspace_invites_tenant_idx").on(table.tenantId),
+    emailIdx: index("workspace_invites_email_idx").on(table.email),
+    tokenUnique: uniqueIndex("workspace_invites_token_unique").on(table.token),
   })
 );
 
@@ -561,6 +583,7 @@ export type FileVersion = typeof fileVersions.$inferSelect;
 export type AutomationMetricConfig = typeof automationMetricConfigs.$inferSelect;
 export type AutomationVersionMetric = typeof automationVersionMetrics.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
+export type WorkspaceInvite = typeof workspaceInvites.$inferSelect;
 export type MembershipRole = typeof membershipRoleEnum.enumValues[number];
 export type NotificationPreference = typeof notificationPreferenceEnum.enumValues[number];
 export type CopilotMessageRole = typeof copilotMessageRoleEnum.enumValues[number];

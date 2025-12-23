@@ -66,7 +66,7 @@ describe("getSession", () => {
     process.env.AUTH0_MOCK_ENABLED = "true";
     process.env.MOCK_TENANT_ID = "tenant-123";
     process.env.MOCK_USER_ID = "user-123";
-    membershipRows.push({ role: "client_admin", tenantId: "tenant-123" });
+    membershipRows.push({ role: "owner", tenantId: "tenant-123" });
 
     const { getSession } = await loadSessionModule();
     const session = await getSession();
@@ -74,13 +74,13 @@ describe("getSession", () => {
     expect(session).toEqual({
       tenantId: "tenant-123",
       userId: "user-123",
-      roles: ["client_admin"],
+      roles: ["owner"],
     });
   });
 
   it("returns Auth0-backed session when memberships exist", async () => {
     process.env.AUTH0_MOCK_ENABLED = "false";
-    membershipRows.push({ role: "ops_admin", tenantId: "tenant-abc" });
+    membershipRows.push({ role: "admin", tenantId: "tenant-abc" });
 
     usersFindFirstMock.mockResolvedValue({ id: "user-abc", auth0Id: "auth0|abc", email: "ops@example.com" });
     membershipsFindFirstMock.mockResolvedValue(null);
@@ -98,7 +98,7 @@ describe("getSession", () => {
     expect(session).toEqual({
       tenantId: "tenant-abc",
       userId: "user-abc",
-      roles: ["ops_admin"],
+      roles: ["admin"],
     });
     expect(auth0GetSessionMock).toHaveBeenCalled();
   });

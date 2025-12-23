@@ -8,8 +8,8 @@ dotenv.config({ path: ".env.local" });
 
 type SeedResult = {
   tenantId: string;
-  clientAdminUserId: string;
-  opsAdminUserId: string;
+  ownerUserId: string;
+  adminUserId: string;
 };
 
 async function ensureTenant(): Promise<{ id: string; slug: string }> {
@@ -63,7 +63,7 @@ async function ensureUser(params: { email: string; name: string; avatarUrl?: str
   return user;
 }
 
-async function ensureMembership(params: { tenantId: string; userId: string; role: "client_admin" | "ops_admin" }) {
+async function ensureMembership(params: { tenantId: string; userId: string; role: "owner" | "admin" }) {
   const existing = await db.query.memberships.findFirst({
     where: and(eq(memberships.tenantId, params.tenantId), eq(memberships.userId, params.userId)),
   });
@@ -108,19 +108,19 @@ async function seed(): Promise<SeedResult> {
   await ensureMembership({
     tenantId: tenant.id,
     userId: clientAdmin.id,
-    role: "client_admin",
+    role: "owner",
   });
 
   await ensureMembership({
     tenantId: tenant.id,
     userId: opsAdmin.id,
-    role: "ops_admin",
+    role: "admin",
   });
 
   return {
     tenantId: tenant.id,
-    clientAdminUserId: clientAdmin.id,
-    opsAdminUserId: opsAdmin.id,
+    ownerUserId: clientAdmin.id,
+    adminUserId: opsAdmin.id,
   };
 }
 

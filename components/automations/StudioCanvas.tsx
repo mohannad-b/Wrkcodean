@@ -127,7 +127,7 @@ export function StudioCanvas({
               <span className="absolute w-full h-full bg-[#E43632] rounded-full animate-ping opacity-75" />
               <span className="relative inline-flex rounded-full w-2 h-2 bg-[#E43632]" />
             </div>
-            <span className="text-xs font-bold text-[#0A0A0A]">Synthesizing process...</span>
+            <span className="text-xs font-bold text-[#0A0A0A]">Updating flowchart...</span>
           </div>
         )}
 

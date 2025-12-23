@@ -4,7 +4,8 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { memberships, tenants } from "@/db/schema";
 import { getOrCreateUserFromAuth0Session } from "@/lib/auth/session";
-import { requireTenantSession } from "@/lib/api/context";
+import { can } from "@/lib/auth/rbac";
+import { ApiError, requireTenantSession } from "@/lib/api/context";
 
 const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MIN_SLUG_LENGTH = 3;
@@ -76,7 +77,8 @@ export async function POST(request: NextRequest) {
     .values({
       tenantId: tenant.id,
       userId: userRecord.id,
-      role: "client_admin",
+      role: "owner",
+      status: "active",
     })
     .onConflictDoNothing({
       target: [memberships.tenantId, memberships.userId],
@@ -87,7 +89,7 @@ export async function POST(request: NextRequest) {
     membership: {
       tenantId: tenant.id,
       userId: userRecord.id,
-      role: "client_admin",
+      role: "owner",
     },
   });
 }
@@ -101,6 +103,10 @@ export async function PATCH(request: NextRequest) {
   }
 
   const session = await requireTenantSession();
+
+  if (!can(session, "workspace:update", { type: "workspace", tenantId: session.tenantId })) {
+    throw new ApiError(403, "Forbidden");
+  }
 
   const updates: { name?: string; slug?: string; industry?: string; currency?: string; timezone?: string } = {};
 

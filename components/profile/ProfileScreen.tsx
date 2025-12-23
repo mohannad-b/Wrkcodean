@@ -15,18 +15,98 @@ import { useUserProfile } from "@/components/providers/user-profile-provider";
 import type { UserProfile } from "@/lib/user/profile-shared";
 import { cn } from "@/lib/utils";
 
-const TIMEZONE_OPTIONS = [
-  { value: "UTC", label: "UTC" },
-  { value: "America/New_York", label: "Eastern (US & Canada)" },
-  { value: "America/Chicago", label: "Central (US & Canada)" },
-  { value: "America/Denver", label: "Mountain (US & Canada)" },
-  { value: "America/Los_Angeles", label: "Pacific (US & Canada)" },
-  { value: "Europe/London", label: "London" },
-  { value: "Europe/Berlin", label: "Berlin" },
-  { value: "Europe/Paris", label: "Paris" },
-  { value: "Asia/Singapore", label: "Singapore" },
-  { value: "Asia/Tokyo", label: "Tokyo" },
-] as const;
+const COMMON_TIMEZONES: readonly string[] = [
+  "UTC",
+  "Pacific/Midway",
+  "Pacific/Honolulu",
+  "America/Anchorage",
+  "America/Los_Angeles",
+  "America/Denver",
+  "America/Chicago",
+  "America/New_York",
+  "America/Phoenix",
+  "America/Caracas",
+  "America/Bogota",
+  "America/Lima",
+  "America/Mexico_City",
+  "America/Santiago",
+  "America/Sao_Paulo",
+  "Europe/London",
+  "Europe/Dublin",
+  "Europe/Lisbon",
+  "Europe/Madrid",
+  "Europe/Paris",
+  "Europe/Brussels",
+  "Europe/Amsterdam",
+  "Europe/Berlin",
+  "Europe/Stockholm",
+  "Europe/Warsaw",
+  "Europe/Prague",
+  "Europe/Athens",
+  "Europe/Istanbul",
+  "Europe/Moscow",
+  "Africa/Cairo",
+  "Africa/Nairobi",
+  "Africa/Johannesburg",
+  "Asia/Jerusalem",
+  "Asia/Baghdad",
+  "Asia/Dubai",
+  "Asia/Karachi",
+  "Asia/Kolkata",
+  "Asia/Kathmandu",
+  "Asia/Dhaka",
+  "Asia/Bangkok",
+  "Asia/Jakarta",
+  "Asia/Kuala_Lumpur",
+  "Asia/Singapore",
+  "Asia/Hong_Kong",
+  "Asia/Shanghai",
+  "Asia/Taipei",
+  "Asia/Seoul",
+  "Asia/Tokyo",
+  "Australia/Perth",
+  "Australia/Brisbane",
+  "Australia/Sydney",
+  "Australia/Melbourne",
+  "Pacific/Auckland",
+  "Pacific/Guam",
+  "Pacific/Fiji",
+];
+
+const TIMEZONE_OPTIONS = buildTimeZoneOptions();
+
+function buildTimeZoneOptions(): Array<{ value: string; label: string }> {
+  const supportedTimezones = getSupportedTimezones();
+  const combined = Array.from(new Set<string>([...COMMON_TIMEZONES, ...supportedTimezones]));
+
+  return combined.map((timeZone) => ({
+    value: timeZone,
+    label: formatTimeZoneLabel(timeZone),
+  }));
+}
+
+function getSupportedTimezones(): string[] {
+  const intlWithSupport = Intl as typeof Intl & { supportedValuesOf?: (input: string) => string[] };
+  if (typeof intlWithSupport.supportedValuesOf === "function") {
+    return intlWithSupport.supportedValuesOf("timeZone");
+  }
+  return [...COMMON_TIMEZONES];
+}
+
+function formatTimeZoneLabel(timeZone: string): string {
+  const [region, city, ...rest] = timeZone.split("/");
+  const cityParts = [city, ...rest].filter(Boolean).map((part) => part.replace(/_/g, " "));
+  const cityLabel = cityParts.join(" / ");
+  const regionLabel = region?.replace(/_/g, " ");
+
+  if (cityLabel && regionLabel) {
+    return `${cityLabel} (${regionLabel})`;
+  }
+  if (cityLabel) {
+    return cityLabel;
+  }
+  return regionLabel ?? timeZone;
+}
 
 
 const ALLOWED_AVATAR_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;

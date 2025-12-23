@@ -23,7 +23,12 @@ import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { diffBlueprint } from "@/lib/blueprint/diff";
 import { syncAutomationTasks } from "@/lib/blueprint/task-sync";
 import { evaluateBlueprintProgress } from "@/lib/ai/blueprint-progress";
-import { createEmptyCopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
+import {
+  createEmptyCopilotAnalysisState,
+  createEmptyMemory,
+  type CopilotAnalysisState,
+  type CopilotMemory,
+} from "@/lib/blueprint/copilot-analysis";
 import { getCopilotAnalysis, upsertCopilotAnalysis } from "@/lib/services/copilot-analysis";
 
 const DraftRequestSchema = z.object({
@@ -91,10 +96,18 @@ export async function POST(request: Request, { params }: { params: { id: string 
       throw new ApiError(404, "Automation version not found.");
     }
 
+    const existingAnalysis =
+      (await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id })) ??
+      createEmptyCopilotAnalysisState();
+    let analysisState: CopilotAnalysisState = {
+      ...existingAnalysis,
+      memory: existingAnalysis.memory ?? createEmptyMemory(),
+    };
+
     try {
       ensureRateLimit({
         key: buildRateLimitKey("copilot:draft", session.tenantId),
-        limit: Number(process.env.COPILOT_DRAFTS_PER_HOUR ?? 5),
+        limit: Number(process.env.COPILOT_DRAFTS_PER_HOUR ?? 20),
         windowMs: 60 * 60 * 1000,
       });
     } catch {
@@ -176,6 +189,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
           content: message.content,
         })),
         requirementsText: detail.version.requirementsText,
+        memorySummary: analysisState.memory?.summary_compact ?? null,
+        memoryFacts: analysisState.memory?.facts ?? {},
       });
 
       const numberedBlueprint = applyStepNumbers(aiGeneratedBlueprint);
@@ -195,7 +210,24 @@ export async function POST(request: Request, { params }: { params: { id: string 
         })),
       };
       const trimmedFollowUp = followUpQuestion?.trim();
-      responseMessage = trimmedFollowUp ? `${chatResponse} ${trimmedFollowUp}`.trim() : chatResponse;
+      const nextFollowUp = chooseFollowUpQuestion({
+        candidate: trimmedFollowUp,
+        memory: analysisState.memory ?? createEmptyMemory(),
+        blueprint: blueprintWithTasks,
+        userMessage: userMessageContent,
+      });
+
+      analysisState = {
+        ...analysisState,
+        memory: refreshMemoryState({
+          previous: analysisState.memory ?? createEmptyMemory(),
+          blueprint: blueprintWithTasks,
+          lastUserMessage: userMessageContent,
+          appliedFollowUp: nextFollowUp,
+        }),
+      };
+
+      responseMessage = nextFollowUp ? `${chatResponse} ${nextFollowUp}`.trim() : chatResponse;
 
       copilotDebug("draft_blueprint.llm_response", {
         automationVersionId: params.id,
@@ -297,23 +329,26 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     if (progressSnapshot) {
-      try {
-        const existingAnalysis =
-          (await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id })) ??
-          createEmptyCopilotAnalysisState();
-        const nextAnalysis = {
-          ...existingAnalysis,
-          progress: progressSnapshot,
+      analysisState = {
+        ...analysisState,
+        progress: progressSnapshot,
+      };
+    }
+
+    try {
+      await upsertCopilotAnalysis({
+        tenantId: session.tenantId,
+        automationVersionId: params.id,
+        analysis: {
+          ...analysisState,
           lastUpdatedAt: new Date().toISOString(),
-        };
-        await upsertCopilotAnalysis({
-          tenantId: session.tenantId,
-          automationVersionId: params.id,
-          analysis: nextAnalysis,
-        });
-      } catch (analysisError) {
-        copilotDebug("draft_blueprint.progress_persist_failed", analysisError instanceof Error ? analysisError.message : analysisError);
-      }
+        },
+      });
+    } catch (analysisError) {
+      copilotDebug(
+        "draft_blueprint.progress_persist_failed",
+        analysisError instanceof Error ? analysisError.message : analysisError
+      );
     }
 
     return NextResponse.json({
@@ -388,6 +423,221 @@ function buildConversationSummary(messages: CopilotMessage[], intakeNotes?: stri
   }
 
   return summaryParts.join("\n");
+}
+
+type FollowUpChoiceArgs = {
+  candidate?: string | null;
+  memory: CopilotMemory;
+  blueprint: Blueprint;
+  userMessage: string;
+};
+
+function chooseFollowUpQuestion({ candidate, memory, blueprint, userMessage }: FollowUpChoiceArgs): string | null {
+  const trimmed = candidate?.trim();
+  const normalizedCandidate = trimmed ? normalizeQuestionText(trimmed) : null;
+  const reachedCap = memory.question_count >= 10;
+
+  if (reachedCap) {
+    return "This looks complete — want me to finalize or tweak anything?";
+  }
+
+  const mergedFacts = mergeFacts(memory.facts ?? {}, blueprint, userMessage);
+  const stage = computeStage(mergedFacts, memory.question_count);
+
+  if (trimmed && normalizedCandidate && !memory.asked_questions_normalized.includes(normalizedCandidate)) {
+    const assumptionCandidate = pickStageQuestion(stage, mergedFacts);
+    if (assumptionCandidate) {
+      const normalizedAssumption = normalizeQuestionText(assumptionCandidate);
+      if (!memory.asked_questions_normalized.includes(normalizedAssumption)) {
+        return assumptionCandidate;
+      }
+    }
+    return trimmed;
+  }
+
+  const fallback = pickStageQuestion(stage, mergedFacts);
+  if (!fallback) {
+    return null;
+  }
+  const normalizedFallback = normalizeQuestionText(fallback);
+  if (memory.asked_questions_normalized.includes(normalizedFallback)) {
+    return null;
+  }
+  return fallback;
+}
+
+type RefreshMemoryArgs = {
+  previous: CopilotMemory;
+  blueprint: Blueprint;
+  lastUserMessage: string;
+  appliedFollowUp?: string | null;
+};
+
+function refreshMemoryState({ previous, blueprint, lastUserMessage, appliedFollowUp }: RefreshMemoryArgs): CopilotMemory {
+  const mergedFacts = mergeFacts(previous.facts ?? {}, blueprint, lastUserMessage);
+  const normalizedFollowUp = appliedFollowUp ? normalizeQuestionText(appliedFollowUp) : null;
+  const newCount =
+    appliedFollowUp && previous.question_count < 10 ? previous.question_count + 1 : previous.question_count;
+  const nextStage = computeStage(mergedFacts, newCount);
+  const asked = new Set(previous.asked_questions_normalized ?? []);
+  if (normalizedFollowUp) {
+    asked.add(normalizedFollowUp);
+  }
+
+  return {
+    summary_compact: buildMemorySummary(blueprint, mergedFacts, lastUserMessage, previous.summary_compact),
+    facts: mergedFacts,
+    question_count: newCount,
+    asked_questions_normalized: Array.from(asked).slice(-30),
+    stage: nextStage,
+  };
+}
+
+function mergeFacts(
+  existing: CopilotMemory["facts"],
+  blueprint: Blueprint,
+  lastUserMessage: string
+): CopilotMemory["facts"] {
+  const facts: CopilotMemory["facts"] = { ...(existing ?? {}) };
+
+  const lower = lastUserMessage.toLowerCase();
+  if (/daily|every day/.test(lower)) {
+    facts.trigger_cadence = facts.trigger_cadence ?? "daily";
+  }
+  if (/weekly/.test(lower)) {
+    facts.trigger_cadence = facts.trigger_cadence ?? "weekly";
+  }
+  const timeMatch = lastUserMessage.match(/\b(\d{1,2})(:?(\d{2}))?\s?(am|pm)\b/i);
+  if (timeMatch && !facts.trigger_time) {
+    facts.trigger_time = timeMatch[0];
+  }
+
+  blueprint.sections?.forEach((section) => {
+    const content = section.content?.trim();
+    if (!content) return;
+    switch (section.key) {
+      case "business_requirements":
+        facts.primary_outcome = facts.primary_outcome ?? truncateText(content, 160);
+        break;
+      case "business_objectives":
+        facts.primary_outcome = facts.primary_outcome ?? truncateText(content, 160);
+        break;
+      case "success_criteria":
+        facts.success_criteria = facts.success_criteria ?? truncateText(content, 160);
+        break;
+      case "systems":
+        facts.systems = facts.systems ?? content.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 5);
+        break;
+      default:
+        break;
+    }
+  });
+
+  if (!facts.systems && blueprint.steps?.length) {
+    const systems = new Set<string>();
+    blueprint.steps.forEach((step) => {
+      step.systemsInvolved?.forEach((system) => systems.add(system));
+    });
+    if (systems.size > 0) {
+      facts.systems = Array.from(systems).slice(0, 5);
+    }
+  }
+
+  if (!facts.storage_destination && blueprint.summary) {
+    const summaryLower = blueprint.summary.toLowerCase();
+    if (summaryLower.includes("sheet") || summaryLower.includes("excel")) {
+      facts.storage_destination = "Google Sheets";
+    }
+  }
+
+  if (!facts.samples) {
+    const mentionsSamples = /invoice|receipt|ocr|pdf|document|template/i.test(lastUserMessage);
+    facts.samples = mentionsSamples ? "required" : "skip";
+  }
+
+  return facts;
+}
+
+function computeStage(facts: CopilotMemory["facts"], questionCount: number): CopilotMemory["stage"] {
+  if (questionCount >= 10) {
+    return "done";
+  }
+
+  const hasRequirements = Boolean(facts.primary_outcome || facts.trigger_cadence || facts.trigger_time);
+  const hasObjectives = Boolean(facts.primary_outcome);
+  const hasSuccess = Boolean(facts.success_criteria);
+  const hasSystems = Boolean(
+    (facts.systems && facts.systems.length > 0) || facts.exception_policy || facts.human_review || facts.storage_destination
+  );
+
+  if (!hasRequirements) return "requirements";
+  if (!hasObjectives) return "objectives";
+  if (!hasSuccess) return "success";
+  if (!hasSystems) return "systems";
+
+  return facts.samples === "required" ? "samples" : "done";
+}
+
+function pickStageQuestion(stage: CopilotMemory["stage"], facts: CopilotMemory["facts"]): string | null {
+  switch (stage) {
+    case "requirements":
+      return `I'm assuming this runs daily around 8am to ${facts.primary_outcome ?? "deliver the main result"} — okay?`;
+    case "objectives":
+      return `I'm assuming the business goal is ${facts.primary_outcome ?? "saving time"} — right?`;
+    case "success":
+      return "I'll target under 5% errors and finish within 10 minutes — sound right?";
+    case "systems":
+      return `I'll drop results into ${facts.storage_destination ?? "Google Sheets"} and notify ops on retries — good?`;
+    case "samples":
+      return "Do you want to share one sample file to calibrate?";
+    default:
+      return null;
+  }
+}
+
+function buildMemorySummary(
+  blueprint: Blueprint,
+  facts: CopilotMemory["facts"],
+  lastUserMessage: string,
+  previous?: string | null
+): string {
+  const parts: string[] = [];
+  const summary = blueprint.summary?.trim() || previous || "";
+  if (summary) {
+    parts.push(truncateText(summary, 200));
+  }
+  if (facts.primary_outcome) {
+    parts.push(`Outcome: ${truncateText(facts.primary_outcome, 160)}`);
+  }
+  if (facts.success_criteria) {
+    parts.push(`Success: ${truncateText(facts.success_criteria, 160)}`);
+  }
+  if (facts.systems?.length) {
+    parts.push(`Systems: ${facts.systems.slice(0, 5).join(", ")}`);
+  }
+  if (facts.storage_destination) {
+    parts.push(`Destination: ${facts.storage_destination}`);
+  }
+  if (facts.trigger_cadence || facts.trigger_time) {
+    parts.push(`Trigger: ${[facts.trigger_cadence, facts.trigger_time].filter(Boolean).join(" ")}`);
+  }
+  if (parts.length === 0) {
+    parts.push(truncateText(lastUserMessage, 200));
+  }
+  return truncateText(parts.join(" | "), 1200);
+}
+
+function normalizeQuestionText(question: string): string {
+  return question
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncateText(value: string, limit: number): string {
+  if (!value) return "";
+  return value.length > limit ? `${value.slice(0, limit)}…` : value;
 }
 
 

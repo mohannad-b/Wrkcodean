@@ -82,7 +82,7 @@ describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
     vi.clearAllMocks();
     process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
     syncAutomationTasksMock.mockResolvedValue({});
-    requireTenantSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: ["client_admin"] });
+    requireTenantSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: ["editor"] });
     canMock.mockReturnValue(true);
     rateLimitMock.mockReturnValue({ remaining: 4, resetAt: Date.now() + 1000 });
     getDetailMock.mockResolvedValue({

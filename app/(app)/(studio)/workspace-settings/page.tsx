@@ -3,7 +3,7 @@
 import { WorkspaceSettings } from "@/components/settings/WorkspaceSettings";
 import { useSearchParams } from "next/navigation";
 
-type WorkspaceSettingsTab = "profile" | "billing";
+type WorkspaceSettingsTab = "profile" | "billing" | "teams";
 
 export default function WorkspaceSettingsPage() {
   const searchParams = useSearchParams();
