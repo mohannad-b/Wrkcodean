@@ -8,7 +8,7 @@ Centralized EmailService for all outbound email types (transactional/system, not
 - **API surface**: `EmailService.sendTransactional`, `sendNotification`, `sendMarketing`, `enqueueSend`, `renderTemplate`, `validate`.
 - **Pipeline**: validate inputs → persist `EmailMessage` → enqueue → worker dequeues → choose provider (round-robin) → send → `EmailEvent` logging → webhook updates status/suppression.
 - **Queue**: Redis + BullMQ (simplest ops). Backoff retries for transient errors; DLQ via BullMQ failed queue. Can swap via queue adapter later.
-- **Providers**: Postmark (primary) + SES (secondary) behind `EmailProvider` interface. Round-robin per send across configured providers; stop on permanent errors.
+- **Providers**: Postmark (primary) + Amazon SES (secondary) behind `EmailProvider` interface. Round-robin per send across configured providers; stop on permanent errors.
 - **Templates**: Versioned HTML in repo under `lib/email/templates/`; metadata in `registry.ts` (subject, required variables Zod schema, sender, category, sample vars). HTML is canonical; only interpolation + safe link insertion allowed. Plaintext fallback generated.
 - **Preferences**: `EmailPreference` (marketing opt-out, notifications opt-out, optional per-category flags). Transactional bypasses marketing opt-out; global “all email off” policy optional.
 - **Compliance**: List-Unsubscribe for marketing; physical address/footer placeholder; SPF/DKIM/DMARC documented per sender domain; suppression on bounce/complaint.
@@ -20,7 +20,7 @@ Centralized EmailService for all outbound email types (transactional/system, not
 - `lib/email/templates/registry.ts` – registry of templates (templateId → metadata, Zod schema, sample vars, file path).
 - `lib/email/provider/index.ts` – provider interface, round-robin selection, factory from env.
 - `lib/email/provider/postmark.ts` – Postmark implementation (server token, message send).
-- `lib/email/provider/ses.ts` – SES implementation (region/keys).
+- `lib/email/provider/ses.ts` – Amazon SES implementation (region/keys; simple send, no attachments v1).
 - `lib/email/service.ts` – orchestration, preference checks, idempotency hook, enqueue/send helpers.
 - `lib/email/queue/bullmq.ts` – BullMQ queue wiring (Redis URL, backoff, DLQ).
 - `lib/email/preferences.ts` – helpers for opt-out logic per category.
@@ -36,9 +36,12 @@ Centralized EmailService for all outbound email types (transactional/system, not
 - **Indexes**: `EmailMessage(idempotencyKey) unique`; `EmailMessage(category, status)`; `EmailEvent(emailMessageId, type)`; `EmailSuppression(email)`.
 
 ## Config / Env
-- `EMAIL_PROVIDERS=postmark,ses`
+- `EMAIL_PROVIDERS=postmark,ses` (or `ses` only)
 - `POSTMARK_SERVER_TOKEN`
-- `SES_REGION`, `SES_ACCESS_KEY`, `SES_SECRET_KEY`
+- `AWS_SES_REGION`
+- `AWS_SES_ACCESS_KEY_ID`
+- `AWS_SES_SECRET_ACCESS_KEY`
+- `AWS_SES_CONFIGURATION_SET` (optional)
 - `REDIS_URL`, optional `EMAIL_QUEUE_PREFIX`
 - `EMAIL_DEFAULT_FROM`, `EMAIL_SUPPORT_FROM`, `EMAIL_NOTIFICATIONS_FROM`, `EMAIL_NEWS_FROM`
 - `EMAIL_WEBHOOK_SECRET` (HMAC)
@@ -68,7 +71,7 @@ Centralized EmailService for all outbound email types (transactional/system, not
 ## Developer Ergonomics
 - Add template HTML file under `lib/email/templates/<category>/<templateId>.html`.
 - Register in `registry.ts` with subject, required vars (Zod), sender, category, sample vars.
-- Run `npm run email:preview <templateId>` to verify rendering.
+- Run `wnpm run email:preview <templateId>` to verify rendering.
 - Call `EmailService.send*` with typed payload; TypeScript infers variables from registry.
 
 ## Minimal Tests

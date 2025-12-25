@@ -41,7 +41,7 @@ export function ContributorsTab({ onInvite }: ContributorsTabProps = {}) {
     {
       id: "1",
       name: "Mo Barachi",
-      email: "mo@wrk.com",
+      email: "test@example.com",
       role: "Owner",
       status: "Active",
       avatar: "",

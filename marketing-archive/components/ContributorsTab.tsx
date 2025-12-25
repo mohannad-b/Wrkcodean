@@ -38,7 +38,7 @@ export const ContributorsTab: React.FC = () => {
     {
       id: '1',
       name: currentUser.name,
-      email: 'mo@wrk.com',
+      email: 'test@example.com',
       role: 'Owner',
       status: 'Active',
       avatar: currentUser.avatar,

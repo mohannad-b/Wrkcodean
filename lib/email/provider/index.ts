@@ -1,5 +1,6 @@
 import { PostmarkProvider } from "@/lib/email/provider/postmark";
 import { SesProvider } from "@/lib/email/provider/ses";
+import { MailgunProvider } from "@/lib/email/provider/mailgun";
 import type { EmailProvider, ProviderSendRequest, ProviderSendResponse } from "@/lib/email/types";
 
 function buildProviders(): EmailProvider[] {
@@ -12,6 +13,7 @@ function buildProviders(): EmailProvider[] {
   for (const name of configured) {
     if (name === "postmark") providers.push(new PostmarkProvider());
     if (name === "ses") providers.push(new SesProvider());
+    if (name === "mailgun") providers.push(new MailgunProvider());
   }
 
   if (providers.length === 0) {

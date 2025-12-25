@@ -11,6 +11,8 @@ async function loadBull(): Promise<BullModule> {
   return bull;
 }
 
+const QUEUE_NAME = "email-send";
+
 export async function getEmailQueue() {
   const redisUrl = process.env.REDIS_URL;
   if (!redisUrl) {
@@ -18,7 +20,7 @@ export async function getEmailQueue() {
   }
 
   const { Queue } = await loadBull();
-  return new Queue("email:send", {
+  return new Queue(QUEUE_NAME, {
     connection: { url: redisUrl },
     defaultJobOptions: {
       attempts: 4,
@@ -39,7 +41,7 @@ export async function getEmailWorker(
 
   const { Worker } = await loadBull();
   return new Worker(
-    "email:send",
+    QUEUE_NAME,
     async (job) => {
       await handler({ data: job.data, opts: { attemptsMade: job.attemptsMade } });
     },

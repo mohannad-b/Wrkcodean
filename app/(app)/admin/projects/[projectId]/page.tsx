@@ -805,6 +805,83 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
   const [updatingQuote, setUpdatingQuote] = useState<"SENT" | "SIGNED" | null>(null);
   const [markingLive, setMarkingLive] = useState(false);
   const [savingQuote, setSavingQuote] = useState(false);
+  const [recipientName, setRecipientName] = useState("Sarah Chen");
+  const [recipientEmail, setRecipientEmail] = useState("test@example.com");
+  const emailTypes = useMemo(
+    () => [
+      {
+        id: "marketing.welcome",
+        label: "Marketing • Welcome",
+        defaults: (user: { name: string; email: string }) => ({
+          firstName: user.name.split(" ")[0] ?? "there",
+          logoUrl: "https://framerusercontent.com/images/6JnCZVCcfPnCQ8H5xwNdICaCSI.png",
+          ctaLink: "https://app.wrkcopilot.com",
+          documentationLink: "https://wrkcopilot.com/docs",
+          unsubscribeLink: "https://wrkcopilot.com/unsubscribe",
+          privacyLink: "https://wrkcopilot.com/privacy",
+          helpLink: "https://wrkcopilot.com/help",
+          physicalAddress: "1250 Rene-Levesque West, Montreal, Quebec, Canada",
+          year: "2026",
+        }),
+      },
+      {
+        id: "transactional.user-invite",
+        label: "Transactional • User Invite",
+        defaults: (user: { name: string; email: string }) => ({
+          inviterName: "Michael Scott",
+          workspaceName: project?.name ?? "Workspace",
+          inviteeEmail: user.email,
+          inviteLink: "https://app.wrkcopilot.com/invite/accept",
+          unsubscribeLink: "https://wrkcopilot.com/unsubscribe",
+          privacyLink: "https://wrkcopilot.com/privacy",
+          helpLink: "https://wrkcopilot.com/help",
+          physicalAddress: "1250 Rene-Levesque West, Montreal, Quebec, Canada",
+          year: "2026",
+        }),
+      },
+      {
+        id: "notification.automation-deployed",
+        label: "Notification • Automation Deployed",
+        defaults: (_user: { name: string; email: string }) => ({
+          automationName: project?.name ?? "Automation",
+          environment: "Production",
+          deployedBy: project?.owner?.name ?? "Ops Team",
+          deployedTime: "Oct 24, 2:30 PM EST",
+          ctaLink: "https://app.wrkcopilot.com/automations/123",
+          unsubscribeLink: "https://wrkcopilot.com/unsubscribe",
+          privacyLink: "https://wrkcopilot.com/privacy",
+          helpLink: "https://wrkcopilot.com/help",
+          physicalAddress: "1250 Rene-Levesque West, Montreal, Quebec, Canada",
+          year: "2026",
+        }),
+      },
+      {
+        id: "transactional.invoice-receipt",
+        label: "Transactional • Invoice Receipt",
+        defaults: (_user: { name: string; email: string }) => ({
+          planName: "Pro Plan",
+          invoiceNumber: "INV-2024-001",
+          invoiceDate: "Oct 24, 2024",
+          invoiceItem: "Pro Plan (Monthly)",
+          invoiceAmount: "$49.00",
+          invoiceTotal: "$49.00",
+          downloadLink: "https://app.wrkcopilot.com/invoices/123.pdf",
+          billingSupportLink: "https://wrkcopilot.com/billing-support",
+          unsubscribeLink: "https://wrkcopilot.com/unsubscribe",
+          privacyLink: "https://wrkcopilot.com/privacy",
+          helpLink: "https://wrkcopilot.com/help",
+          physicalAddress: "1250 Rene-Levesque West, Montreal, Quebec, Canada",
+          year: "2026",
+        }),
+      },
+    ],
+    [project?.name, project?.owner?.name]
+  );
+  const [selectedEmailType, setSelectedEmailType] = useState(emailTypes[0].id);
+  const [emailVariablesText, setEmailVariablesText] = useState(
+    JSON.stringify(emailTypes[0].defaults({ name: recipientName, email: recipientEmail }), null, 2)
+  );
+  const [emailSendStatus, setEmailSendStatus] = useState<string | null>(null);
 
   const fetchProject = useCallback(async () => {
     setLoading(true);
@@ -828,6 +905,11 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
   useEffect(() => {
     fetchProject();
   }, [fetchProject]);
+
+  useEffect(() => {
+    const type = emailTypes.find((t) => t.id === selectedEmailType) ?? emailTypes[0];
+    setEmailVariablesText(JSON.stringify(type.defaults({ name: recipientName, email: recipientEmail }), null, 2));
+  }, [selectedEmailType, recipientName, recipientEmail, emailTypes]);
 
   const latestQuote = useMemo(() => project?.quotes[0] ?? null, [project]);
   const blueprint = useMemo(() => project?.version?.workflow ?? null, [project]);
@@ -996,6 +1078,29 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
     }
   };
 
+  const handleSendEmail = async () => {
+    try {
+      const parsed = JSON.parse(emailVariablesText);
+      setEmailSendStatus("Sending...");
+      const res = await fetch("/api/admin/email/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: recipientEmail,
+          templateId: selectedEmailType,
+          variables: parsed,
+        }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Failed to send email");
+      }
+      setEmailSendStatus(`Sent ${selectedEmailType} to ${recipientEmail}`);
+    } catch (err) {
+      setEmailSendStatus(err instanceof Error ? err.message : "Invalid variables JSON");
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-gray-50 text-[#1A1A1A] font-sans">
       <ProjectHeader
@@ -1021,7 +1126,7 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
             <div className="px-6 border-b border-gray-200 bg-white shrink-0">
               <TabsList className="h-12 bg-transparent p-0 gap-8">
-                {["Overview", "Requirements & Blueprint", "Pricing & Quote", "Build Tasks", "Activity", "Chat"].map((tab) => {
+                {["Overview", "Requirements & Blueprint", "Pricing & Quote", "Build Tasks", "Activity", "Emails", "Chat"].map((tab) => {
                   const value = tab.toLowerCase().replace(/ & /g, "-").replace(/ /g, "-");
                   return (
                     <TabsTrigger
@@ -1060,6 +1165,67 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
               </TabsContent>
               <TabsContent value="activity" className="h-full m-0 data-[state=inactive]:hidden">
                 <ActivityTab automationVersionId={project.version?.id ?? ""} />
+              </TabsContent>
+              <TabsContent value="emails" className="h-full m-0 data-[state=inactive]:hidden">
+                <div className="p-6 space-y-4 overflow-auto h-full">
+                  <h3 className="text-lg font-bold text-[#0A0A0A]">Send Email</h3>
+                  <Card className="p-4 space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold text-gray-600">Recipient email</label>
+                        <input
+                          className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm"
+                          value={recipientEmail}
+                          onChange={(e) => setRecipientEmail(e.target.value)}
+                          placeholder="user@example.com"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold text-gray-600">Recipient name</label>
+                        <input
+                          className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm"
+                          value={recipientName}
+                          onChange={(e) => setRecipientName(e.target.value)}
+                          placeholder="First Last"
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-1">
+                        <label className="text-xs font-semibold text-gray-600">Template</label>
+                        <select
+                          className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm"
+                          value={selectedEmailType}
+                          onChange={(e) => setSelectedEmailType(e.target.value)}
+                        >
+                          {emailTypes.map((type) => (
+                            <option key={type.id} value={type.id}>
+                              {type.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-gray-600 flex items-center justify-between">
+                        Variables (JSON)
+                        <span className="text-[10px] text-gray-400">Edit as needed before sending</span>
+                      </label>
+                      <textarea
+                        className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-mono"
+                        rows={12}
+                        value={emailVariablesText}
+                        onChange={(e) => setEmailVariablesText(e.target.value)}
+                      />
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Button onClick={handleSendEmail}>
+                        <Send className="mr-2 h-4 w-4" />
+                        Send Email
+                      </Button>
+                      {emailSendStatus ? <span className="text-sm text-gray-600">{emailSendStatus}</span> : null}
+                      <span className="text-xs text-gray-400">(stub only; wire to backend send endpoint)</span>
+                    </div>
+                  </Card>
+                </div>
               </TabsContent>
               <TabsContent value="chat" className="h-full m-0 data-[state=inactive]:hidden">
                 <ConversationThread messages={messages} />
