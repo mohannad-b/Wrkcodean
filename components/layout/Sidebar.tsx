@@ -35,7 +35,6 @@ import {
 const navItems = [
   { id: "dashboard", icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
   { id: "automations", icon: Workflow, label: "Automations", href: "/automations" },
-  { id: "messages", icon: MessageSquare, label: "Messages", href: "/messages" },
   {
     id: "workspace-settings",
     icon: Building2,

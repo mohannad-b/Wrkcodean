@@ -421,20 +421,24 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
               const isSystem = message.senderType === "system";
               const isOwn = message.senderUserId === profile?.id;
               const isWrk = message.senderType === "wrk";
+              // Wrk team messages always appear on the left, client messages on right if from me
+              const isRightAligned = !isWrk && isOwn;
 
               return (
                 <div
                   key={message.id}
                   className={cn(
                     "flex gap-3",
-                    isOwn && "flex-row-reverse",
+                    isRightAligned && "flex-row-reverse",
                     isSystem && "justify-center"
                   )}
                 >
                   {!isSystem && (
                     <Avatar className="w-8 h-8 shrink-0">
                       <AvatarImage src={message.sender?.avatarUrl || undefined} />
-                      <AvatarFallback className={cn(isWrk && "bg-[#E43632] text-white")}>
+                      <AvatarFallback className={cn(
+                        isWrk ? "bg-[#E43632] text-white" : "bg-gray-100 text-gray-600"
+                      )}>
                         {message.sender?.name
                           ? message.sender.name
                               .split(" ")
@@ -451,7 +455,8 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
                   <div
                     className={cn(
                       "flex flex-col gap-1 max-w-[70%]",
-                      isSystem && "items-center max-w-full"
+                      isSystem && "items-center max-w-full",
+                      !isSystem && (isRightAligned ? "items-end" : "items-start")
                     )}
                   >
                     {!isSystem && (
@@ -472,7 +477,7 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
                         "rounded-2xl px-4 py-2 text-sm",
                         isSystem
                           ? "bg-gray-100 text-gray-600 text-center"
-                          : isOwn
+                          : isRightAligned
                           ? "bg-[#0A0A0A] text-white rounded-tr-none"
                           : "bg-gray-50 text-gray-800 rounded-tl-none border border-gray-100"
                       )}

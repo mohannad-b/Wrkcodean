@@ -388,21 +388,23 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
 
                   const isMe = msg.senderUserId === profile?.id;
                   const isWrk = msg.senderType === "wrk";
+                  // Wrk team messages always appear on the left, client messages on right if from me
+                  const isRightAligned = !isWrk && isMe;
 
                   return (
                     <div
                       key={msg.id}
-                      className={cn("flex gap-3", isMe ? "flex-row-reverse" : "flex-row")}
+                      className={cn("flex gap-3", isRightAligned ? "flex-row-reverse" : "flex-row")}
                     >
                       <Avatar className="w-8 h-8 border border-gray-100 shrink-0 mt-1">
                         <AvatarImage src={msg.sender?.avatarUrl || undefined} />
                         <AvatarFallback
                           className={cn(
                             "text-[10px] font-bold",
-                            isMe
-                              ? "bg-gray-100 text-gray-600"
-                              : isWrk
+                            isWrk
                               ? "bg-[#E43632] text-white"
+                              : isMe
+                              ? "bg-gray-100 text-gray-600"
                               : "bg-gray-100 text-gray-600"
                           )}
                         >
@@ -422,7 +424,7 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
                       <div
                         className={cn(
                           "flex flex-col max-w-[80%]",
-                          isMe ? "items-end" : "items-start"
+                          isRightAligned ? "items-end" : "items-start"
                         )}
                       >
                         <div className="flex items-center gap-2 mb-1 px-1">
@@ -444,7 +446,7 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
                         <div
                           className={cn(
                             "p-3 text-sm shadow-sm leading-relaxed",
-                            isMe
+                            isRightAligned
                               ? "bg-gray-100 text-gray-800 rounded-2xl rounded-tr-none"
                               : "bg-white border border-gray-200 text-gray-800 rounded-2xl rounded-tl-none"
                           )}
