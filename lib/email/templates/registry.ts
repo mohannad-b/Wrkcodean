@@ -152,6 +152,38 @@ export const templateRegistry: Record<string, TemplateMetadata<z.ZodTypeAny>> = 
     description: "Payment receipt/invoice email.",
     filePath: `${process.cwd()}/lib/email/templates/transactional/invoice-receipt.html`,
   },
+  "notification.workflow-chat-message": {
+    templateId: "notification.workflow-chat-message",
+    category: "notification",
+    subject: "New message in {{workflowName}}",
+    sender: "notifications",
+    requiredVariables: z.object({
+      recipientName: z.string(),
+      workflowName: z.string(),
+      messagePreview: z.string(),
+      workflowUrl: z.string().url(),
+      senderName: z.string(),
+      unsubscribeLink: z.string().url(),
+      privacyLink: z.string().url(),
+      helpLink: z.string().url(),
+      physicalAddress: z.string(),
+      year: z.string(),
+    }),
+    sampleVariables: {
+      recipientName: "Alex",
+      workflowName: "Invoice Processing",
+      messagePreview: "Hi, I have a question about the invoice processing workflow. Can we discuss the approval step?",
+      workflowUrl: "https://app.wrkcopilot.com/automations/123",
+      senderName: "Wrk Team",
+      unsubscribeLink: "https://wrkcopilot.com/unsubscribe",
+      privacyLink: "https://wrkcopilot.com/privacy",
+      helpLink: "https://wrkcopilot.com/help",
+      physicalAddress: "1250 Rene-Levesque West, Montreal, Quebec, Canada",
+      year: "2026",
+    },
+    description: "Notification email for new workflow chat messages.",
+    filePath: `${process.cwd()}/lib/email/templates/notification/workflow-chat-message.html`,
+  },
 };
 
 export function getTemplate(templateId: string) {

@@ -43,6 +43,7 @@ import { StudioInspector } from "@/components/automations/StudioInspector";
 import { ActivityTab } from "@/components/automations/ActivityTab";
 import { BuildStatusTab } from "@/components/automations/BuildStatusTab";
 import { SettingsTab } from "@/components/automations/SettingsTab";
+import { ChatTab } from "@/components/automations/ChatTab";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import type { Blueprint, BlueprintSectionKey, BlueprintStep } from "@/lib/blueprint/types";
 import { BLUEPRINT_SECTION_TITLES } from "@/lib/blueprint/types";
@@ -1842,7 +1843,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       <div
         className={cn(
           "flex-1",
-          activeTab === "Workflow" ? "flex flex-col overflow-hidden" : "overflow-y-auto"
+          activeTab === "Workflow" || activeTab === "Chat" ? "flex flex-col overflow-hidden" : "overflow-y-auto"
         )}
       >
         {activeTab === "Workflow" ? (
@@ -1850,6 +1851,13 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             {errorBanner ? <div className="px-6 pt-6">{errorBanner}</div> : null}
             <div className="flex-1 min-h-0">{blueprintContent}</div>
           </>
+        ) : activeTab === "Chat" ? (
+          <div className="flex-1 min-h-0">
+            <ChatTab
+              automationVersionId={selectedVersion?.id ?? ""}
+              automationName={automation.name}
+            />
+          </div>
         ) : (
           <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
             {errorBanner}

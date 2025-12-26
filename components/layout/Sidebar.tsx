@@ -48,6 +48,7 @@ const navItems = [
 const adminNavItems = [
   { id: "admin-clients", icon: Users, label: "Clients", href: "/admin/clients" },
   { id: "admin-projects", icon: Building2, label: "Projects", href: "/admin/projects" },
+  { id: "admin-inbox", icon: MessageSquare, label: "Inbox", href: "/admin/inbox" },
 ];
 
 // Check if we're on an admin route

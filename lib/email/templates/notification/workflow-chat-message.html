@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>New message in {{workflowName}}</title>
+    <!--[if mso]>
+      <noscript>
+        <xml>
+          <o:OfficeDocumentSettings>
+            <o:PixelsPerInch>96</o:PixelsPerInch>
+          </o:OfficeDocumentSettings>
+        </xml>
+      </noscript>
+    <![endif]-->
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        min-width: 100%;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background-color: #f9fafb;
+      }
+      .wrapper {
+        width: 100%;
+        table-layout: fixed;
+        background-color: #f9fafb;
+        padding-bottom: 40px;
+      }
+      .main {
+        margin: 0 auto;
+        width: 100%;
+        max-width: 600px;
+        background-color: #ffffff;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        overflow: hidden;
+      }
+      .btn {
+        display: inline-block;
+        padding: 14px 32px;
+        background-color: #e43632;
+        color: #ffffff;
+        text-decoration: none;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 16px;
+        mso-padding-alt: 0;
+      }
+      .message-preview {
+        background-color: #f9fafb;
+        border-left: 3px solid #e43632;
+        padding: 16px;
+        margin: 16px 0;
+        border-radius: 8px;
+        font-size: 15px;
+        line-height: 22px;
+        color: #374151;
+      }
+      .footer-link {
+        color: #9ca3af;
+        text-decoration: none;
+        margin: 0 10px;
+      }
+      @media screen and (max-width: 600px) {
+        .main {
+          width: 100% !important;
+          border-radius: 0 !important;
+        }
+        .content {
+          padding: 24px !important;
+        }
+      }
+    </style>
+  </head>
+  <body style="margin: 0; padding: 0; background-color: #f9fafb">
+    <div class="wrapper">
+      <div style="display: none; max-height: 0px; overflow: hidden">
+        You have a new message in {{workflowName}}.
+        &nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
+      </div>
+
+      <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+          <td align="center" style="padding: 32px 0">
+            <a href="https://wrkcopilot.com" target="_blank">
+              <img src="https://framerusercontent.com/images/6JnCZVCcfPnCQ8H5xwNdICaCSI.png" alt="Wrk Copilot" width="120" style="display: block; border: 0" />
+            </a>
+          </td>
+        </tr>
+
+        <tr>
+          <td align="center">
+            <table
+              class="main"
+              border="0"
+              cellpadding="0"
+              cellspacing="0"
+              width="600"
+              style="
+                background-color: #ffffff;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+                border: 1px solid #e5e7eb;
+              "
+            >
+              <tr>
+                <td class="content" style="padding: 48px">
+                  <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                    <tr>
+                      <td align="left" style="padding-bottom: 24px">
+                        <h1 style="margin: 0; font-size: 24px; font-weight: 700; color: #111827; letter-spacing: -0.5px">
+                          New message in {{workflowName}}
+                        </h1>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td align="left" style="font-size: 16px; line-height: 24px; color: #4b5563">
+                        <p style="margin: 0 0 16px 0; font-size: 16px; line-height: 24px; color: #4b5563">
+                          Hi {{recipientName}},
+                        </p>
+                        <p style="margin: 0 0 16px 0; font-size: 16px; line-height: 24px; color: #4b5563">
+                          <strong>{{senderName}}</strong> sent a new message in the <strong>{{workflowName}}</strong> workflow chat.
+                        </p>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <div class="message-preview" style="background-color: #f9fafb; border-left: 3px solid #e43632; padding: 16px; margin: 16px 0; border-radius: 8px; font-size: 15px; line-height: 22px; color: #374151">
+                          {{messagePreview}}
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td align="center" style="padding-top: 32px; padding-bottom: 32px">
+                        <a
+                          href="{{workflowUrl}}"
+                          class="btn"
+                          style="
+                            background-color: #e43632;
+                            color: #ffffff;
+                            padding: 14px 32px;
+                            border-radius: 8px;
+                            text-decoration: none;
+                            font-weight: 600;
+                            display: inline-block;
+                            box-shadow: 0 4px 6px rgba(228, 54, 50, 0.2);
+                          "
+                        >
+                          <!--[if mso]><i style="letter-spacing: 32px; mso-font-width: -100%; mso-text-raise: 30pt">&nbsp;</i><![endif]-->
+                          <span style="mso-text-raise: 15pt">View Chat</span>
+                          <!--[if mso]><i style="letter-spacing: 32px; mso-font-width: -100%">&nbsp;</i><![endif]-->
+                        </a>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <tr>
+          <td align="center" style="padding: 32px 0">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+              <tr>
+                <td align="center" style="padding-bottom: 16px">
+                  <a href="{{unsubscribeLink}}" class="footer-link" style="font-size: 12px; color: #9ca3af; text-decoration: none; margin: 0 8px">Unsubscribe</a>
+                  <span style="color: #e5e7eb">|</span>
+                  <a href="{{privacyLink}}" class="footer-link" style="font-size: 12px; color: #9ca3af; text-decoration: none; margin: 0 8px">Privacy Policy</a>
+                  <span style="color: #e5e7eb">|</span>
+                  <a href="{{helpLink}}" class="footer-link" style="font-size: 12px; color: #9ca3af; text-decoration: none; margin: 0 8px">Help Center</a>
+                </td>
+              </tr>
+              <tr>
+                <td align="center" style="font-size: 12px; line-height: 18px; color: #9ca3af">
+                  &copy; {{year}} Wrk Copilot Inc. <br />
+                  {{physicalAddress}}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </div>
+  </body>
+</html>
+

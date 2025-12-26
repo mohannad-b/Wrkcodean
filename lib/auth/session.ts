@@ -1,7 +1,7 @@
 import { and, eq, gt, isNull, or } from "drizzle-orm";
 import auth0 from "@/lib/auth/auth0";
 import { db } from "@/db";
-import { memberships, users, workspaceInvites, type MembershipRole } from "@/db/schema";
+import { memberships, users, workspaceInvites, wrkStaffMemberships, type MembershipRole } from "@/db/schema";
 import { acceptWorkspaceInvite } from "@/lib/services/workspace-members";
 
 const ALLOWED_DEFAULT_ROLES: readonly MembershipRole[] = ["viewer", "editor", "admin", "owner", "billing"] as const;
@@ -38,6 +38,7 @@ export type AppSession = {
   userId: string;
   tenantId: string;
   roles: string[];
+  wrkStaffRole?: string | null;
 };
 
 export type UserSession = {
@@ -224,10 +225,17 @@ async function getMockSession(): Promise<AppSession> {
     throw new Error("Mock membership not found. Seed the database with the mock user before continuing.");
   }
 
+  const wrkStaff = await db
+    .select({ role: wrkStaffMemberships.role })
+    .from(wrkStaffMemberships)
+    .where(eq(wrkStaffMemberships.userId, userId))
+    .limit(1);
+
   return {
     tenantId,
     userId,
     roles: membershipRows.map((row) => row.role),
+    wrkStaffRole: wrkStaff[0]?.role ?? null,
   };
 }
 
@@ -312,10 +320,18 @@ async function getAuth0BackedSession(): Promise<AppSession> {
     .filter((row) => row.tenantId === primaryTenantId)
     .map((row) => row.role);
 
+  // Check for Wrk staff membership
+  const wrkStaff = await db
+    .select({ role: wrkStaffMemberships.role })
+    .from(wrkStaffMemberships)
+    .where(eq(wrkStaffMemberships.userId, userRecord.id))
+    .limit(1);
+
   return {
     tenantId: primaryTenantId,
     userId: userRecord.id,
     roles,
+    wrkStaffRole: wrkStaff[0]?.role ?? null,
   };
 }
 

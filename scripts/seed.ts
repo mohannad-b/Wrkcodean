@@ -2,7 +2,7 @@
 import * as dotenv from "dotenv";
 import { and, eq } from "drizzle-orm";
 import { pool, db } from "../db";
-import { memberships, tenants, users } from "../db/schema";
+import { memberships, tenants, users, wrkStaffMemberships } from "../db/schema";
 
 dotenv.config({ path: ".env.local" });
 
@@ -116,6 +116,19 @@ async function seed(): Promise<SeedResult> {
     userId: opsAdmin.id,
     role: "admin",
   });
+
+  // Optionally add Wrk staff membership for ops admin
+  const existingWrkStaff = await db.query.wrkStaffMemberships.findFirst({
+    where: eq(wrkStaffMemberships.userId, opsAdmin.id),
+  });
+
+  if (!existingWrkStaff) {
+    await db.insert(wrkStaffMemberships).values({
+      userId: opsAdmin.id,
+      role: "wrk_admin",
+    });
+    console.log("✓ Added Wrk staff membership for ops-admin@wrk.internal");
+  }
 
   return {
     tenantId: tenant.id,

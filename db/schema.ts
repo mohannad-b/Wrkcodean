@@ -34,6 +34,8 @@ const copilotMessageRoleEnum = pgEnum("copilot_message_role", ["user", "assistan
 const taskStatusEnum = pgEnum("task_status", ["pending", "in_progress", "complete"]);
 const taskPriorityEnum = pgEnum("task_priority", ["blocker", "important", "optional"]);
 const notificationPreferenceEnum = pgEnum("notification_preference", ["all", "mentions", "none"]);
+const workflowMessageSenderTypeEnum = pgEnum("workflow_message_sender_type", ["client", "wrk", "system"]);
+const wrkStaffRoleEnum = pgEnum("wrk_staff_role", ["wrk_admin", "wrk_operator", "wrk_viewer"]);
 
 export const tenants = pgTable(
   "tenants",
@@ -566,6 +568,105 @@ export const auditLogs = pgTable(
   })
 );
 
+// Workflow Chat Tables
+export const workflowConversations = pgTable(
+  "workflow_conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    automationVersionId: uuid("automation_version_id")
+      .notNull()
+      .references(() => automationVersions.id, { onDelete: "cascade" }),
+    assignedToUserId: uuid("assigned_to_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantWorkflowUnique: uniqueIndex("workflow_conversations_tenant_workflow_unique").on(
+      table.tenantId,
+      table.automationVersionId
+    ),
+    tenantIdx: index("workflow_conversations_tenant_idx").on(table.tenantId),
+    workflowIdx: index("workflow_conversations_workflow_idx").on(table.automationVersionId),
+    createdAtIdx: index("workflow_conversations_created_at_idx").on(table.createdAt),
+  })
+);
+
+export const workflowMessages = pgTable(
+  "workflow_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => workflowConversations.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    automationVersionId: uuid("automation_version_id")
+      .notNull()
+      .references(() => automationVersions.id, { onDelete: "cascade" }),
+    senderType: workflowMessageSenderTypeEnum("sender_type").notNull(),
+    senderUserId: uuid("sender_user_id").references(() => users.id, { onDelete: "set null" }),
+    body: text("body").notNull(),
+    attachments: jsonb("attachments")
+      .$type<Array<{ fileId: string; filename: string; mimeType: string; sizeBytes: number; url?: string }>>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    clientGeneratedId: text("client_generated_id"), // For optimistic UI deduplication
+    editedAt: timestamp("edited_at", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    conversationIdx: index("workflow_messages_conversation_idx").on(table.conversationId),
+    tenantWorkflowIdx: index("workflow_messages_tenant_workflow_idx").on(table.tenantId, table.automationVersionId),
+    createdAtIdx: index("workflow_messages_created_at_idx").on(table.createdAt),
+    clientGeneratedIdIdx: index("workflow_messages_client_generated_id_idx").on(table.clientGeneratedId),
+  })
+);
+
+export const workflowReadReceipts = pgTable(
+  "workflow_read_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => workflowConversations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    lastReadMessageId: uuid("last_read_message_id").references(() => workflowMessages.id, { onDelete: "set null" }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    conversationUserUnique: uniqueIndex("workflow_read_receipts_conversation_user_unique").on(
+      table.conversationId,
+      table.userId
+    ),
+    conversationIdx: index("workflow_read_receipts_conversation_idx").on(table.conversationId),
+    userIdx: index("workflow_read_receipts_user_idx").on(table.userId),
+  })
+);
+
+export const wrkStaffMemberships = pgTable(
+  "wrk_staff_memberships",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: wrkStaffRoleEnum("role").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userUnique: uniqueIndex("wrk_staff_memberships_user_unique").on(table.userId),
+    userIdx: index("wrk_staff_memberships_user_idx").on(table.userId),
+  })
+);
+
 export type Tenant = typeof tenants.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type Membership = typeof memberships.$inferSelect;
@@ -587,4 +688,10 @@ export type WorkspaceInvite = typeof workspaceInvites.$inferSelect;
 export type MembershipRole = typeof membershipRoleEnum.enumValues[number];
 export type NotificationPreference = typeof notificationPreferenceEnum.enumValues[number];
 export type CopilotMessageRole = typeof copilotMessageRoleEnum.enumValues[number];
+export type WorkflowMessageSenderType = typeof workflowMessageSenderTypeEnum.enumValues[number];
+export type WrkStaffRole = typeof wrkStaffRoleEnum.enumValues[number];
+export type WorkflowConversation = typeof workflowConversations.$inferSelect;
+export type WorkflowMessage = typeof workflowMessages.$inferSelect;
+export type WorkflowReadReceipt = typeof workflowReadReceipts.$inferSelect;
+export type WrkStaffMembership = typeof wrkStaffMemberships.$inferSelect;
 

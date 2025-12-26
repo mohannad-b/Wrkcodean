@@ -23,6 +23,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { PricingOverridePanel } from "@/components/admin/PricingOverridePanel";
 import { ConversationThread } from "@/components/admin/ConversationThread";
+import { WorkflowChatView } from "@/components/workflow-chat/WorkflowChatView";
 import dynamic from "next/dynamic";
 import { blueprintToEdges, blueprintToNodes } from "@/lib/blueprint/canvas-utils";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
@@ -1228,7 +1229,19 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
                 </div>
               </TabsContent>
               <TabsContent value="chat" className="h-full m-0 data-[state=inactive]:hidden">
-                <ConversationThread messages={messages} />
+                {project.version?.id ? (
+                  <WorkflowChatView 
+                    workflowId={project.version.id} 
+                    workflowName={project.name || project.automation?.name}
+                  />
+                ) : (
+                  <div className="h-full flex items-center justify-center text-gray-500">
+                    <div className="text-center">
+                      <p className="text-sm">No automation version found for this project.</p>
+                      <p className="text-xs text-gray-400 mt-2">Chat is only available for projects with an automation version.</p>
+                    </div>
+                  </div>
+                )}
               </TabsContent>
             </div>
           </Tabs>
