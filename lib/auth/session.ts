@@ -1,4 +1,5 @@
 import { and, eq, gt, isNull, or } from "drizzle-orm";
+import { cookies, headers } from "next/headers";
 import auth0 from "@/lib/auth/auth0";
 import { db } from "@/db";
 import {
@@ -38,6 +39,14 @@ export class NoTenantMembershipError extends Error {
   constructor(message = "No tenant membership found for current user.") {
     super(message);
     this.name = "NoTenantMembershipError";
+  }
+}
+
+export class NoActiveWorkspaceError extends Error {
+  code = "NO_ACTIVE_WORKSPACE";
+  constructor(message = "No active workspace selected.") {
+    super(message);
+    this.name = "NoActiveWorkspaceError";
   }
 }
 
@@ -282,6 +291,33 @@ async function getWrkStaffRoleForUser(userId: string): Promise<WrkStaffRole | nu
   return wrkStaff[0]?.role ?? null;
 }
 
+function getActiveWorkspaceId(): string | null {
+  const headerWorkspace = headers().get("x-workspace-id");
+  if (headerWorkspace) return headerWorkspace;
+  const cookieStore = cookies();
+  const cookieWorkspace = cookieStore.get("activeWorkspaceId")?.value;
+  return cookieWorkspace ?? null;
+}
+
+export function resolveActiveTenantId(
+  membershipRows: Array<{ tenantId: string }>,
+  preferredTenantId: string | null
+): string {
+  if (membershipRows.length === 0) {
+    throw new NoTenantMembershipError();
+  }
+
+  if (preferredTenantId && membershipRows.some((row) => row.tenantId === preferredTenantId)) {
+    return preferredTenantId;
+  }
+
+  if (membershipRows.length === 1) {
+    return membershipRows[0].tenantId;
+  }
+
+  throw new NoActiveWorkspaceError();
+}
+
 async function getAuth0BackedTenantSession(): Promise<TenantSession> {
   const { userRecord } = await getOrCreateUserFromAuth0Session();
 
@@ -351,16 +387,11 @@ async function getAuth0BackedTenantSession(): Promise<TenantSession> {
     throw new NoTenantMembershipError();
   }
 
-  const distinctTenants = new Set(membershipRows.map((row) => row.tenantId));
-  if (distinctTenants.size > 1) {
-    throw new Error(
-      "Multiple tenant memberships detected for this user. Multi-tenant selection is not supported in v1."
-    );
-  }
+  const activeTenantId = getActiveWorkspaceId();
+  const candidateTenantId = resolveActiveTenantId(membershipRows, activeTenantId);
 
-  const primaryTenantId = membershipRows[0].tenantId;
   const roles = membershipRows
-    .filter((row) => row.tenantId === primaryTenantId)
+    .filter((row) => row.tenantId === candidateTenantId)
     .map((row) => row.role);
 
   // Check for Wrk staff membership
@@ -368,7 +399,7 @@ async function getAuth0BackedTenantSession(): Promise<TenantSession> {
 
   return {
     kind: "tenant",
-    tenantId: primaryTenantId,
+    tenantId: candidateTenantId,
     userId: userRecord.id,
     roles,
     wrkStaffRole,

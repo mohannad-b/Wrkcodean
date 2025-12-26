@@ -25,7 +25,7 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
   try {
     const session = await requireTenantSession();
 
-    if (!can(session, "admin:project:write")) {
+    if (!can(session, "admin:project:write", { type: "automation_version", tenantId: session.tenantId })) {
       throw new ApiError(403, "Forbidden");
     }
 

@@ -16,7 +16,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
   try {
     const session = await requireTenantSession();
 
-    const isAdmin = can(session, "admin:project:read");
+    const isAdmin = can(session, "admin:project:read", { type: "project", tenantId: session.tenantId });
     const canViewTenant = can(session, "automation:read", { type: "automation", tenantId: session.tenantId });
     if (!isAdmin && !canViewTenant) {
       throw new ApiError(403, "Forbidden");

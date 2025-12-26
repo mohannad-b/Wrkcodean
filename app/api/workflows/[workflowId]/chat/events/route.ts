@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireEitherTenantOrStaffSession } from "@/lib/api/context";
-import { can } from "@/lib/auth/rbac";
-import { isWrkStaff } from "@/lib/auth/rbac";
+import { authorize } from "@/lib/auth/rbac";
 import { getOrCreateConversation } from "@/lib/services/workflow-chat";
 import { chatEventEmitter, type ChatEvent } from "@/lib/realtime/events";
 import { db } from "@/db";
@@ -21,7 +20,7 @@ export async function GET(
     // Verify workflow exists - for Wrk staff, don't filter by tenantId
     let workflow = await db.query.automationVersions.findFirst({
       where:
-        session.kind === "staff" && isWrkStaff(session)
+        session.kind === "staff"
           ? eq(automationVersions.id, params.workflowId)
           : and(
               eq(automationVersions.id, params.workflowId),
@@ -34,15 +33,8 @@ export async function GET(
     }
 
     // Check permissions
-    const canRead =
-      can(session, "workflow:chat:read", {
-        type: "automation_version",
-        tenantId: workflow.tenantId,
-      }) || can(session, "wrk:chat:read", undefined);
-
-    if (!canRead) {
-      return new NextResponse("Forbidden", { status: 403 });
-    }
+    const authContext = { type: "workflow" as const, tenantId: workflow.tenantId, workflowId: workflow.id };
+    authorize("workflow:chat:read", authContext, session);
 
     // Get or create conversation - always use workflow's tenantId
     const conversation = await getOrCreateConversation({

@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
       target: [memberships.tenantId, memberships.userId],
     });
 
-  return NextResponse.json({
+  const response = NextResponse.json({
     tenant,
     membership: {
       tenantId: tenant.id,
@@ -92,6 +92,8 @@ export async function POST(request: NextRequest) {
       role: "owner",
     },
   });
+  response.cookies.set("activeWorkspaceId", tenant.id, { path: "/", httpOnly: false, sameSite: "lax" });
+  return response;
 }
 
 export async function PATCH(request: NextRequest) {

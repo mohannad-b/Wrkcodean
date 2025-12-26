@@ -26,7 +26,7 @@ export async function GET() {
   try {
     const session = await requireTenantSession();
 
-    const isAdmin = can(session, "admin:project:read");
+    const isAdmin = can(session, "admin:project:read", { type: "project", tenantId: session.tenantId });
     const canViewTenant = can(session, "automation:read", { type: "automation", tenantId: session.tenantId });
     if (!isAdmin && !canViewTenant) {
       throw new ApiError(403, "Forbidden");
@@ -112,7 +112,7 @@ export async function POST(request: Request) {
   try {
     const session = await requireTenantSession();
 
-    if (!can(session, "admin:project:write")) {
+    if (!can(session, "admin:project:write", { type: "project", tenantId: session.tenantId })) {
       throw new ApiError(403, "Forbidden");
     }
 

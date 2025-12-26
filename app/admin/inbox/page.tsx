@@ -1,12 +1,8 @@
 "use client";
 
-import { WrkInboxView } from "@/components/wrk-inbox/WrkInboxView";
+import { redirect } from "next/navigation";
 
-export default function WrkInboxPage() {
-  return (
-    <div className="h-full overflow-hidden">
-      <WrkInboxView />
-    </div>
-  );
+export default function LegacyWrkInboxRedirect() {
+  redirect("/wrk-admin/inbox");
 }
 

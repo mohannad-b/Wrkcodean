@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { ApiError, handleApiError } from "@/lib/api/context";
 import { getOrCreateUserFromAuth0Session } from "@/lib/auth/session";
+import { cookies } from "next/headers";
 import { acceptWorkspaceInvite } from "@/lib/services/workspace-members";
 
 type AcceptPayload = { token?: unknown };
@@ -23,10 +24,13 @@ export async function POST(request: Request) {
       userEmail: userRecord.email,
     });
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       invite,
       membership,
     });
+    const cookieStore = cookies();
+    cookieStore.set("activeWorkspaceId", membership.tenantId, { path: "/", httpOnly: false, sameSite: "lax" });
+    return response;
   } catch (error) {
     return handleApiError(error);
   }

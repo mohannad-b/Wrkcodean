@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ApiError, handleApiError, requireEitherTenantOrStaffSession } from "@/lib/api/context";
 import { updateMessage, deleteMessage } from "@/lib/services/workflow-chat";
 import { logAudit } from "@/lib/audit/log";
-import { isWrkStaff } from "@/lib/auth/rbac";
+import { authorize } from "@/lib/auth/rbac";
 import { db } from "@/db";
 import { workflowMessages, automationVersions } from "@/db/schema";
 import { eq, and, isNull } from "drizzle-orm";
@@ -22,7 +22,7 @@ export async function PATCH(
     // First, get the workflow to determine tenantId
     const workflow = await db.query.automationVersions.findFirst({
       where:
-        session.kind === "staff" && isWrkStaff(session)
+        session.kind === "staff"
           ? eq(automationVersions.id, params.workflowId)
           : and(
               eq(automationVersions.id, params.workflowId),
@@ -47,6 +47,9 @@ export async function PATCH(
     if (!message) {
       throw new ApiError(404, "Message not found");
     }
+
+    const authContext = { type: "workflow" as const, tenantId: workflow.tenantId, workflowId: workflow.id };
+    authorize("workflow:chat:edit", authContext, session);
 
     // Parse request body
     let payload: z.infer<typeof UpdateMessageSchema>;
@@ -91,7 +94,7 @@ export async function DELETE(
     // First, get the workflow to determine tenantId
     const workflow = await db.query.automationVersions.findFirst({
       where:
-        session.kind === "staff" && isWrkStaff(session)
+        session.kind === "staff"
           ? eq(automationVersions.id, params.workflowId)
           : and(
               eq(automationVersions.id, params.workflowId),
@@ -116,6 +119,9 @@ export async function DELETE(
     if (!message) {
       throw new ApiError(404, "Message not found");
     }
+
+    const authContext = { type: "workflow" as const, tenantId: workflow.tenantId, workflowId: workflow.id };
+    authorize("workflow:chat:delete", authContext, session);
 
     await deleteMessage({
       messageId: params.messageId,

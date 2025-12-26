@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
 import { removeMember, updateMemberRole } from "@/lib/services/workspace-members";
+import { logAudit } from "@/lib/audit/log";
 
 type Params = {
   id: string;
@@ -37,6 +38,15 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
       nextRole,
     });
 
+    await logAudit({
+      tenantId: session.tenantId,
+      userId: session.userId,
+      action: "workspace.membership.role_changed",
+      resourceType: "membership",
+      resourceId: params.id,
+      metadata: { nextRole },
+    });
+
     return NextResponse.json({ membership: updated });
   } catch (error) {
     return handleApiError(error);
@@ -56,6 +66,14 @@ export async function DELETE(_request: Request, { params }: { params: Params }) 
       membershipId: params.id,
       actorRoles: session.roles,
       actorUserId: session.userId,
+    });
+
+    await logAudit({
+      tenantId: session.tenantId,
+      userId: session.userId,
+      action: "workspace.membership.removed",
+      resourceType: "membership",
+      resourceId: params.id,
     });
 
     return NextResponse.json({ membership: updated });

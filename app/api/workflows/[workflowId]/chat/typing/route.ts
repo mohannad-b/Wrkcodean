@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { ApiError, handleApiError, requireEitherTenantOrStaffSession } from "@/lib/api/context";
-import { can } from "@/lib/auth/rbac";
-import { isWrkStaff } from "@/lib/auth/rbac";
+import { authorize } from "@/lib/auth/rbac";
 import { getOrCreateConversation } from "@/lib/services/workflow-chat";
 import { emitChatEvent } from "@/lib/realtime/events";
 import { db } from "@/db";
@@ -23,7 +22,7 @@ export async function POST(
     // Verify workflow exists - for Wrk staff, don't filter by tenantId
     let workflow = await db.query.automationVersions.findFirst({
       where:
-        session.kind === "staff" && isWrkStaff(session)
+        session.kind === "staff"
           ? eq(automationVersions.id, params.workflowId)
           : and(
               eq(automationVersions.id, params.workflowId),
@@ -35,16 +34,8 @@ export async function POST(
       throw new ApiError(404, "Workflow not found");
     }
 
-    // Check permissions
-    const canWrite =
-      can(session, "workflow:chat:write", {
-        type: "automation_version",
-        tenantId: workflow.tenantId,
-      }) || can(session, "wrk:chat:write", undefined);
-
-    if (!canWrite) {
-      throw new ApiError(403, "Forbidden");
-    }
+    const authContext = { type: "workflow" as const, tenantId: workflow.tenantId, workflowId: workflow.id };
+    authorize("workflow:chat:write", authContext, session);
 
     // Parse request body
     let payload: z.infer<typeof TypingSchema>;

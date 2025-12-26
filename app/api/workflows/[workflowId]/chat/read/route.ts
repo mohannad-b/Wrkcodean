@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { ApiError, handleApiError, requireEitherTenantOrStaffSession } from "@/lib/api/context";
 import { markConversationRead, getOrCreateConversation } from "@/lib/services/workflow-chat";
-import { can } from "@/lib/auth/rbac";
-import { isWrkStaff } from "@/lib/auth/rbac";
+import { authorize } from "@/lib/auth/rbac";
 import { db } from "@/db";
 import { automationVersions } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -22,7 +21,7 @@ export async function POST(
     // Verify workflow exists - for Wrk staff, don't filter by tenantId
     let workflow = await db.query.automationVersions.findFirst({
       where:
-        session.kind === "staff" && isWrkStaff(session)
+        session.kind === "staff"
           ? eq(automationVersions.id, params.workflowId)
           : and(
               eq(automationVersions.id, params.workflowId),
@@ -34,16 +33,8 @@ export async function POST(
       throw new ApiError(404, "Workflow not found");
     }
 
-    // Check permissions
-    const canRead =
-      can(session, "workflow:chat:read", {
-        type: "automation_version",
-        tenantId: workflow.tenantId,
-      }) || can(session, "wrk:chat:read", undefined);
-
-    if (!canRead) {
-      throw new ApiError(403, "Forbidden: Cannot read chat");
-    }
+    const authContext = { type: "workflow" as const, tenantId: workflow.tenantId, workflowId: workflow.id };
+    authorize("workflow:chat:read", authContext, session);
 
     // Parse request body
     let payload: z.infer<typeof MarkReadSchema>;

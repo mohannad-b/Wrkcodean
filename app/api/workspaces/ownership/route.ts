@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
 import { transferOwnership } from "@/lib/services/workspace-members";
+import { logAudit } from "@/lib/audit/log";
 
 type TransferPayload = { membershipId?: unknown };
 
@@ -25,6 +26,15 @@ export async function POST(request: Request) {
       tenantId: session.tenantId,
       targetMembershipId: membershipId,
       actorUserId: session.userId,
+    });
+
+    await logAudit({
+      tenantId: session.tenantId,
+      userId: session.userId,
+      action: "workspace.ownership.transferred",
+      resourceType: "workspace",
+      resourceId: session.tenantId,
+      metadata: { targetMembershipId: membershipId },
     });
 
     return NextResponse.json({ transfer: result });

@@ -62,7 +62,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     const tenantId = session?.tenantId ?? tokenPayload?.tenantId ?? "";
 
     // If we have a signed token but no session, allow the token path to proceed without RBAC.
-    const canUpdateQuote = session ? can(session, "admin:quote:update") : Boolean(tokenPayload);
+    const canUpdateQuote = session ? can(session, "admin:quote:update", { type: "quote", tenantId }) : Boolean(tokenPayload);
     const canSignAsMember = session ? can(session, "automation:read", { type: "quote", tenantId }) : Boolean(tokenPayload);
     if (!canUpdateQuote && !canSignAsMember) {
       throw new ApiError(403, "Forbidden");

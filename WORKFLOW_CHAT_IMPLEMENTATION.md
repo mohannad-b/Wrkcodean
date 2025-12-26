@@ -53,11 +53,10 @@ A complete real-time chat system has been implemented that allows the Wrk team a
 - `workflow:chat:write` - Send messages
 - `workflow:chat:edit` - Edit own messages
 - `workflow:chat:delete` - Delete own messages
-- `wrk:chat:read` - Wrk staff can read all chats
-- `wrk:chat:write` - Wrk staff can write to all chats
-- `wrk:chat:edit` - Wrk staff can edit any message
-- `wrk:chat:delete` - Wrk staff can delete any message
-- `wrk:inbox:view` - Access Wrk shared inbox
+- `platform:chat:read` - Wrk staff can read all chats
+- `platform:chat:write` - Wrk staff can write/edit/delete chats
+- `platform:chat:write` implies edit/delete
+- `platform:chat:read` is required for Wrk shared inbox
 
 ### Permission Rules
 

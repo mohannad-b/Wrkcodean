@@ -10,7 +10,7 @@ import {
   type WorkflowReadReceipt,
 } from "@/db/schema";
 import type { TenantOrStaffSession } from "@/lib/auth/session";
-import { isWrkStaff } from "@/lib/auth/rbac";
+import { can } from "@/lib/auth/rbac";
 import { emitChatEvent } from "@/lib/realtime/events";
 import { notifyNewMessage } from "./workflow-chat-notifications";
 
@@ -234,8 +234,10 @@ export async function updateMessage(params: {
 
   // Check permissions: user can only edit their own messages, or Wrk staff can edit any
   const canEdit =
-    (message.senderUserId === params.session.userId) ||
-    (isWrkStaff(params.session) && message.senderType === "wrk");
+    message.senderUserId === params.session.userId ||
+    (params.session.kind === "staff" &&
+      message.senderType === "wrk" &&
+      can(params.session, "workflow:chat:edit", { type: "workflow", tenantId: params.tenantId, workflowId: message.automationVersionId }));
 
   if (!canEdit) {
     throw new Error("Forbidden: Cannot edit this message");
@@ -313,8 +315,14 @@ export async function deleteMessage(params: {
 
   // Check permissions: user can only delete their own messages, or Wrk staff can delete any
   const canDelete =
-    (message.senderUserId === params.session.userId) ||
-    (isWrkStaff(params.session) && message.senderType === "wrk");
+    message.senderUserId === params.session.userId ||
+    (params.session.kind === "staff" &&
+      message.senderType === "wrk" &&
+      can(params.session, "workflow:chat:delete", {
+        type: "workflow",
+        tenantId: params.tenantId,
+        workflowId: message.automationVersionId,
+      }));
 
   if (!canDelete) {
     throw new Error("Forbidden: Cannot delete this message");

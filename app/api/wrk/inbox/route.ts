@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ApiError, handleApiError, requireWrkStaffSession } from "@/lib/api/context";
-import { can } from "@/lib/auth/rbac";
+import { authorize } from "@/lib/auth/rbac";
 import { listWrkInboxConversations, getUnreadCount } from "@/lib/services/workflow-chat";
 import { db } from "@/db";
 import { workflowConversations, automationVersions, automations, workflowMessages } from "@/db/schema";
@@ -10,10 +10,7 @@ export async function GET(request: Request) {
   try {
     const session = await requireWrkStaffSession();
 
-    // Only Wrk staff can access
-    if (!can(session, "wrk:inbox:view", undefined)) {
-      throw new ApiError(403, "Forbidden: Wrk staff only");
-    }
+    authorize("platform:chat:read", { type: "platform" }, session);
 
     // Parse query params
     const url = new URL(request.url);

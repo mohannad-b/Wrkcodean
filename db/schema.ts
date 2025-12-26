@@ -35,7 +35,7 @@ const taskStatusEnum = pgEnum("task_status", ["pending", "in_progress", "complet
 const taskPriorityEnum = pgEnum("task_priority", ["blocker", "important", "optional"]);
 const notificationPreferenceEnum = pgEnum("notification_preference", ["all", "mentions", "none"]);
 const workflowMessageSenderTypeEnum = pgEnum("workflow_message_sender_type", ["client", "wrk", "system"]);
-const wrkStaffRoleEnum = pgEnum("wrk_staff_role", ["wrk_admin", "wrk_operator", "wrk_viewer"]);
+const wrkStaffRoleEnum = pgEnum("wrk_staff_role", ["wrk_admin", "wrk_operator", "wrk_viewer", "wrk_master_admin"]);
 
 export const tenants = pgTable(
   "tenants",

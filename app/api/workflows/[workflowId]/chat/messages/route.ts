@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { can } from "@/lib/auth/rbac";
+import { authorize } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireEitherTenantOrStaffSession } from "@/lib/api/context";
 import {
   getOrCreateConversation,
@@ -8,7 +8,6 @@ import {
   createMessage,
 } from "@/lib/services/workflow-chat";
 import { logAudit } from "@/lib/audit/log";
-import { isWrkStaff } from "@/lib/auth/rbac";
 import { db } from "@/db";
 import { automationVersions, users } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -37,19 +36,10 @@ export async function GET(
   try {
     const session = await requireEitherTenantOrStaffSession();
 
-    console.log(`[GET /api/workflows/${params.workflowId}/chat/messages] Session:`, {
-      userId: session.userId,
-      tenantId: session.tenantId,
-      roles: session.roles,
-      wrkStaffRole: session.wrkStaffRole,
-      kind: session.kind,
-      isWrkStaff: isWrkStaff(session),
-    });
-
     // Verify workflow exists - for Wrk staff, don't filter by tenantId
     let workflow = await db.query.automationVersions.findFirst({
       where:
-        session.kind === "staff" && isWrkStaff(session)
+        session.kind === "staff"
           ? eq(automationVersions.id, params.workflowId)
           : and(
               eq(automationVersions.id, params.workflowId),
@@ -62,29 +52,8 @@ export async function GET(
       throw new ApiError(404, "Workflow not found");
     }
 
-    console.log(`[GET /api/workflows/${params.workflowId}/chat/messages] Workflow found:`, {
-      workflowId: workflow.id,
-      workflowTenantId: workflow.tenantId,
-      sessionTenantId: session.tenantId,
-    });
-
-    // Check permissions
-    const canReadWorkflow = can(session, "workflow:chat:read", {
-      type: "automation_version",
-      tenantId: workflow.tenantId,
-    });
-    const canReadWrk = can(session, "wrk:chat:read", undefined);
-    const canRead = canReadWorkflow || canReadWrk;
-
-    console.log(`[GET /api/workflows/${params.workflowId}/chat/messages] Permissions:`, {
-      canReadWorkflow,
-      canReadWrk,
-      canRead,
-    });
-
-    if (!canRead) {
-      throw new ApiError(403, "Forbidden: Cannot read chat");
-    }
+    const authContext = { type: "workflow" as const, tenantId: workflow.tenantId, workflowId: workflow.id };
+    authorize("workflow:chat:read", authContext, session);
 
     // Get or create conversation - always use workflow's tenantId
     const conversation = await getOrCreateConversation({
@@ -105,16 +74,6 @@ export async function GET(
       before,
     });
 
-    console.log(`[GET /api/workflows/${params.workflowId}/chat/messages]`, {
-      workflowId: params.workflowId,
-      workflowTenantId: workflow.tenantId,
-      sessionTenantId: session.tenantId,
-      isWrkStaff: isWrkStaff(session),
-      conversationId: conversation.id,
-      messageCount: messages.length,
-      messages: messages.map(m => ({ id: m.id, senderType: m.senderType, body: m.body.slice(0, 50) })),
-    });
-
     return NextResponse.json({ messages, conversationId: conversation.id });
   } catch (error) {
     return handleApiError(error);
@@ -131,7 +90,7 @@ export async function POST(
     // Verify workflow exists - for Wrk staff, don't filter by tenantId
     let workflow = await db.query.automationVersions.findFirst({
       where:
-        session.kind === "staff" && isWrkStaff(session)
+        session.kind === "staff"
           ? eq(automationVersions.id, params.workflowId)
           : and(
               eq(automationVersions.id, params.workflowId),
@@ -143,16 +102,8 @@ export async function POST(
       throw new ApiError(404, "Workflow not found");
     }
 
-    // Check permissions
-    const canWrite =
-      can(session, "workflow:chat:write", {
-        type: "automation_version",
-        tenantId: workflow.tenantId,
-      }) || can(session, "wrk:chat:write", undefined);
-
-    if (!canWrite) {
-      throw new ApiError(403, "Forbidden: Cannot send messages");
-    }
+    const authContext = { type: "workflow" as const, tenantId: workflow.tenantId, workflowId: workflow.id };
+    authorize("workflow:chat:write", authContext, session);
 
     // Parse request body
     let payload: z.infer<typeof CreateMessageSchema>;
@@ -169,7 +120,7 @@ export async function POST(
     });
 
     // Determine sender type
-    const senderType = isWrkStaff(session) ? "wrk" : "client";
+    const senderType = session.kind === "staff" ? "wrk" : "client";
 
     const message = await createMessage({
       conversationId: conversation.id,

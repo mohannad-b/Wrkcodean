@@ -31,6 +31,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { WorkspaceSwitcher } from "@/components/workspaces/WorkspaceSwitcher";
 
 const navItems = [
   { id: "dashboard", icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
@@ -45,14 +46,13 @@ const navItems = [
 ];
 
 const adminNavItems = [
-  { id: "admin-clients", icon: Users, label: "Clients", href: "/admin/clients" },
-  { id: "admin-projects", icon: Building2, label: "Projects", href: "/admin/projects" },
-  { id: "admin-inbox", icon: MessageSquare, label: "Inbox", href: "/admin/inbox" },
+  { id: "admin-clients", icon: Users, label: "Workspaces", href: "/wrk-admin/clients" },
+  { id: "admin-inbox", icon: MessageSquare, label: "Inbox", href: "/wrk-admin/inbox" },
 ];
 
 // Check if we're on an admin route
 function isAdminRoute(pathname: string): boolean {
-  return pathname.startsWith("/admin");
+  return pathname.startsWith("/wrk-admin");
 }
 
 function getInitials(name?: string | null, email?: string) {
@@ -88,8 +88,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       // Switch to Studio mode - go to automations page
       router.push("/automations");
     } else {
-      // Switch to Admin mode - go to admin clients page
-      router.push("/admin/clients");
+      // Switch to Admin mode - go to wrk-admin clients page
+      router.push("/wrk-admin/clients");
     }
   };
 
@@ -137,14 +137,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           variant="ghost"
           className={cn(
             "w-full justify-start gap-2 text-xs font-medium transition-all",
-            collapsed
-              ? "justify-center p-2 h-9"
-              : "px-3 py-2 h-9",
+            collapsed ? "justify-center p-2 h-9" : "px-3 py-2 h-9",
             isAdmin
               ? "bg-red-950/30 text-red-200 hover:bg-red-950/50 hover:text-red-100 border border-red-900/30"
               : "bg-blue-950/30 text-blue-200 hover:bg-blue-950/50 hover:text-blue-100 border border-blue-900/30"
           )}
-          title={collapsed ? (isAdmin ? "Switch to Studio" : "Switch to Admin") : undefined}
+          title={collapsed ? (isAdmin ? "Switch to User Console" : "Switch to Admin") : undefined}
         >
           {isAdmin ? (
             <>
@@ -161,7 +159,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               <Briefcase size={14} className="shrink-0" />
               {!collapsed && (
                 <>
-                  <span className="flex-1 text-left">Admin Console</span>
+                  <span className="flex-1 text-left">Wrk Admin</span>
                   <ArrowRightLeft size={12} className="shrink-0 opacity-50" />
                 </>
               )}
@@ -169,6 +167,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           )}
         </Button>
       </div>
+
+      {/* Workspace switcher for tenant users */}
+      {!isAdmin && (
+        <div className={cn("px-3 pb-2", collapsed && "px-1")}>
+          <WorkspaceSwitcher compact />
+        </div>
+      )}
 
       {/* Navigation */}
       <nav className={cn("flex-1 space-y-1 overflow-y-auto py-2", collapsed ? "px-1" : "px-3")}>

@@ -33,6 +33,12 @@ export async function middleware(request: NextRequest) {
   const authResponse = await auth0.middleware(request);
   const pathname = request.nextUrl.pathname;
 
+  // If a workspaceId is provided in the query, persist it as active.
+  const workspaceId = request.nextUrl.searchParams.get("workspaceId");
+  if (workspaceId) {
+    authResponse.cookies.set("activeWorkspaceId", workspaceId, { path: "/", httpOnly: false, sameSite: "lax" });
+  }
+
   if (isPublicRoute(pathname)) {
     const session = await auth0.getSession(request);
     if (session && pathname === "/") {

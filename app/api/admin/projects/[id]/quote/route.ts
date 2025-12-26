@@ -33,7 +33,7 @@ export async function POST(request: Request, { params }: RouteParams) {
   try {
     const session = await requireTenantSession();
 
-    if (!can(session, "admin:quote:create")) {
+    if (!can(session, "admin:quote:create", { type: "quote", tenantId: session.tenantId })) {
       throw new ApiError(403, "Forbidden");
     }
 

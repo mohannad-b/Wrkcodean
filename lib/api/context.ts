@@ -4,12 +4,14 @@ import {
   getWrkStaffSession,
   getUserSession,
   NoTenantMembershipError,
+  NoActiveWorkspaceError,
   NotWrkStaffError,
   type TenantSession,
   type StaffSession,
   type UserSession,
   type TenantOrStaffSession,
 } from "@/lib/auth/session";
+import { AuthorizationError } from "@/lib/auth/rbac";
 
 export class ApiError extends Error {
   status: number;
@@ -20,7 +22,12 @@ export class ApiError extends Error {
 }
 
 export async function requireTenantSession(): Promise<TenantSession> {
-  const session = await getTenantSession().catch(() => null);
+  const session = await getTenantSession().catch((error) => {
+    if (error instanceof NoActiveWorkspaceError) {
+      throw new ApiError(400, "Active workspace required");
+    }
+    return null;
+  });
   if (!session) {
     throw new ApiError(401, "Unauthorized");
   }
@@ -72,6 +79,9 @@ export async function requireUserSession(): Promise<UserSession> {
 }
 
 export function handleApiError(error: unknown) {
+  if (error instanceof AuthorizationError) {
+    return NextResponse.json({ error: error.message, code: error.code, action: error.action }, { status: error.status });
+  }
   if (error instanceof ApiError) {
     return NextResponse.json({ error: error.message }, { status: error.status });
   }
