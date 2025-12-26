@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { can } from "@/lib/auth/rbac";
-import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
+import { ApiError, handleApiError, requireEitherTenantOrStaffSession } from "@/lib/api/context";
 import {
   getOrCreateConversation,
   listMessages,
@@ -35,24 +35,26 @@ export async function GET(
   { params }: { params: { workflowId: string } }
 ) {
   try {
-    const session = await requireTenantSession();
+    const session = await requireEitherTenantOrStaffSession();
 
     console.log(`[GET /api/workflows/${params.workflowId}/chat/messages] Session:`, {
       userId: session.userId,
       tenantId: session.tenantId,
       roles: session.roles,
       wrkStaffRole: session.wrkStaffRole,
+      kind: session.kind,
       isWrkStaff: isWrkStaff(session),
     });
 
     // Verify workflow exists - for Wrk staff, don't filter by tenantId
     let workflow = await db.query.automationVersions.findFirst({
-      where: isWrkStaff(session)
-        ? eq(automationVersions.id, params.workflowId)
-        : and(
-            eq(automationVersions.id, params.workflowId),
-            eq(automationVersions.tenantId, session.tenantId)
-          ),
+      where:
+        session.kind === "staff" && isWrkStaff(session)
+          ? eq(automationVersions.id, params.workflowId)
+          : and(
+              eq(automationVersions.id, params.workflowId),
+              eq(automationVersions.tenantId, session.tenantId)
+            ),
     });
 
     if (!workflow) {
@@ -124,16 +126,17 @@ export async function POST(
   { params }: { params: { workflowId: string } }
 ) {
   try {
-    const session = await requireTenantSession();
+    const session = await requireEitherTenantOrStaffSession();
 
     // Verify workflow exists - for Wrk staff, don't filter by tenantId
     let workflow = await db.query.automationVersions.findFirst({
-      where: isWrkStaff(session)
-        ? eq(automationVersions.id, params.workflowId)
-        : and(
-            eq(automationVersions.id, params.workflowId),
-            eq(automationVersions.tenantId, session.tenantId)
-          ),
+      where:
+        session.kind === "staff" && isWrkStaff(session)
+          ? eq(automationVersions.id, params.workflowId)
+          : and(
+              eq(automationVersions.id, params.workflowId),
+              eq(automationVersions.tenantId, session.tenantId)
+            ),
     });
 
     if (!workflow) {

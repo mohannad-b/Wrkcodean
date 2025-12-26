@@ -5,12 +5,24 @@ vi.mock("react", () => ({
 }));
 
 const membershipRows: Array<{ role: string; tenantId: string }> = [];
+const wrkStaffRows: Array<{ role: string }> = [];
 
-const selectMock = vi.fn(() => ({
-  from: () => ({
-    where: () => Promise.resolve([...membershipRows]),
-  }),
-}));
+const selectMock = vi.fn((columns?: { role?: string }) => {
+  const rows = columns?.role === "wrkRole" ? wrkStaffRows : membershipRows;
+  const whereResult = {
+    limit: () => Promise.resolve([...rows]),
+    then: (resolve: any) => Promise.resolve(resolve([...rows])),
+  };
+
+  return {
+    from: () => ({
+      where: () => whereResult,
+      limit: () => Promise.resolve([...rows]),
+    }),
+    where: () => whereResult,
+    limit: () => Promise.resolve([...rows]),
+  };
+});
 
 const usersFindFirstMock = vi.fn();
 const membershipsFindFirstMock = vi.fn();
@@ -25,6 +37,7 @@ vi.mock("@/lib/auth/auth0", () => ({
 vi.mock("@/db/schema", () => ({
   memberships: { role: "role", tenantId: "tenantId" },
   users: { id: "id", auth0Id: "auth0Id", email: "email" },
+  wrkStaffMemberships: { role: "wrkRole", userId: "wrkUserId" },
 }));
 
 vi.mock("@/db", () => ({
@@ -56,6 +69,7 @@ describe("getSession", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     membershipRows.length = 0;
+    wrkStaffRows.length = 0;
     delete process.env.AUTH0_MOCK_ENABLED;
     delete process.env.MOCK_TENANT_ID;
     delete process.env.MOCK_USER_ID;
@@ -72,9 +86,11 @@ describe("getSession", () => {
     const session = await getSession();
 
     expect(session).toEqual({
+      kind: "tenant",
       tenantId: "tenant-123",
       userId: "user-123",
       roles: ["owner"],
+      wrkStaffRole: null,
     });
   });
 
@@ -96,9 +112,11 @@ describe("getSession", () => {
     const session = await getSession();
 
     expect(session).toEqual({
+      kind: "tenant",
       tenantId: "tenant-abc",
       userId: "user-abc",
       roles: ["admin"],
+      wrkStaffRole: null,
     });
     expect(auth0GetSessionMock).toHaveBeenCalled();
   });

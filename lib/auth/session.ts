@@ -1,7 +1,14 @@
 import { and, eq, gt, isNull, or } from "drizzle-orm";
 import auth0 from "@/lib/auth/auth0";
 import { db } from "@/db";
-import { memberships, users, workspaceInvites, wrkStaffMemberships, type MembershipRole } from "@/db/schema";
+import {
+  memberships,
+  users,
+  workspaceInvites,
+  wrkStaffMemberships,
+  type MembershipRole,
+  type WrkStaffRole,
+} from "@/db/schema";
 import { acceptWorkspaceInvite } from "@/lib/services/workspace-members";
 
 const ALLOWED_DEFAULT_ROLES: readonly MembershipRole[] = ["viewer", "editor", "admin", "owner", "billing"] as const;
@@ -34,14 +41,30 @@ export class NoTenantMembershipError extends Error {
   }
 }
 
-export type AppSession = {
+export type TenantSession = {
+  kind: "tenant";
   userId: string;
   tenantId: string;
   roles: string[];
-  wrkStaffRole?: string | null;
+  wrkStaffRole?: WrkStaffRole | null;
 };
 
+export type StaffSession = {
+  kind: "staff";
+  userId: string;
+  email: string;
+  name: string | null;
+  wrkStaffRole: WrkStaffRole;
+  tenantId: null;
+  roles: [];
+};
+
+export type TenantOrStaffSession = TenantSession | StaffSession;
+
+export type AppSession = TenantSession;
+
 export type UserSession = {
+  kind: "user";
   userId: string;
   tenantId: null;
   roles: [];
@@ -53,6 +76,15 @@ export type Auth0UserProfile = {
   name: string;
   avatarUrl: string | null;
 };
+
+export class NotWrkStaffError extends Error {
+  code = "NOT_WRK_STAFF";
+
+  constructor(message = "User is not a member of Wrk staff.") {
+    super(message);
+    this.name = "NotWrkStaffError";
+  }
+}
 
 function isDuplicateError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -232,6 +264,7 @@ async function getMockSession(): Promise<AppSession> {
     .limit(1);
 
   return {
+    kind: "tenant",
     tenantId,
     userId,
     roles: membershipRows.map((row) => row.role),
@@ -239,7 +272,17 @@ async function getMockSession(): Promise<AppSession> {
   };
 }
 
-async function getAuth0BackedSession(): Promise<AppSession> {
+async function getWrkStaffRoleForUser(userId: string): Promise<WrkStaffRole | null> {
+  const wrkStaff = await db
+    .select({ role: wrkStaffMemberships.role })
+    .from(wrkStaffMemberships)
+    .where(eq(wrkStaffMemberships.userId, userId))
+    .limit(1);
+
+  return wrkStaff[0]?.role ?? null;
+}
+
+async function getAuth0BackedTenantSession(): Promise<TenantSession> {
   const { userRecord } = await getOrCreateUserFromAuth0Session();
 
   let membershipRows = await db
@@ -321,26 +364,66 @@ async function getAuth0BackedSession(): Promise<AppSession> {
     .map((row) => row.role);
 
   // Check for Wrk staff membership
-  const wrkStaff = await db
-    .select({ role: wrkStaffMemberships.role })
-    .from(wrkStaffMemberships)
-    .where(eq(wrkStaffMemberships.userId, userRecord.id))
-    .limit(1);
+  const wrkStaffRole = await getWrkStaffRoleForUser(userRecord.id);
 
   return {
+    kind: "tenant",
     tenantId: primaryTenantId,
     userId: userRecord.id,
     roles,
-    wrkStaffRole: wrkStaff[0]?.role ?? null,
+    wrkStaffRole,
   };
 }
 
-export const getSession = withCache(async (): Promise<AppSession> => {
+export const getTenantSession = withCache(async (): Promise<AppSession> => {
   if (process.env.AUTH0_MOCK_ENABLED === "true") {
     return getMockSession();
   }
 
-  return getAuth0BackedSession();
+  return getAuth0BackedTenantSession();
+});
+
+export const getSession = getTenantSession;
+
+export const getWrkStaffSession = withCache(async (): Promise<StaffSession> => {
+  if (process.env.AUTH0_MOCK_ENABLED === "true") {
+    const userId = process.env.MOCK_USER_ID;
+    if (!userId) {
+      throw new Error("MOCK_USER_ID must be set when AUTH0_MOCK_ENABLED=true.");
+    }
+
+    const role = await getWrkStaffRoleForUser(userId);
+    if (!role) {
+      throw new NotWrkStaffError();
+    }
+
+    return {
+      kind: "staff",
+      userId,
+      email: process.env.MOCK_USER_EMAIL ?? "mock-staff@wrk.test",
+      name: process.env.MOCK_USER_NAME ?? "Mock Wrk Staff",
+      wrkStaffRole: role,
+      tenantId: null,
+      roles: [],
+    };
+  }
+
+  const { userRecord } = await getOrCreateUserFromAuth0Session();
+  const role = await getWrkStaffRoleForUser(userRecord.id);
+
+  if (!role) {
+    throw new NotWrkStaffError();
+  }
+
+  return {
+    kind: "staff",
+    userId: userRecord.id,
+    email: userRecord.email,
+    name: userRecord.name ?? userRecord.email,
+    wrkStaffRole: role,
+    tenantId: null,
+    roles: [],
+  };
 });
 
 /**
@@ -354,6 +437,7 @@ export async function getUserSession(): Promise<UserSession> {
       throw new Error("MOCK_USER_ID must be set when AUTH0_MOCK_ENABLED=true.");
     }
     return {
+      kind: "user",
       userId,
       tenantId: null,
       roles: [],
@@ -362,6 +446,7 @@ export async function getUserSession(): Promise<UserSession> {
 
   const { userRecord } = await getOrCreateUserFromAuth0Session();
   return {
+    kind: "user",
     userId: userRecord.id,
     tenantId: null,
     roles: [],

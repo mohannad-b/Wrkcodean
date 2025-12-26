@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
-import type { AppSession } from "@/lib/auth/session";
+import {
+  getTenantSession,
+  getWrkStaffSession,
+  getUserSession,
+  NoTenantMembershipError,
+  NotWrkStaffError,
+  type TenantSession,
+  type StaffSession,
+  type UserSession,
+  type TenantOrStaffSession,
+} from "@/lib/auth/session";
 
 export class ApiError extends Error {
   status: number;
@@ -10,8 +19,8 @@ export class ApiError extends Error {
   }
 }
 
-export async function requireTenantSession(): Promise<AppSession> {
-  const session = await getSession().catch(() => null);
+export async function requireTenantSession(): Promise<TenantSession> {
+  const session = await getTenantSession().catch(() => null);
   if (!session) {
     throw new ApiError(401, "Unauthorized");
   }
@@ -20,6 +29,45 @@ export async function requireTenantSession(): Promise<AppSession> {
     throw new ApiError(400, "Tenant context missing.");
   }
 
+  return session;
+}
+
+export async function requireWrkStaffSession(): Promise<StaffSession> {
+  try {
+    const session = await getWrkStaffSession();
+    return session;
+  } catch (error) {
+    if (error instanceof NotWrkStaffError) {
+      throw new ApiError(403, "Unauthorized");
+    }
+    throw new ApiError(401, "Unauthorized");
+  }
+}
+
+export async function requireEitherTenantOrStaffSession(): Promise<TenantOrStaffSession> {
+  let tenantError: unknown;
+
+  try {
+    return await getTenantSession();
+  } catch (error) {
+    tenantError = error;
+  }
+
+  try {
+    return await getWrkStaffSession();
+  } catch (staffError) {
+    if (tenantError instanceof NoTenantMembershipError || staffError instanceof NotWrkStaffError) {
+      throw new ApiError(403, "Unauthorized");
+    }
+    throw new ApiError(401, "Unauthorized");
+  }
+}
+
+export async function requireUserSession(): Promise<UserSession> {
+  const session = await getUserSession().catch(() => null);
+  if (!session) {
+    throw new ApiError(401, "Unauthorized");
+  }
   return session;
 }
 

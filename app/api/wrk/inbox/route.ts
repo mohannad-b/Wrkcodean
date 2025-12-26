@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
-import { can, isWrkStaff } from "@/lib/auth/rbac";
+import { ApiError, handleApiError, requireWrkStaffSession } from "@/lib/api/context";
+import { can } from "@/lib/auth/rbac";
 import { listWrkInboxConversations, getUnreadCount } from "@/lib/services/workflow-chat";
 import { db } from "@/db";
 import { workflowConversations, automationVersions, automations, workflowMessages } from "@/db/schema";
@@ -8,10 +8,10 @@ import { eq, and, desc, sql, isNull } from "drizzle-orm";
 
 export async function GET(request: Request) {
   try {
-    const session = await requireTenantSession();
+    const session = await requireWrkStaffSession();
 
     // Only Wrk staff can access
-    if (!isWrkStaff(session) || !can(session, "wrk:inbox:view", undefined)) {
+    if (!can(session, "wrk:inbox:view", undefined)) {
       throw new ApiError(403, "Forbidden: Wrk staff only");
     }
 

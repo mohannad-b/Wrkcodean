@@ -9,7 +9,7 @@ import {
   type WorkflowConversation,
   type WorkflowReadReceipt,
 } from "@/db/schema";
-import type { AppSession } from "@/lib/auth/session";
+import type { TenantOrStaffSession } from "@/lib/auth/session";
 import { isWrkStaff } from "@/lib/auth/rbac";
 import { emitChatEvent } from "@/lib/realtime/events";
 import { notifyNewMessage } from "./workflow-chat-notifications";
@@ -218,7 +218,7 @@ export async function updateMessage(params: {
   messageId: string;
   tenantId: string;
   body: string;
-  session: AppSession;
+  session: TenantOrStaffSession;
 }): Promise<WorkflowMessage> {
   const message = await db.query.workflowMessages.findFirst({
     where: and(
@@ -297,7 +297,7 @@ export async function updateMessage(params: {
 export async function deleteMessage(params: {
   messageId: string;
   tenantId: string;
-  session: AppSession;
+  session: TenantOrStaffSession;
 }): Promise<void> {
   const message = await db.query.workflowMessages.findFirst({
     where: and(

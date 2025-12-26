@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
+import { ApiError, handleApiError, requireEitherTenantOrStaffSession } from "@/lib/api/context";
 import { updateMessage, deleteMessage } from "@/lib/services/workflow-chat";
 import { logAudit } from "@/lib/audit/log";
 import { isWrkStaff } from "@/lib/auth/rbac";
@@ -17,16 +17,17 @@ export async function PATCH(
   { params }: { params: { workflowId: string; messageId: string } }
 ) {
   try {
-    const session = await requireTenantSession();
+    const session = await requireEitherTenantOrStaffSession();
 
     // First, get the workflow to determine tenantId
     const workflow = await db.query.automationVersions.findFirst({
-      where: isWrkStaff(session)
-        ? eq(automationVersions.id, params.workflowId)
-        : and(
-            eq(automationVersions.id, params.workflowId),
-            eq(automationVersions.tenantId, session.tenantId)
-          ),
+      where:
+        session.kind === "staff" && isWrkStaff(session)
+          ? eq(automationVersions.id, params.workflowId)
+          : and(
+              eq(automationVersions.id, params.workflowId),
+              eq(automationVersions.tenantId, session.tenantId)
+            ),
     });
 
     if (!workflow) {
@@ -85,16 +86,17 @@ export async function DELETE(
   { params }: { params: { workflowId: string; messageId: string } }
 ) {
   try {
-    const session = await requireTenantSession();
+    const session = await requireEitherTenantOrStaffSession();
 
     // First, get the workflow to determine tenantId
     const workflow = await db.query.automationVersions.findFirst({
-      where: isWrkStaff(session)
-        ? eq(automationVersions.id, params.workflowId)
-        : and(
-            eq(automationVersions.id, params.workflowId),
-            eq(automationVersions.tenantId, session.tenantId)
-          ),
+      where:
+        session.kind === "staff" && isWrkStaff(session)
+          ? eq(automationVersions.id, params.workflowId)
+          : and(
+              eq(automationVersions.id, params.workflowId),
+              eq(automationVersions.tenantId, session.tenantId)
+            ),
     });
 
     if (!workflow) {

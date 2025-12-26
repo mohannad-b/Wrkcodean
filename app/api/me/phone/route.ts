@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { db } from "@/db";
 import { users } from "@/db/schema";
-import { getSession } from "@/lib/auth/session";
+import { requireUserSession } from "@/lib/api/context";
 
 const DEMO_CODE = "123456";
 
@@ -15,7 +15,7 @@ function normalizePhone(input: string | undefined) {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getSession();
+  const session = await requireUserSession();
   const body = (await request.json().catch(() => ({}))) as SendPayload;
   const phone = normalizePhone(body.phone);
 
@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  const session = await getSession();
+  const session = await requireUserSession();
   const body = (await request.json().catch(() => ({}))) as VerifyPayload;
   const phone = normalizePhone(body.phone);
   const code = (body.code ?? "").trim();

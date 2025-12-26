@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
+import { ApiError, handleApiError, requireEitherTenantOrStaffSession } from "@/lib/api/context";
 import { markConversationRead, getOrCreateConversation } from "@/lib/services/workflow-chat";
 import { can } from "@/lib/auth/rbac";
 import { isWrkStaff } from "@/lib/auth/rbac";
@@ -17,16 +17,17 @@ export async function POST(
   { params }: { params: { workflowId: string } }
 ) {
   try {
-    const session = await requireTenantSession();
+    const session = await requireEitherTenantOrStaffSession();
 
     // Verify workflow exists - for Wrk staff, don't filter by tenantId
     let workflow = await db.query.automationVersions.findFirst({
-      where: isWrkStaff(session)
-        ? eq(automationVersions.id, params.workflowId)
-        : and(
-            eq(automationVersions.id, params.workflowId),
-            eq(automationVersions.tenantId, session.tenantId)
-          ),
+      where:
+        session.kind === "staff" && isWrkStaff(session)
+          ? eq(automationVersions.id, params.workflowId)
+          : and(
+              eq(automationVersions.id, params.workflowId),
+              eq(automationVersions.tenantId, session.tenantId)
+            ),
     });
 
     if (!workflow) {

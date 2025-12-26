@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { getSession } from "@/lib/auth/session";
+import { requireUserSession } from "@/lib/api/context";
 
 function titleCase(input: string) {
   return input
@@ -11,7 +11,7 @@ function titleCase(input: string) {
 }
 
 export async function POST(request: NextRequest) {
-  await getSession(); // ensure authenticated
+  await requireUserSession(); // ensure authenticated
 
   const { url } = (await request.json().catch(() => ({}))) as { url?: string };
   if (!url || typeof url !== "string") {

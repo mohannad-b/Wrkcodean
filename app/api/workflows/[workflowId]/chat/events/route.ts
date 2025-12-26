@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenantSession } from "@/lib/api/context";
+import { requireEitherTenantOrStaffSession } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
 import { isWrkStaff } from "@/lib/auth/rbac";
 import { getOrCreateConversation } from "@/lib/services/workflow-chat";
@@ -16,16 +16,17 @@ export async function GET(
   { params }: { params: { workflowId: string } }
 ) {
   try {
-    const session = await requireTenantSession();
+    const session = await requireEitherTenantOrStaffSession();
 
     // Verify workflow exists - for Wrk staff, don't filter by tenantId
     let workflow = await db.query.automationVersions.findFirst({
-      where: isWrkStaff(session)
-        ? eq(automationVersions.id, params.workflowId)
-        : and(
-            eq(automationVersions.id, params.workflowId),
-            eq(automationVersions.tenantId, session.tenantId)
-          ),
+      where:
+        session.kind === "staff" && isWrkStaff(session)
+          ? eq(automationVersions.id, params.workflowId)
+          : and(
+              eq(automationVersions.id, params.workflowId),
+              eq(automationVersions.tenantId, session.tenantId)
+            ),
     });
 
     if (!workflow) {
