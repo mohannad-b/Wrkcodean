@@ -33,6 +33,12 @@ export async function middleware(request: NextRequest) {
   const authResponse = await auth0.middleware(request);
   const pathname = request.nextUrl.pathname;
 
+  // Clear active workspace cookie on logout
+  if (pathname.startsWith("/auth/logout")) {
+    authResponse.cookies.set("activeWorkspaceId", "", { path: "/", maxAge: 0 });
+    return authResponse;
+  }
+
   // If a workspaceId is provided in the query, persist it as active.
   const workspaceId = request.nextUrl.searchParams.get("workspaceId");
   if (workspaceId) {

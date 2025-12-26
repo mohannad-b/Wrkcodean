@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { ChevronsUpDown, Check, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { Badge } from "@/components/ui/badge";
 import { useActiveWorkspace } from "@/lib/workspaces/useActiveWorkspace";
 
@@ -14,7 +14,7 @@ type Props = {
   onError?: (message: string) => void;
 };
 
-export function WorkspaceSwitcher({ compact = false, onSwitched, onError }: Props) {
+export default function WorkspaceSwitcher({ compact = false, onSwitched, onError }: Props) {
   const { activeWorkspace, memberships, setActiveWorkspace, isLoading, error } = useActiveWorkspace();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -33,23 +33,23 @@ export function WorkspaceSwitcher({ compact = false, onSwitched, onError }: Prop
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+    <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
+      <PopoverPrimitive.Trigger asChild>
         <Button variant="outline" size={compact ? "sm" : "default"} className="w-full justify-between">
           <span className="truncate">
             {activeWorkspace ? activeWorkspace.tenantName : isLoading ? "Loading..." : "Select workspace"}
           </span>
           <ChevronsUpDown size={16} className="ml-2 shrink-0 opacity-50" />
         </Button>
-      </PopoverTrigger>
-      <PopoverContent className="p-0 w-72">
+      </PopoverPrimitive.Trigger>
+      <PopoverPrimitive.Content className="p-0 w-72 bg-white text-slate-900 rounded-md border shadow-lg outline-hidden z-50">
         <Command shouldFilter={false}>
           <CommandInput placeholder="Search workspaces..." value={search} onValueChange={setSearch} />
           <CommandList>
             <CommandEmpty>No workspaces found.</CommandEmpty>
             <CommandGroup>
               {filtered.map((workspace) => {
-                const suspended = false; // placeholder; add status if available
+                const suspended = false;
                 return (
                   <CommandItem
                     key={workspace.tenantId}
@@ -77,8 +77,8 @@ export function WorkspaceSwitcher({ compact = false, onSwitched, onError }: Prop
             </CommandGroup>
           </CommandList>
         </Command>
-      </PopoverContent>
-    </PopoverContent>
+      </PopoverPrimitive.Content>
+    </PopoverPrimitive.Root>
   );
 }
 

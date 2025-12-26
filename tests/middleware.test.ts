@@ -15,18 +15,19 @@ describe("middleware", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    delete process.env.AUTH0_MOCK_ENABLED;
+    process.env.AUTH0_MOCK_ENABLED = "false";
   });
 
-  it("returns 401 for protected API routes without a session", async () => {
+  it("persists workspaceId from query into activeWorkspaceId cookie", async () => {
     middlewareMock.mockResolvedValue(NextResponse.next());
-    getSessionMock.mockResolvedValue(null);
+    getSessionMock.mockResolvedValue({ user: { sub: "u1" } });
 
     const { middleware } = await import("../middleware");
-    const request = new NextRequest("http://localhost/api/automations");
+    const request = new NextRequest("http://localhost/dashboard?workspaceId=abc123");
 
     const response = await middleware(request);
-    expect(response.status).toBe(401);
+    const cookie = response.cookies.get("activeWorkspaceId");
+    expect(cookie?.value).toBe("abc123");
   });
 });
 

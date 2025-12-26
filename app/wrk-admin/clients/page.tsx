@@ -1,66 +1,76 @@
+import Link from "next/link";
 import { requireWrkStaffSession } from "@/lib/api/context";
 import { db } from "@/db";
 import { tenants, memberships, users } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { format } from "date-fns";
+import ClientsTable from "./clientsTable";
+
+export type WorkspaceRow = {
+  id: string;
+  name: string;
+  slug: string | null;
+  status: string;
+  ownerName: string | null;
+  ownerEmail: string | null;
+  createdAt: string;
+  memberCount: number;
+  submissionCount: number;
+};
 
 export default async function WrkAdminWorkspacesPage() {
-  await requireWrkStaffSession();
+  const session = await requireWrkStaffSession();
 
   const rows = await db
     .select({
       id: tenants.id,
       name: tenants.name,
       slug: tenants.slug,
+      status: tenants.status,
       createdAt: tenants.createdAt,
-      ownerId: memberships.userId,
       ownerName: users.name,
       ownerEmail: users.email,
+      memberCount: sql<number>`count(distinct ${memberships.id})`,
     })
     .from(tenants)
-    .leftJoin(memberships, and(eq(memberships.tenantId, tenants.id), eq(memberships.role, "owner")))
-    .leftJoin(users, eq(users.id, memberships.userId));
+    .leftJoin(memberships, eq(memberships.tenantId, tenants.id))
+    .leftJoin(
+      users,
+      and(eq(users.id, memberships.userId), eq(memberships.role, "owner"))
+    )
+    .groupBy(tenants.id, users.id);
+
+  const workspaceRows: WorkspaceRow[] = rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    status: row.status,
+    ownerName: row.ownerName,
+    ownerEmail: row.ownerEmail,
+    createdAt: format(row.createdAt, "yyyy-MM-dd"),
+    memberCount: row.memberCount ?? 0,
+    submissionCount: 0,
+  }));
 
   return (
     <div className="p-8 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Workspaces</h1>
-        <p className="text-sm text-muted-foreground">All client workspaces across the platform.</p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Clients</h1>
+          <p className="text-sm text-muted-foreground">Managing all workspaces on the platform.</p>
+        </div>
+        {(session.wrkStaffRole === "wrk_admin" || session.wrkStaffRole === "wrk_master_admin") && (
+          <Button asChild>
+            <Link href="/wrk-admin/clients/new">New Client</Link>
+          </Button>
+        )}
       </div>
-      <div className="overflow-auto rounded border border-slate-200 bg-white">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-600">
-            <tr>
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">Slug</th>
-              <th className="px-4 py-3">Owner</th>
-              <th className="px-4 py-3">Created</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.map((row) => (
-              <tr key={row.id} className="hover:bg-slate-50">
-                <td className="px-4 py-3 font-medium text-slate-900">{row.name}</td>
-                <td className="px-4 py-3 text-slate-600">{row.slug}</td>
-                <td className="px-4 py-3 text-slate-700">
-                  {row.ownerName ?? row.ownerEmail ?? "—"}
-                </td>
-                <td className="px-4 py-3 text-slate-500">{row.createdAt.toISOString().slice(0, 10)}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td className="px-4 py-6 text-center text-slate-500" colSpan={4}>
-                  No workspaces found.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <p className="text-xs text-slate-500">
-        NOTE: Legacy mock admin UI has been removed. Wire additional controls (suspend, role changes, invites) to real
-        APIs in this surface.
-      </p>
+
+      <Card className="p-4">
+        <ClientsTable rows={workspaceRows} staffRole={session.wrkStaffRole} />
+      </Card>
     </div>
   );
 }

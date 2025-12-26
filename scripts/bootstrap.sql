@@ -12,6 +12,7 @@ DROP TABLE IF EXISTS workflow_read_receipts CASCADE;
 DROP TABLE IF EXISTS workflow_messages CASCADE;
 DROP TABLE IF EXISTS workflow_conversations CASCADE;
 DROP TABLE IF EXISTS wrk_staff_memberships CASCADE;
+DROP TABLE IF EXISTS staff_invites CASCADE;
 DROP TABLE IF EXISTS audit_logs CASCADE;
 DROP TABLE IF EXISTS file_versions CASCADE;
 DROP TABLE IF EXISTS files CASCADE;
@@ -38,6 +39,7 @@ DROP TABLE IF EXISTS tenants CASCADE;
 -- ============================================================================
 DROP TYPE IF EXISTS workflow_message_sender_type CASCADE;
 DROP TYPE IF EXISTS wrk_staff_role CASCADE;
+DROP TYPE IF EXISTS staff_invite_status CASCADE;
 DROP TYPE IF EXISTS task_priority CASCADE;
 DROP TYPE IF EXISTS task_status CASCADE;
 DROP TYPE IF EXISTS message_type CASCADE;
@@ -53,6 +55,8 @@ DROP TYPE IF EXISTS discount_kind CASCADE;
 DROP TYPE IF EXISTS automation_status CASCADE;
 DROP TYPE IF EXISTS project_pricing_status CASCADE;
 DROP TYPE IF EXISTS project_type CASCADE;
+DROP TYPE IF EXISTS tenant_status CASCADE;
+DROP TYPE IF EXISTS user_status CASCADE;
 DROP TYPE IF EXISTS membership_role CASCADE;
 DROP TYPE IF EXISTS membership_status CASCADE;
 DROP TYPE IF EXISTS workspace_invite_status CASCADE;
@@ -69,6 +73,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE TYPE membership_role AS ENUM ('owner','admin','editor','viewer','billing');
 CREATE TYPE membership_status AS ENUM ('active','invited','removed');
 CREATE TYPE workspace_invite_status AS ENUM ('pending','accepted','cancelled','expired');
+CREATE TYPE staff_invite_status AS ENUM ('pending','accepted','cancelled','expired');
 CREATE TYPE automation_status AS ENUM (
   'IntakeInProgress',
   'NeedsPricing',
@@ -95,7 +100,9 @@ CREATE TYPE task_status AS ENUM ('pending','in_progress','complete');
 CREATE TYPE task_priority AS ENUM ('blocker','important','optional');
 CREATE TYPE notification_preference AS ENUM ('all','mentions','none');
 CREATE TYPE workflow_message_sender_type AS ENUM ('client','wrk','system');
-CREATE TYPE wrk_staff_role AS ENUM ('wrk_admin','wrk_operator','wrk_viewer');
+CREATE TYPE wrk_staff_role AS ENUM ('wrk_admin','wrk_operator','wrk_viewer','wrk_master_admin');
+CREATE TYPE tenant_status AS ENUM ('active','suspended');
+CREATE TYPE user_status AS ENUM ('active','suspended');
 
 -- ============================================================================
 -- STEP 5: Create tables
@@ -109,6 +116,7 @@ CREATE TABLE tenants (
   industry text,
   currency text DEFAULT 'usd',
   timezone text DEFAULT 'est',
+  status tenant_status NOT NULL DEFAULT 'active',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT tenants_slug_unique UNIQUE (slug)
@@ -130,6 +138,7 @@ CREATE TABLE users (
   tos_accepted_at timestamptz,
   tos_version text,
   notification_preference notification_preference NOT NULL DEFAULT 'all',
+  status user_status NOT NULL DEFAULT 'active',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT users_email_unique UNIQUE (email),
@@ -164,6 +173,21 @@ CREATE TABLE workspace_invites (
 );
 CREATE INDEX workspace_invites_tenant_idx ON workspace_invites(tenant_id);
 CREATE INDEX workspace_invites_email_idx ON workspace_invites(email);
+
+-- Staff Invites
+CREATE TABLE staff_invites (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email text NOT NULL,
+  role wrk_staff_role NOT NULL,
+  token text NOT NULL,
+  status staff_invite_status NOT NULL DEFAULT 'pending',
+  invited_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  expires_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT staff_invites_token_unique UNIQUE (token)
+);
+CREATE INDEX staff_invites_email_idx ON staff_invites(email);
 
 -- Automations
 CREATE TABLE automations (

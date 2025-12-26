@@ -1,32 +1,13 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import { Auth0Provider } from "@auth0/nextjs-auth0/client";
 import { AppShell } from "@/components/layout/AppShell";
 import { Toaster } from "@/components/ui/sonner";
-import { NoTenantMembershipError, NoActiveWorkspaceError, getSession } from "@/lib/auth/session";
+import { ensureUserProvisioned } from "./ensureUserProvisioned";
 
 export const metadata: Metadata = {
   title: "WRK Copilot",
   description: "Manage your automated workflows and automations",
 };
-
-async function ensureUserProvisioned() {
-  try {
-    await getSession();
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("not authenticated")) {
-      redirect("/auth/login");
-    }
-    if (error instanceof NoTenantMembershipError) {
-      // User is authenticated but has no tenant yet; allow workspace-setup flow to proceed.
-      return;
-    }
-    if (error instanceof NoActiveWorkspaceError) {
-      redirect("/workspace-picker");
-    }
-    throw error;
-  }
-}
 
 export default async function AppLayout({
   children,

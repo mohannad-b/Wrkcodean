@@ -224,6 +224,8 @@ const staffRolePermissions: Record<WrkStaffRole, Set<PlatformAction>> = {
     "platform:billing:write",
     "platform:auditlog:read",
     "platform:user:suspend",
+    "platform:wrk_staff:read",
+    "platform:wrk_staff:write",
   ]),
   wrk_master_admin: new Set<PlatformAction>([
     "platform:user:read",

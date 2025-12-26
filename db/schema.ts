@@ -6,6 +6,8 @@ import type { CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
 const membershipRoleEnum = pgEnum("membership_role", ["owner", "admin", "editor", "viewer", "billing"]);
 const membershipStatusEnum = pgEnum("membership_status", ["active", "invited", "removed"]);
 const inviteStatusEnum = pgEnum("workspace_invite_status", ["pending", "accepted", "cancelled", "expired"]);
+const tenantStatusEnum = pgEnum("tenant_status", ["active", "suspended"]);
+const userStatusEnum = pgEnum("user_status", ["active", "suspended"]);
 
 export const automationStatusEnum = pgEnum("automation_status", [
   "IntakeInProgress",
@@ -18,8 +20,8 @@ export const automationStatusEnum = pgEnum("automation_status", [
   "Archived",
 ]);
 
-const projectPricingStatusEnum = pgEnum("project_pricing_status", ["NotGenerated", "Draft", "Sent", "Signed"]);
-const projectTypeEnum = pgEnum("project_type", ["new_automation", "revision"]);
+const submissionPricingStatusEnum = pgEnum("project_pricing_status", ["NotGenerated", "Draft", "Sent", "Signed"]);
+const submissionTypeEnum = pgEnum("project_type", ["new_automation", "revision"]);
 
 const quoteStatusEnum = pgEnum("quote_status", ["draft", "sent", "accepted", "rejected"]);
 const quoteTypeEnum = pgEnum("quote_type", ["initial_commitment", "change_order"]);
@@ -36,6 +38,7 @@ const taskPriorityEnum = pgEnum("task_priority", ["blocker", "important", "optio
 const notificationPreferenceEnum = pgEnum("notification_preference", ["all", "mentions", "none"]);
 const workflowMessageSenderTypeEnum = pgEnum("workflow_message_sender_type", ["client", "wrk", "system"]);
 const wrkStaffRoleEnum = pgEnum("wrk_staff_role", ["wrk_admin", "wrk_operator", "wrk_viewer", "wrk_master_admin"]);
+const staffInviteStatusEnum = pgEnum("staff_invite_status", ["pending", "accepted", "cancelled", "expired"]);
 
 export const tenants = pgTable(
   "tenants",
@@ -46,6 +49,7 @@ export const tenants = pgTable(
     industry: text("industry"),
     currency: text("currency").default("usd"),
     timezone: text("timezone").default("est"),
+    status: tenantStatusEnum("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -71,6 +75,7 @@ export const users = pgTable(
     tosAcceptedAt: timestamp("tos_accepted_at", { withTimezone: true }),
     tosVersion: text("tos_version"),
     notificationPreference: notificationPreferenceEnum("notification_preference").notNull().default("all"),
+    status: userStatusEnum("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -122,6 +127,25 @@ export const workspaceInvites = pgTable(
     tenantIdx: index("workspace_invites_tenant_idx").on(table.tenantId),
     emailIdx: index("workspace_invites_email_idx").on(table.email),
     tokenUnique: uniqueIndex("workspace_invites_token_unique").on(table.token),
+  })
+);
+
+export const staffInvites = pgTable(
+  "staff_invites",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: text("email").notNull(),
+    role: wrkStaffRoleEnum("role").notNull(),
+    token: text("token").notNull(),
+    status: staffInviteStatusEnum("status").notNull().default("pending"),
+    invitedBy: uuid("invited_by").references(() => users.id, { onDelete: "set null" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    emailIdx: index("staff_invites_email_idx").on(table.email),
+    tokenUnique: uniqueIndex("staff_invites_token_unique").on(table.token),
   })
 );
 
@@ -348,7 +372,7 @@ export const aiJobs = pgTable(
   })
 );
 
-export const projects = pgTable(
+export const submissions = pgTable(
   "projects",
   {
     id: uuid("id").primaryKey().defaultRandom(),
@@ -361,8 +385,8 @@ export const projects = pgTable(
     }),
     name: text("name").notNull(),
     status: automationStatusEnum("status").notNull().default("IntakeInProgress"),
-    pricingStatus: projectPricingStatusEnum("pricing_status").notNull().default("NotGenerated"),
-    type: projectTypeEnum("type").notNull().default("new_automation"),
+    pricingStatus: submissionPricingStatusEnum("pricing_status").notNull().default("NotGenerated"),
+    type: submissionTypeEnum("type").notNull().default("new_automation"),
     checklistProgress: integer("checklist_progress").notNull().default(0),
     ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -414,7 +438,7 @@ export const invoices = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
+    projectId: uuid("project_id").references(() => submissions.id, { onDelete: "set null" }),
     quoteId: uuid("quote_id").references(() => quotes.id, { onDelete: "set null" }),
     type: invoiceTypeEnum("type").notNull().default("setup_fee"),
     status: invoiceStatusEnum("status").notNull().default("pending"),
@@ -496,7 +520,7 @@ export const messages = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").references(() => submissions.id, { onDelete: "cascade" }),
     automationVersionId: uuid("automation_version_id").references(() => automationVersions.id, {
       onDelete: "set null",
     }),
@@ -526,7 +550,7 @@ export const tasks = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").references(() => submissions.id, { onDelete: "cascade" }),
     automationVersionId: uuid("automation_version_id").references(() => automationVersions.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     description: text("description"),
@@ -673,7 +697,9 @@ export type Membership = typeof memberships.$inferSelect;
 export type Automation = typeof automations.$inferSelect;
 export type AutomationVersion = typeof automationVersions.$inferSelect;
 export type AiJob = typeof aiJobs.$inferSelect;
-export type Project = typeof projects.$inferSelect;
+export type Submission = typeof submissions.$inferSelect;
+// Deprecated alias for backward compatibility
+export type Project = Submission;
 export type Quote = typeof quotes.$inferSelect;
 export type CopilotMessage = typeof copilotMessages.$inferSelect;
 export type CopilotAnalysis = typeof copilotAnalyses.$inferSelect;
@@ -685,6 +711,7 @@ export type AutomationMetricConfig = typeof automationMetricConfigs.$inferSelect
 export type AutomationVersionMetric = typeof automationVersionMetrics.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type WorkspaceInvite = typeof workspaceInvites.$inferSelect;
+export type StaffInvite = typeof staffInvites.$inferSelect;
 export type MembershipRole = typeof membershipRoleEnum.enumValues[number];
 export type NotificationPreference = typeof notificationPreferenceEnum.enumValues[number];
 export type CopilotMessageRole = typeof copilotMessageRoleEnum.enumValues[number];

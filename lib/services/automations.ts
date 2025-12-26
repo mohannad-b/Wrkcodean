@@ -3,14 +3,14 @@ import { db } from "@/db";
 import {
   automations,
   automationVersions,
-  projects,
+  submissions,
   quotes,
   tasks,
   users,
   type Automation,
   type AutomationVersion,
   type AutomationVersionMetric,
-  type Project,
+  type Submission,
   type Quote,
   type Task,
   type User,
@@ -583,10 +583,11 @@ export async function deleteAutomationVersion(params: { tenantId: string; automa
 }
 
 export async function ensureProjectForVersion(version: AutomationVersion) {
+  console.warn("[DEPRECATION] ensureProjectForVersion is deprecated; use submissions.");
   const existing = await db
     .select()
-    .from(projects)
-    .where(and(eq(projects.automationVersionId, version.id), eq(projects.tenantId, version.tenantId)))
+    .from(submissions)
+    .where(and(eq(submissions.automationVersionId, version.id), eq(submissions.tenantId, version.tenantId)))
     .limit(1);
 
   if (existing.length > 0) {
@@ -607,7 +608,7 @@ export async function ensureProjectForVersion(version: AutomationVersion) {
   const dbStatus = toDbAutomationStatus("NeedsPricing");
 
   const [project] = await db
-    .insert(projects)
+    .insert(submissions)
     .values({
       tenantId: version.tenantId,
       automationId: version.automationId,
@@ -620,25 +621,25 @@ export async function ensureProjectForVersion(version: AutomationVersion) {
   return project;
 }
 
-async function syncProjectStatus(projectOrVersion: Project | AutomationVersion, nextStatus: AutomationLifecycleStatus) {
+async function syncProjectStatus(projectOrVersion: Submission | AutomationVersion, nextStatus: AutomationLifecycleStatus) {
   const dbStatus = toDbAutomationStatus(nextStatus);
 
   if (isProjectRecord(projectOrVersion)) {
     await db
-      .update(projects)
+      .update(submissions)
       .set({ status: dbStatus })
-      .where(eq(projects.id, projectOrVersion.id));
+      .where(eq(submissions.id, projectOrVersion.id));
     return;
   }
 
   await db
-    .update(projects)
+    .update(submissions)
     .set({ status: dbStatus })
-    .where(eq(projects.automationVersionId, projectOrVersion.id));
+    .where(eq(submissions.automationVersionId, projectOrVersion.id));
 }
 
-function isProjectRecord(record: Project | AutomationVersion): record is Project {
-  return typeof (record as Project).automationVersionId !== "undefined";
+function isProjectRecord(record: Submission | AutomationVersion): record is Submission {
+  return typeof (record as Submission).automationVersionId !== "undefined";
 }
 
 

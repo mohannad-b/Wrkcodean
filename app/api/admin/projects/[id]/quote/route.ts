@@ -4,7 +4,7 @@ import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { db } from "@/db";
 import { projects } from "@/db/schema";
-import { createQuoteForProject } from "@/lib/services/projects";
+import { createQuoteForSubmission as createQuoteForProject } from "@/lib/services/submissions";
 import { logAudit } from "@/lib/audit/log";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
 
@@ -30,6 +30,7 @@ async function parsePayload(request: Request): Promise<QuotePayload> {
 }
 
 export async function POST(request: Request, { params }: RouteParams) {
+  console.warn("[DEPRECATION] /api/admin/projects/[id]/quote is deprecated; use submissions.");
   try {
     const session = await requireTenantSession();
 

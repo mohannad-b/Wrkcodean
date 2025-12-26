@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
-import { getProjectDetail } from "@/lib/services/projects";
+import { getSubmissionDetail as getProjectDetail } from "@/lib/services/submissions";
 import { getAutomationVersionDetail } from "@/lib/services/automations";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
@@ -13,6 +13,7 @@ type RouteParams = {
 };
 
 export async function GET(_request: Request, { params }: RouteParams) {
+  console.warn("[DEPRECATION] /api/admin/projects/[id] is deprecated; use submissions.");
   try {
     const session = await requireTenantSession();
 

@@ -1,53 +1,25 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act } from "@testing-library/react";
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn() }),
-}));
-vi.mock("react-dom/client", () => ({
-  createRoot: () => ({
-    render: () => {},
-    unmount: () => {},
-  }),
-}));
-vi.mock("@testing-library/react", () => ({
-  renderHook: (fn: any) => {
-    const result = { current: fn() };
-    return { result };
-  },
-  act: async (cb: any) => {
-    await cb();
-  },
-}));
-import { renderHook } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, act, waitFor } from "@testing-library/react";
+import { cleanup } from "@testing-library/react";
+import "@testing-library/jest-dom";
 import { useActiveWorkspace } from "@/lib/workspaces/useActiveWorkspace";
 
 const fetchMock = vi.fn();
 
-describe.skip("useActiveWorkspace", () => {
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
+
+describe("useActiveWorkspace", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.stubGlobal("fetch", fetchMock);
-    // Minimal DOM stubs for testing-library
-    // @ts-expect-error
-    global.document = {
-      cookie: "",
-      body: {
-        appendChild: () => {},
-        removeChild: () => {},
-        nodeType: 1,
-      },
-      createElement: () => ({
-        nodeType: 1,
-        style: {},
-        setAttribute: () => {},
-        appendChild: () => {},
-        innerHTML: "",
-      }),
-      querySelector: () => null,
-    };
-    // @ts-expect-error
-    global.window = { document: global.document, navigator: { userAgent: "test" } };
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    fetchMock.mockReset();
   });
 
   it("loads memberships and can switch workspace", async () => {
@@ -64,10 +36,9 @@ describe.skip("useActiveWorkspace", () => {
 
     const { result } = renderHook(() => useActiveWorkspace());
 
-    // wait for load
-    await act(async () => {});
-
-    expect(result.current.memberships).toHaveLength(2);
+    await waitFor(() => {
+      expect(result.current.memberships).toHaveLength(2);
+    });
 
     await act(async () => {
       await result.current.setActiveWorkspace("t2");

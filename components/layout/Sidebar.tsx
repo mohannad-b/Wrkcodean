@@ -31,7 +31,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { WorkspaceSwitcher } from "@/components/workspaces/WorkspaceSwitcher";
+import WorkspaceSwitcher from "@/components/workspaces/WorkspaceSwitcher";
 
 const navItems = [
   { id: "dashboard", icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },

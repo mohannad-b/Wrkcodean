@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import { and, eq, inArray } from "drizzle-orm";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
-import { listAutomationRequestsForTenant, listProjectsForTenant } from "@/lib/services/projects";
+import {
+  listSubmissionsForTenant as listProjectsForTenant,
+  listSubmissionRequestsForTenant as listAutomationRequestsForTenant,
+} from "@/lib/services/submissions";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
 import { db } from "@/db";
@@ -23,6 +26,7 @@ async function parsePayload(request: Request): Promise<CreateProjectPayload> {
 }
 
 export async function GET() {
+  console.warn("[DEPRECATION] /api/admin/projects is deprecated; use submissions.");
   try {
     const session = await requireTenantSession();
 
@@ -109,6 +113,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  console.warn("[DEPRECATION] /api/admin/projects is deprecated; use submissions.");
   try {
     const session = await requireTenantSession();
 
