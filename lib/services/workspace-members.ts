@@ -3,7 +3,9 @@ import { and, count, eq, ne } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
+  automations,
   memberships,
+  tenants,
   users,
   workspaceInvites,
   type MembershipRole,
@@ -11,6 +13,7 @@ import {
 } from "@/db/schema";
 import { logAudit } from "@/lib/audit/log";
 import { ApiError } from "@/lib/api/context";
+import { EmailService } from "@/lib/email/service";
 
 type MembershipRow = typeof memberships.$inferSelect;
 
@@ -19,9 +22,13 @@ export type MemberSummary = {
   userId: string;
   role: MembershipRole;
   status: MembershipRow["status"];
+  firstName: string | null;
+  lastName: string | null;
   name: string;
   email: string;
+  avatarUrl: string | null;
   title: string | null;
+  automationsCount: number;
   lastActiveAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -97,25 +104,44 @@ export function resolvePrimaryRole(roles: string[]): MembershipRole {
 }
 
 export async function listWorkspaceMembers(tenantId: string): Promise<MemberSummary[]> {
+  const automationCounts = db.$with("automation_counts").as(
+    db
+      .select({
+        userId: automations.createdBy,
+        total: count().as("total"),
+      })
+      .from(automations)
+      .where(eq(automations.tenantId, tenantId))
+      .groupBy(automations.createdBy)
+  );
+
   const rows = await db
+    .with(automationCounts)
     .select({
       membershipId: memberships.id,
       userId: memberships.userId,
       role: memberships.role,
       status: memberships.status,
+      firstName: users.firstName,
+      lastName: users.lastName,
       name: users.name,
       email: users.email,
+      avatarUrl: users.avatarUrl,
       title: users.title,
+      automationsCount: automationCounts.total,
+      lastActiveAt: users.updatedAt,
       createdAt: memberships.createdAt,
       updatedAt: memberships.updatedAt,
     })
     .from(memberships)
     .innerJoin(users, eq(users.id, memberships.userId))
+    .leftJoin(automationCounts, eq(automationCounts.userId, users.id))
     .where(eq(memberships.tenantId, tenantId));
 
   return rows.map((row) => ({
     ...row,
-    lastActiveAt: null,
+    automationsCount: Number(row.automationsCount ?? 0),
+    lastActiveAt: row.lastActiveAt ? row.lastActiveAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   }));
@@ -230,6 +256,41 @@ export async function createWorkspaceInvite(params: {
     throw new ApiError(500, "Failed to persist invite");
   }
 
+  const workspace = await db.query.tenants.findFirst({
+    where: eq(tenants.id, params.tenantId),
+  });
+
+  const appBaseUrl =
+    process.env.APP_BASE_URL ?? process.env.NEXT_PUBLIC_APP_BASE_URL ?? "http://localhost:3000";
+  const baseUrl = appBaseUrl.replace(/\/$/, "");
+  const inviteLink = `${baseUrl}/invite/accept?token=${invite.token}`;
+
+  const inviter = await db.query.users.findFirst({
+    where: eq(users.id, params.invitedBy),
+  });
+
+  const recipientFirstName = invite.email.split("@")[0] || "there";
+  const inviterName =
+    `${inviter?.firstName ?? ""} ${inviter?.lastName ?? ""}`.trim() || inviter?.name || inviter?.email || "A teammate";
+
+  await EmailService.sendTransactional({
+    templateId: "transactional.user-invite",
+    idempotencyKey: `workspace-invite:${invite.id}`,
+    to: invite.email,
+    variables: {
+      inviterName,
+      workspaceName: workspace?.name ?? "your workspace",
+      inviteeEmail: invite.email,
+      inviteLink,
+      unsubscribeLink: `${baseUrl}/unsubscribe`,
+      privacyLink: `${baseUrl}/privacy`,
+      helpLink: `${baseUrl}/help`,
+      physicalAddress:
+        process.env.EMAIL_PHYSICAL_ADDRESS ?? "1250 Rene-Levesque West, Montreal, Quebec, Canada",
+      year: new Date().getFullYear().toString(),
+    },
+  });
+
   await logAudit({
     tenantId: params.tenantId,
     userId: params.invitedBy,
@@ -333,7 +394,20 @@ export async function acceptWorkspaceInvite(params: { token: string; userId: str
         createdAt: timestamp,
         updatedAt: timestamp,
       })
+      .onConflictDoNothing({
+        target: [memberships.tenantId, memberships.userId],
+      })
       .returning();
+
+    // If a race inserted the membership, fetch it.
+    if (!membership) {
+      membership = await db.query.memberships.findFirst({
+        where: and(
+          eq(memberships.tenantId, invite.tenantId),
+          eq(memberships.userId, params.userId)
+        ),
+      });
+    }
   }
 
   await db

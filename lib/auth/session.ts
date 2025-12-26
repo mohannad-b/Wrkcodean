@@ -1,7 +1,8 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt, isNull, or } from "drizzle-orm";
 import auth0 from "@/lib/auth/auth0";
 import { db } from "@/db";
-import { memberships, users, type MembershipRole } from "@/db/schema";
+import { memberships, users, workspaceInvites, type MembershipRole } from "@/db/schema";
+import { acceptWorkspaceInvite } from "@/lib/services/workspace-members";
 
 const ALLOWED_DEFAULT_ROLES: readonly MembershipRole[] = ["viewer", "editor", "admin", "owner", "billing"] as const;
 
@@ -51,6 +52,12 @@ export type Auth0UserProfile = {
   name: string;
   avatarUrl: string | null;
 };
+
+function isDuplicateError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  // Postgres unique_violation code 23505 or generic duplicate key text.
+  return message.includes("duplicate key value") || (error as { code?: string })?.code === "23505";
+}
 
 export async function getOrCreateUserFromAuth0Session(): Promise<{
   userRecord: typeof users.$inferSelect;
@@ -157,6 +164,13 @@ export async function getOrCreateUserFromAuth0Session(): Promise<{
         break; // Success, exit retry loop
       } catch (error) {
         createError = error instanceof Error ? error : new Error(String(error));
+        // If a concurrent insert won the race, re-fetch and exit.
+        if (isDuplicateError(error)) {
+          inserted =
+            (await db.query.users.findFirst({ where: eq(users.auth0Id, auth0Id) })) ??
+            (await db.query.users.findFirst({ where: eq(users.email, email) }));
+          if (inserted) break;
+        }
         createRetries--;
         if (createRetries > 0) {
           // Wait before retrying (exponential backoff)
@@ -226,6 +240,35 @@ async function getAuth0BackedSession(): Promise<AppSession> {
     .where(and(eq(memberships.userId, userRecord.id), eq(memberships.status, "active")));
 
   if (membershipRows.length === 0) {
+    // Auto-accept the most recent pending invite for this user (Flow 3).
+    const pendingInvites = await db
+      .select()
+      .from(workspaceInvites)
+      .where(
+        and(
+          eq(workspaceInvites.email, userRecord.email.toLowerCase()),
+          eq(workspaceInvites.status, "pending"),
+          or(isNull(workspaceInvites.expiresAt), gt(workspaceInvites.expiresAt, new Date()))
+        )
+      );
+
+    if (pendingInvites.length >= 1) {
+      // Choose the latest invite (by updatedAt or createdAt).
+      const invite = pendingInvites.sort(
+        (a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0)
+      )[0];
+      await acceptWorkspaceInvite({
+        token: invite.token,
+        userId: userRecord.id,
+        userEmail: userRecord.email,
+      });
+
+      membershipRows = await db
+        .select({ role: memberships.role, tenantId: memberships.tenantId })
+        .from(memberships)
+        .where(and(eq(memberships.userId, userRecord.id), eq(memberships.status, "active")));
+    }
+
     const allowBackfill = process.env.ALLOW_DEFAULT_TENANT_BACKFILL === "true";
     const fallbackTenantId = allowBackfill ? process.env.DEFAULT_TENANT_ID ?? process.env.MOCK_TENANT_ID ?? null : null;
 

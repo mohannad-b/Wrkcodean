@@ -1,16 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { UserPlus, ShieldCheck, Shield, Users as UsersIcon, Trash2, RefreshCw } from "lucide-react";
+import { Plus, Search, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
 
 type Member = {
   membershipId: string;
@@ -18,8 +23,12 @@ type Member = {
   role: string;
   status: string;
   name: string;
+  firstName: string | null;
+  lastName: string | null;
   email: string;
+  avatarUrl: string | null;
   title: string | null;
+  automationsCount: number;
   lastActiveAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -45,6 +54,19 @@ type TeamsResponse = {
   invites: Invite[];
 };
 
+type DisplayRow = {
+  kind: "member" | "invite";
+  id: string;
+  membershipId?: string;
+  name: string;
+  email: string;
+  role: string;
+  status: string;
+  lastActiveAt: string | null;
+  automationsCount: number;
+  avatarUrl: string | null;
+};
+
 const ROLE_LABELS: Record<string, string> = {
   owner: "Owner",
   admin: "Admin",
@@ -53,23 +75,41 @@ const ROLE_LABELS: Record<string, string> = {
   billing: "Billing",
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  active: "bg-emerald-50 text-emerald-700 border-emerald-100",
-  invited: "bg-amber-50 text-amber-700 border-amber-100",
-  removed: "bg-gray-50 text-gray-600 border-gray-200",
-};
-
-function RoleBadge({ role }: { role: string }) {
-  return <Badge variant="outline">{ROLE_LABELS[role] ?? role}</Badge>;
+function formatName(member: Member) {
+  if (member.firstName || member.lastName) {
+    return `${member.firstName ?? ""} ${member.lastName ?? ""}`.trim();
+  }
+  return member.name || member.email;
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const color = STATUS_COLORS[status] ?? "bg-gray-50 text-gray-700 border-gray-200";
-  return (
-    <Badge variant="outline" className={color}>
-      {status}
-    </Badge>
-  );
+function formatLastActive(value: string | null) {
+  if (!value) return "—";
+  const ts = new Date(value).getTime();
+  if (Number.isNaN(ts)) return "—";
+  const diffMs = Date.now() - ts;
+  const minutes = Math.floor(diffMs / (1000 * 60));
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (minutes < 2) return "Just now";
+  if (minutes < 60) return `${minutes} mins ago`;
+  if (hours < 24) return `${hours} hours ago`;
+  if (days === 1) return "Yesterday";
+  return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function activityDotColor(status: string, lastActiveAt: string | null) {
+  if (status !== "active") return "bg-gray-300";
+  if (!lastActiveAt) return "bg-gray-300";
+  const diffMs = Date.now() - new Date(lastActiveAt).getTime();
+  const minutes = Math.floor(diffMs / (1000 * 60));
+  return minutes <= 10 ? "bg-emerald-500" : "bg-gray-300";
+}
+
+function initials(name: string, email: string) {
+  const trimmed = name.trim();
+  if (trimmed) return trimmed.charAt(0).toUpperCase();
+  return (email.charAt(0) || "?").toUpperCase();
 }
 
 export function TeamsPanel() {
@@ -78,13 +118,10 @@ export function TeamsPanel() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<string>("viewer");
   const [inviteSubmitting, setInviteSubmitting] = useState(false);
-  const [transferTarget, setTransferTarget] = useState<string>("");
-  const canManage = data?.canManage ?? false;
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [search, setSearch] = useState("");
 
-  const eligibleTransferMembers = useMemo(
-    () => data?.members.filter((m) => m.status === "active" && m.role !== "owner") ?? [],
-    [data]
-  );
+  const canManage = data?.canManage ?? false;
 
   async function load() {
     setLoading(true);
@@ -126,6 +163,7 @@ export function TeamsPanel() {
       }
       toast.success("Invite sent");
       setInviteEmail("");
+      setInviteDialogOpen(false);
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unable to send invite");
@@ -152,125 +190,226 @@ export function TeamsPanel() {
     }
   };
 
-  const onRemove = async (membershipId: string) => {
-    if (!confirm("Remove this member from the workspace?")) return;
-    try {
-      const res = await fetch(`/api/workspaces/members/${membershipId}`, { method: "DELETE" });
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json?.error ?? "Unable to remove member");
-      }
-      toast.success("Member removed");
-      await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unable to remove member");
-    }
-  };
-
-  const onResend = async (inviteId: string) => {
+  const onResendInvite = async (inviteId: string) => {
     try {
       const res = await fetch(`/api/workspaces/invites/${inviteId}/resend`, { method: "POST" });
       const json = await res.json();
       if (!res.ok) {
         throw new Error(json?.error ?? "Unable to resend invite");
       }
-      toast.success("Invite resent");
+      toast.success("Invitation resent");
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unable to resend invite");
     }
   };
 
-  const onCancelInvite = async (inviteId: string) => {
-    try {
-      const res = await fetch(`/api/workspaces/invites/${inviteId}`, { method: "DELETE" });
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json?.error ?? "Unable to cancel invite");
-      }
-      toast.success("Invite cancelled");
-      await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unable to cancel invite");
-    }
-  };
+  const rows: DisplayRow[] = useMemo(() => {
+    if (!data) return [];
+    const memberRows =
+      data.members?.map((member) => ({
+        kind: "member" as const,
+        id: member.membershipId,
+        membershipId: member.membershipId,
+        name: formatName(member),
+        email: member.email,
+        role: member.role,
+        status: member.status,
+        lastActiveAt: member.lastActiveAt,
+        automationsCount: member.automationsCount ?? 0,
+        avatarUrl: member.avatarUrl,
+      })) ?? [];
 
-  const onTransfer = async () => {
-    if (!transferTarget) {
-      toast.error("Select a teammate to transfer ownership to.");
-      return;
-    }
-    if (!confirm("Transfer ownership? You will become an Admin.")) return;
-    try {
-      const res = await fetch("/api/workspaces/ownership", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ membershipId: transferTarget }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json?.error ?? "Unable to transfer ownership");
-      }
-      toast.success("Ownership transferred");
-      setTransferTarget("");
-      await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unable to transfer ownership");
-    }
-  };
+    const inviteRows =
+      data.invites?.map((invite) => ({
+        kind: "invite" as const,
+        id: invite.id,
+        name: invite.email,
+        email: invite.email,
+        role: invite.role,
+        status: invite.status || "invited",
+        lastActiveAt: invite.createdAt,
+        automationsCount: 0,
+        avatarUrl: null,
+      })) ?? [];
 
-  if (loading) {
-    return (
-      <Card>
-        <CardContent className="p-6 text-sm text-gray-500">Loading team…</CardContent>
-      </Card>
+    return [...memberRows, ...inviteRows];
+  }, [data]);
+
+  const filteredRows = useMemo(() => {
+    if (!search.trim()) return rows;
+    const term = search.toLowerCase();
+    return rows.filter(
+      (row) => row.name.toLowerCase().includes(term) || row.email.toLowerCase().includes(term)
     );
-  }
+  }, [rows, search]);
 
-  if (!data) {
-    return (
-      <Card>
-        <CardContent className="p-6 text-sm text-gray-500">Unable to load team data.</CardContent>
-      </Card>
-    );
-  }
+  const header = (
+    <div className="grid grid-cols-[minmax(0,3fr)_minmax(0,1.4fr)_minmax(0,1.4fr)_minmax(0,1fr)] px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">
+      <span>User</span>
+      <span>Role</span>
+      <span>Last Active</span>
+      <span className="text-right">Automations</span>
+    </div>
+  );
+
+  const renderSkeleton = () =>
+    Array.from({ length: 4 }).map((_, idx) => (
+      <div
+        key={`skeleton-${idx}`}
+        className="grid grid-cols-[minmax(0,3fr)_minmax(0,1.4fr)_minmax(0,1.4fr)_minmax(0,1fr)] items-center px-6 py-4 gap-4"
+      >
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-full bg-gray-100" />
+          <div className="space-y-2 w-40">
+            <div className="h-3 rounded bg-gray-100" />
+            <div className="h-3 rounded bg-gray-100 w-3/4" />
+          </div>
+        </div>
+        <div className="h-9 rounded-lg bg-gray-100" />
+        <div className="h-4 rounded bg-gray-100 w-24" />
+        <div className="h-4 rounded bg-gray-100 w-12 ml-auto" />
+      </div>
+    ));
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0">
-          <div>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <UsersIcon className="h-4 w-4" /> Workspace Team
-            </CardTitle>
-            <p className="text-sm text-gray-500">
-              Roles govern access across Workflows, Copilot, runs, integrations, and billing.
-            </p>
+      <div className="space-y-1">
+        <h2 className="text-2xl font-bold text-[#0A0A0A]">Team Members</h2>
+        <p className="text-sm text-gray-500">Manage access and roles for your workspace.</p>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+        <div className="flex flex-col gap-4 p-6 border-b border-gray-100">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="relative w-full md:max-w-md">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by name or email..."
+                className="pl-9 pr-12 h-11 rounded-xl bg-gray-50 border-gray-200 focus:border-[#E43632] focus:ring-[#E43632]/30"
+              />
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100"
+                aria-label="Filter"
+              >
+                <SlidersHorizontal size={16} />
+              </button>
+            </div>
+            {canManage ? (
+              <Button
+                className="h-11 rounded-xl bg-[#E43632] hover:bg-[#c12e2a] text-white shadow-sm"
+                onClick={() => setInviteDialogOpen(true)}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Invite Member
+              </Button>
+            ) : null}
           </div>
-          <Button variant="ghost" size="sm" onClick={() => load()} disabled={loading}>
-            <RefreshCw className="h-4 w-4 mr-2" /> Refresh
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        </div>
+
+        <div className="min-w-full">
+          {header}
+          <div className="divide-y divide-gray-100">
+            {loading && renderSkeleton()}
+            {!loading &&
+              filteredRows.map((row) => {
+                const canEditRole =
+                  row.kind === "member" &&
+                  canManage &&
+                  row.status === "active" &&
+                  (row.role !== "owner" || data?.currentRole === "owner");
+                return (
+                  <div
+                    key={row.id}
+                    className="grid grid-cols-[minmax(0,3fr)_minmax(0,1.4fr)_minmax(0,1.4fr)_minmax(0,1fr)] items-center px-6 py-5 gap-4"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Avatar className="h-10 w-10 border border-gray-100">
+                        <AvatarImage src={row.avatarUrl ?? undefined} />
+                        <AvatarFallback className="bg-gray-100 text-gray-600">
+                          {initials(row.name, row.email)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{row.name}</p>
+                        <p className="text-xs text-gray-500 truncate">{row.email}</p>
+                      </div>
+                    </div>
+
+                    <div className="w-full max-w-xs">
+                      <Select
+                        value={row.role}
+                        onValueChange={(value) => row.membershipId && onChangeRole(row.membershipId, value)}
+                        disabled={!canEditRole || row.kind === "invite"}
+                      >
+                        <SelectTrigger className="h-10 rounded-lg border-gray-200">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {data?.availableRoles
+                            ?.filter((role) => !(role === "owner" && data.currentRole !== "owner"))
+                            .map((role) => (
+                              <SelectItem key={role} value={role} disabled={row.kind === "invite"}>
+                                {ROLE_LABELS[role] ?? role}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-sm text-gray-700">
+                      <span
+                        className={cn(
+                          "h-2.5 w-2.5 rounded-full",
+                          row.kind === "invite" ? "bg-amber-500" : activityDotColor(row.status, row.lastActiveAt)
+                        )}
+                      />
+                      <span>
+                        {row.kind === "invite" ? "Invitation sent" : formatLastActive(row.lastActiveAt)}
+                      </span>
+                    </div>
+
+                    <div className="text-right text-sm font-semibold text-gray-900">
+                      {row.automationsCount?.toLocaleString() ?? "0"}
+                    </div>
+                  </div>
+                );
+              })}
+            {!loading && filteredRows.length === 0 && (
+              <div className="px-6 py-6 text-sm text-gray-500">No team members found.</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
+        <DialogContent className="sm:max-w-[460px] bg-white">
+          <DialogHeader className="space-y-1">
+            <DialogTitle className="text-lg font-semibold">Invite member</DialogTitle>
+            <DialogDescription>Send an invitation to join this workspace.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Email</Label>
+              <label className="text-sm font-medium text-gray-800">Email</label>
               <Input
                 placeholder="name@company.com"
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
-                disabled={!canManage}
+                className="h-11"
               />
             </div>
             <div className="space-y-2">
-              <Label>Role</Label>
-              <Select value={inviteRole} onValueChange={setInviteRole} disabled={!canManage}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select role" />
+              <label className="text-sm font-medium text-gray-800">Role</label>
+              <Select value={inviteRole} onValueChange={setInviteRole}>
+                <SelectTrigger className="h-11">
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {data.availableRoles
-                    .filter((role) => role !== "owner")
+                  {data?.availableRoles
+                    ?.filter((role) => role !== "owner")
                     .map((role) => (
                       <SelectItem key={role} value={role}>
                         {ROLE_LABELS[role] ?? role}
@@ -279,154 +418,21 @@ export function TeamsPanel() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-end">
-              <Button
-                className="w-full"
-                disabled={!canManage || inviteSubmitting}
-                onClick={onInvite}
-              >
-                <UserPlus className="h-4 w-4 mr-2" />
-                {inviteSubmitting ? "Sending…" : "Send Invite"}
-              </Button>
-            </div>
           </div>
-
-          <Separator />
-
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-gray-800">Members</h3>
-              <span className="text-xs text-gray-500">{data.members.length} total</span>
-            </div>
-            <div className="border border-gray-200 rounded-lg divide-y">
-              {data.members.map((member) => (
-                <div key={member.membershipId} className="p-4 flex items-center gap-4">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{member.name || member.email}</p>
-                    <p className="text-xs text-gray-500 truncate">{member.email}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <StatusBadge status={member.status} />
-                    <RoleBadge role={member.role} />
-                  </div>
-                  <div className="w-40">
-                    <Select
-                      value={member.role}
-                      onValueChange={(value) => onChangeRole(member.membershipId, value)}
-                      disabled={
-                        !canManage ||
-                        (member.role === "owner" && data.currentRole !== "owner") ||
-                        member.status !== "active"
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {data.availableRoles.map((role) => (
-                          <SelectItem key={role} value={role} disabled={role === "owner" && data.currentRole !== "owner"}>
-                            {ROLE_LABELS[role] ?? role}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="w-28 flex justify-end">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="text-gray-500 hover:text-red-600"
-                      disabled={
-                        !canManage || member.status !== "active" || (member.role === "owner" && data.currentRole !== "owner")
-                      }
-                      onClick={() => onRemove(member.membershipId)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
-              {data.members.length === 0 && (
-                <div className="p-4 text-sm text-gray-500">No members yet.</div>
-              )}
-            </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setInviteDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={onInvite}
+              disabled={inviteSubmitting || !inviteEmail.trim()}
+              className="bg-[#E43632] hover:bg-[#c12e2a]"
+            >
+              {inviteSubmitting ? "Sending..." : "Send invite"}
+            </Button>
           </div>
-
-          {data.invites.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Shield className="h-4 w-4 text-gray-500" />
-                <h3 className="text-sm font-semibold text-gray-800">Pending Invites</h3>
-              </div>
-              <div className="border border-gray-200 rounded-lg divide-y">
-                {data.invites.map((invite) => (
-                  <div key={invite.id} className="p-4 flex items-center gap-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 truncate">{invite.email}</p>
-                      <p className="text-xs text-gray-500">Expires {invite.expiresAt ? new Date(invite.expiresAt).toLocaleDateString() : "soon"}</p>
-                    </div>
-                    <RoleBadge role={invite.role} />
-                    <StatusBadge status={invite.status} />
-                    <div className="flex gap-2">
-                      <Button variant="ghost" size="sm" disabled={!canManage} onClick={() => onResend(invite.id)}>
-                        Resend
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-red-600"
-                        disabled={!canManage}
-                        onClick={() => onCancelInvite(invite.id)}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {data.currentRole === "owner" && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4" /> Transfer Ownership
-            </CardTitle>
-            <p className="text-sm text-gray-500">
-              Ownership moves all workspace controls. After transfer you become an Admin.
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>New Owner</Label>
-                <Select value={transferTarget} onValueChange={setTransferTarget}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select member" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {eligibleTransferMembers.map((member) => (
-                      <SelectItem key={member.membershipId} value={member.membershipId}>
-                        {member.name || member.email} — {ROLE_LABELS[member.role] ?? member.role}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-end">
-                <Button className="w-full bg-red-600 hover:bg-red-700" onClick={onTransfer}>
-                  Transfer Ownership
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
-
-

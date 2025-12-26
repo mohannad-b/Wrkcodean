@@ -49,14 +49,6 @@ export async function getTenantScopedUser(session: AppSession): Promise<User | n
     return null;
   }
 
-  const membership = await db.query.memberships.findFirst({
-    where: and(eq(memberships.userId, session.userId), eq(memberships.tenantId, session.tenantId)),
-  });
-
-  if (!membership) {
-    return null;
-  }
-
   return user;
 }
 
