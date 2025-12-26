@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const sessionMock = { userId: "u1", tenantId: "t1", roles: ["workspace_member"] };
 const requireTenantSessionMock = vi.fn();
 const canMock = vi.fn();
-const getProjectDetailMock = vi.fn();
+const getSubmissionDetailMock = vi.fn();
 const getAutomationVersionDetailMock = vi.fn();
 
 vi.mock("@/lib/api/context", () => ({
@@ -23,29 +23,29 @@ vi.mock("@/lib/auth/rbac", () => ({
   can: canMock,
 }));
 
-vi.mock("@/lib/services/projects", () => ({
-  getProjectDetail: getProjectDetailMock,
+vi.mock("@/lib/services/submissions", () => ({
+  getSubmissionDetail: getSubmissionDetailMock,
 }));
 
 vi.mock("@/lib/services/automations", () => ({
   getAutomationVersionDetail: getAutomationVersionDetailMock,
 }));
 
-describe("GET /api/admin/projects/:id (detail)", () => {
+describe("GET /api/admin/projects/:id (detail) wrapper", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
     requireTenantSessionMock.mockResolvedValue(sessionMock);
     canMock.mockImplementation((user: any, action: string) => {
-      if (action === "admin:project:read") return false;
+      if (action === "admin:submission:read") return false;
       if (action === "automation:read") return true;
       return false;
     });
   });
 
   it("returns project detail with workflow and tasks when found by project id", async () => {
-    getProjectDetailMock.mockResolvedValue({
-      project: {
+    getSubmissionDetailMock.mockResolvedValue({
+      submission: {
         id: "proj-1",
         name: "Automation X",
         status: "BuildInProgress",
@@ -102,15 +102,15 @@ describe("GET /api/admin/projects/:id (detail)", () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(payload.project.id).toBe("proj-1");
-    expect(payload.project.version.workflow).toBeDefined();
-    expect(payload.project.version.intakeProgress).toBe(80);
-    expect(payload.project.tasks).toHaveLength(1);
-    expect(payload.project.tasks[0].assignee?.name).toBe("Alex");
+    expect(payload.submission.id).toBe("proj-1");
+    expect(payload.submission.version.workflow).toBeDefined();
+    expect(payload.submission.version.intakeProgress).toBe(80);
+    expect(payload.submission.tasks).toHaveLength(1);
+    expect(payload.submission.tasks[0].assignee?.name).toBe("Alex");
   });
 
   it("falls back to automation version detail when no project row exists", async () => {
-    getProjectDetailMock.mockResolvedValue(null);
+    getSubmissionDetailMock.mockResolvedValue(null);
     getAutomationVersionDetailMock.mockResolvedValue({
       version: {
         id: "ver-2",
@@ -131,7 +131,7 @@ describe("GET /api/admin/projects/:id (detail)", () => {
         },
       },
       automation: { id: "auto-2", name: "Auto 2", description: null },
-      project: null,
+      submission: null,
       latestQuote: null,
       tasks: [{ id: "t2", title: "Setup", status: "pending", priority: "optional", dueDate: null }],
     });
@@ -141,11 +141,11 @@ describe("GET /api/admin/projects/:id (detail)", () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(payload.project.id).toBe("ver-2");
-    expect(payload.project.version.workflow).toBeDefined();
-    expect(payload.project.tasks).toHaveLength(1);
+    expect(payload.submission.id).toBe("ver-2");
+    expect(payload.submission.version.workflow).toBeDefined();
+    expect(payload.submission.tasks).toHaveLength(1);
     // fallback tasks do not include assignee details
-    expect(payload.project.tasks[0].assignee).toBeNull();
+    expect(payload.submission.tasks[0].assignee).toBeNull();
   });
 
   it("returns 403 when user lacks permissions", async () => {

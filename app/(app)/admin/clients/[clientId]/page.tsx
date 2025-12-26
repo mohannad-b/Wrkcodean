@@ -51,7 +51,7 @@ const mockClientContacts = [
 const mockClientChat: ProjectMessage[] = [
   {
     id: "1",
-    projectId: "",
+    submissionId: "",
     type: "client",
     sender: { name: "John Doe", role: "Client Lead" },
     text: "Hey Sarah, quick question about the Invoice Processing update.",
@@ -59,7 +59,7 @@ const mockClientChat: ProjectMessage[] = [
   },
   {
     id: "2",
-    projectId: "",
+    submissionId: "",
     type: "ops",
     sender: { name: "Sarah Connor", role: "Head of Ops", avatar: "https://github.com/shadcn.png" },
     text: "Hi John! Sure thing, what's on your mind?",
@@ -67,7 +67,7 @@ const mockClientChat: ProjectMessage[] = [
   },
   {
     id: "3",
-    projectId: "",
+    submissionId: "",
     type: "client",
     sender: { name: "John Doe", role: "Client Lead" },
     text: "Are we still on track for the v1.1 release next week?",
@@ -75,7 +75,7 @@ const mockClientChat: ProjectMessage[] = [
   },
   {
     id: "4",
-    projectId: "",
+    submissionId: "",
     type: "ops",
     sender: { name: "Sarah Connor", role: "Head of Ops", avatar: "https://github.com/shadcn.png" },
     text: "Yes, we are currently in the final QA phase. Looks good for Tuesday.",
@@ -137,7 +137,7 @@ function OverviewTab({ client, clientProjects, spendSummary }: { client: Client;
 
         <Card className="p-4 flex flex-col gap-2 border-gray-200 shadow-sm">
           <div className="flex justify-between items-start">
-            <p className="text-xs font-bold text-gray-500 uppercase">Active Projects</p>
+            <p className="text-xs font-bold text-gray-500 uppercase">Active Submissions</p>
             <LayoutGrid size={16} className="text-gray-400" />
           </div>
           <div>
@@ -151,10 +151,10 @@ function OverviewTab({ client, clientProjects, spendSummary }: { client: Client;
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Projects Table (2/3) */}
+        {/* Submissions Table (2/3) */}
         <div className="lg:col-span-2 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
           <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-            <h3 className="font-bold text-[#0A0A0A]">Spend by Project</h3>
+            <h3 className="font-bold text-[#0A0A0A]">Spend by Submission</h3>
             <Button variant="ghost" size="sm" className="text-xs text-gray-500">
               View All
             </Button>
@@ -311,9 +311,9 @@ function ProjectsTab({ clientProjects }: { clientProjects: AdminProject[] }) {
                 </td>
                 <td className="px-6 py-4 text-gray-600 text-xs">{p.owner.name}</td>
                 <td className="px-6 py-4 text-right">
-                  <Link href={`/admin/projects/${p.id}`}>
+                  <Link href={`/admin/submissions/${p.id}`}>
                     <Button variant="ghost" size="sm" className="text-xs text-gray-500 hover:text-[#0A0A0A]">
-                      Open Project <ExternalLink size={12} className="ml-1" />
+                      Open Submission <ExternalLink size={12} className="ml-1" />
                     </Button>
                   </Link>
                 </td>

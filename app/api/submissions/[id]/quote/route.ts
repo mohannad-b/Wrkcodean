@@ -1,3 +1,3 @@
-// Compatibility wrapper for submissions quotes; delegates to legacy projects quote handler with deprecation notice.
-export { POST } from "@/app/api/admin/projects/[id]/quote/route";
+// Compatibility wrapper for submissions quotes; delegates to canonical admin submissions quote handler.
+export { POST } from "@/app/api/admin/submissions/[id]/quote/route";
 

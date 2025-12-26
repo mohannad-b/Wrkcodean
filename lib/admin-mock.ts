@@ -1,18 +1,27 @@
 import {
   Client,
+  AdminSubmission,
   AdminProject,
   ProjectStatus,
   PricingStatus,
-  ProjectMessage,
+  SubmissionMessage,
   MessageType,
   SpendSummary,
 } from "./types";
 
 // Re-export types for convenience
-export type { ProjectStatus, PricingStatus, MessageType, AdminProject, ProjectMessage, SpendSummary };
+export type {
+  ProjectStatus,
+  PricingStatus,
+  MessageType,
+  AdminSubmission,
+  AdminProject,
+  SubmissionMessage,
+  SpendSummary,
+};
 
-// Mock Projects
-export const mockAdminProjects: AdminProject[] = [
+// Mock Submissions
+export const mockAdminSubmissions: AdminSubmission[] = [
   {
     id: "1",
     clientId: "c1",
@@ -165,12 +174,12 @@ export const mockAdminProjects: AdminProject[] = [
   },
 ];
 
-// Mock Messages by Project ID
-export const mockProjectMessages: Record<string, ProjectMessage[]> = {
+// Mock Messages by Submission ID
+export const mockSubmissionMessages: Record<string, SubmissionMessage[]> = {
   "1": [
     {
       id: "m1",
-      projectId: "1",
+      submissionId: "1",
       type: "client",
       sender: { name: "John Doe", role: "Client Lead" },
       text: "Hi team, just wanted to check if the new invoice threshold logic has been implemented yet?",
@@ -178,7 +187,7 @@ export const mockProjectMessages: Record<string, ProjectMessage[]> = {
     },
     {
       id: "m2",
-      projectId: "1",
+      submissionId: "1",
       type: "internal_note",
       sender: { name: "Mike Ross", role: "Solutions Engineer", avatar: "https://github.com/shadcn.png" },
       text: "Checking the blueprint now. I think we need to update the Filter node to handle >$10k specifically.",
@@ -187,7 +196,7 @@ export const mockProjectMessages: Record<string, ProjectMessage[]> = {
     },
     {
       id: "m3",
-      projectId: "1",
+      submissionId: "1",
       type: "ops",
       sender: { name: "Mike Ross", role: "Solutions Engineer", avatar: "https://github.com/shadcn.png" },
       text: "Hey John! We are finalizing that logic today. It will be ready for review by tomorrow morning.",
@@ -197,7 +206,7 @@ export const mockProjectMessages: Record<string, ProjectMessage[]> = {
   "2": [
     {
       id: "m4",
-      projectId: "2",
+      submissionId: "2",
       type: "client",
       sender: { name: "John Doe", role: "Client Lead" },
       text: "Great, thanks Mike. Also attaching the updated sanctions list for reference.",
@@ -206,7 +215,7 @@ export const mockProjectMessages: Record<string, ProjectMessage[]> = {
     },
     {
       id: "m5",
-      projectId: "2",
+      submissionId: "2",
       type: "internal_note",
       sender: { name: "Sarah C.", role: "Head of Ops", avatar: "https://github.com/shadcn.png" },
       text: "Needs verification of the Sanctions API rate limits. We might need to cache results.",
@@ -217,7 +226,7 @@ export const mockProjectMessages: Record<string, ProjectMessage[]> = {
   "3": [
     {
       id: "m6",
-      projectId: "3",
+      submissionId: "3",
       type: "client",
       sender: { name: "Jane Smith", role: "HR Director" },
       text: "When can we expect the onboarding automation to be ready?",
@@ -228,10 +237,10 @@ export const mockProjectMessages: Record<string, ProjectMessage[]> = {
 
 // Helper to get spend summary for a client
 export function getClientSpendSummary(client: Client): SpendSummary {
-  const clientProjects = mockAdminProjects.filter((p) => p.clientId === client.id);
+  const clientSubmissions = mockAdminSubmissions.filter((p) => p.clientId === client.id);
   const committedMonthlySpend = client.committedSpend;
   const currentMonthSpend = client.activeSpend;
-  const setupFeesCollected = clientProjects
+  const setupFeesCollected = clientSubmissions
     .filter((p) => p.pricingStatus === "Signed" && p.setupFee)
     .reduce((sum, p) => sum + (p.setupFee || 0), 0);
   const utilizationPercent = committedMonthlySpend > 0 
@@ -245,4 +254,8 @@ export function getClientSpendSummary(client: Client): SpendSummary {
     utilizationPercent,
   };
 }
+
+// Legacy aliases for migration window
+export const mockAdminProjects = mockAdminSubmissions;
+export const mockProjectMessages = mockSubmissionMessages;
 

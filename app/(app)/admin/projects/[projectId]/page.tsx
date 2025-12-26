@@ -17,8 +17,8 @@ import {
   ShieldAlert,
   Signature,
 } from "lucide-react";
-import { mockProjectMessages } from "@/lib/admin-mock";
-import type { AdminProject, PricingStatus, ProjectStatus } from "@/lib/types";
+import { mockSubmissionMessages } from "@/lib/admin-mock";
+import type { AdminSubmission, PricingStatus, ProjectStatus } from "@/lib/types";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { PricingOverridePanel } from "@/components/admin/PricingOverridePanel";
@@ -75,7 +75,7 @@ type Quote = {
   clientMessage: string | null;
 };
 
-type ProjectDetail = {
+type SubmissionDetail = {
   id: string;
   name: string;
   status: AutomationLifecycleStatus | string;
@@ -100,7 +100,7 @@ type ProjectDetail = {
 };
 
 type PricingTabProps = {
-  project: AdminProject;
+  project: AdminSubmission;
   latestQuote: Quote | null;
   onPricingSave: (payload: { setupFee: number; unitPrice: number }) => void;
   savingQuote: boolean;
@@ -135,7 +135,7 @@ type ProjectTask = {
   } | null;
 };
 
-const mapLifecycleToProjectStatus = (status?: AutomationLifecycleStatus | string | null): ProjectStatus => {
+const mapLifecycleToSubmissionStatus = (status?: AutomationLifecycleStatus | string | null): ProjectStatus => {
   switch (status) {
     case "NeedsPricing":
       return "Needs Pricing";
@@ -172,14 +172,15 @@ const mapQuoteStatusToPricing = (status?: string | null): PricingStatus => {
   }
 };
 
-interface ProjectDetailPageProps {
+interface SubmissionDetailPageProps {
   params: {
-    projectId: string;
+    submissionId?: string;
+    projectId?: string; // legacy alias
   };
 }
 
 // Overview Tab Component
-function OverviewTab({ project, checklistItems }: { project: AdminProject; checklistItems: ChecklistItem[] }) {
+function OverviewTab({ project, checklistItems }: { project: AdminSubmission; checklistItems: ChecklistItem[] }) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6 h-full overflow-y-auto">
       {/* Summary Card */}
@@ -294,8 +295,8 @@ function OverviewTab({ project, checklistItems }: { project: AdminProject; check
   );
 }
 
-interface ProjectHeaderProps {
-  displayProject: AdminProject;
+interface SubmissionHeaderProps {
+  displayProject: AdminSubmission;
   projectName: string;
   canMarkLive: boolean;
   markingLive: boolean;
@@ -305,7 +306,7 @@ interface ProjectHeaderProps {
   updatingQuote: "SENT" | "SIGNED" | null;
 }
 
-function ProjectHeader({
+function SubmissionHeader({
   displayProject,
   projectName,
   canMarkLive,
@@ -314,13 +315,13 @@ function ProjectHeader({
   latestQuote,
   onMarkQuoteSigned,
   updatingQuote,
-}: ProjectHeaderProps) {
+}: SubmissionHeaderProps) {
   return (
     <header className="bg-white border-b border-gray-200 px-6 py-4 shrink-0 z-20 shadow-sm">
       <div className="flex flex-col gap-4">
         <div className="flex items-center gap-2 text-xs text-gray-500">
-          <Link href="/admin/projects" className="hover:text-[#0A0A0A] flex items-center gap-1 transition-colors">
-            <ArrowLeft size={12} /> Projects
+          <Link href="/admin/submissions" className="hover:text-[#0A0A0A] flex items-center gap-1 transition-colors">
+            <ArrowLeft size={12} /> Submissions
           </Link>
           <span>/</span>
           <span className="font-bold text-[#0A0A0A]">{displayProject.clientName}</span>
@@ -345,7 +346,7 @@ function ProjectHeader({
 }
 
 interface CommercialSummaryProps {
-  displayProject: AdminProject;
+  displayProject: AdminSubmission;
   projectName: string;
 }
 
@@ -398,7 +399,7 @@ function AdminActions({ canMarkLive, markingLive, onMarkLive, canMarkSigned, onM
   return (
     <div className="flex gap-2 flex-wrap">
       <Button variant="outline" asChild>
-        <Link href="/admin/projects">Back to projects</Link>
+        <Link href="/admin/submissions">Back to submissions</Link>
       </Button>
       {canMarkLive ? (
         <Button onClick={onMarkLive} disabled={markingLive}>
@@ -628,7 +629,7 @@ function ActivityTab({ automationVersionId: _automationVersionId }: { automation
   return (
     <div className="max-w-3xl mx-auto p-8 space-y-8">
       <div className="flex items-center justify-between">
-        <h3 className="font-bold text-lg text-[#0A0A0A]">Project Timeline</h3>
+        <h3 className="font-bold text-lg text-[#0A0A0A]">Submission Timeline</h3>
         <Button variant="outline" size="sm">
           <FileText size={14} className="mr-2" /> Export Log
         </Button>
@@ -655,7 +656,7 @@ function ActivityTab({ automationVersionId: _automationVersionId }: { automation
         ))}
         <div className="relative pl-8">
           <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 border-white bg-gray-200 shadow-sm" />
-          <span className="text-sm text-gray-400 italic">Project Created (Oct 20)</span>
+          <span className="text-sm text-gray-400 italic">Submission Created (Oct 20)</span>
         </div>
       </div>
     </div>
@@ -798,8 +799,9 @@ function QuoteStatusCard({ latestQuote, onQuoteStatus, updatingQuote }: QuoteSta
   );
 }
 
-export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
-  const [project, setProject] = useState<ProjectDetail | null>(null);
+export default function SubmissionDetailPage({ params }: SubmissionDetailPageProps) {
+  const submissionId = params.submissionId ?? params.projectId;
+  const [project, setProject] = useState<SubmissionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
@@ -884,17 +886,28 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
   );
   const [emailSendStatus, setEmailSendStatus] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (params.projectId && !params.submissionId) {
+      console.warn("[DEPRECATION] /admin/projects/[id] is deprecated; use /admin/submissions/[id].");
+    }
+  }, [params.projectId, params.submissionId]);
+
   const fetchProject = useCallback(async () => {
     setLoading(true);
     setError(null);
+    if (!submissionId) {
+      setError("Missing submission id");
+      setLoading(false);
+      return;
+    }
     try {
-      const response = await fetch(`/api/admin/projects/${params.projectId}`, { cache: "no-store" });
+      const response = await fetch(`/api/admin/submissions/${submissionId}`, { cache: "no-store" });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error ?? "Failed to load project");
+        throw new Error(payload.error ?? "Failed to load submission");
       }
-      const data = (await response.json()) as { project: ProjectDetail };
-      setProject(data.project);
+      const data = (await response.json()) as { submission: SubmissionDetail };
+      setProject(data.submission);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error");
       setProject(null);
@@ -965,9 +978,9 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
   if (!project) {
     return (
       <div className="p-10 space-y-3">
-        <p className="text-sm text-gray-600">Project not found.</p>
+        <p className="text-sm text-gray-600">Submission not found.</p>
         <Button variant="link" className="px-0" asChild>
-          <Link href="/admin/projects">Back to projects</Link>
+          <Link href="/admin/submissions">Back to submissions</Link>
         </Button>
       </div>
     );
@@ -986,14 +999,14 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
     return `${days}d ago`;
   };
 
-  const displayProject: AdminProject = {
+  const displayProject: AdminSubmission = {
     id: project.id,
     clientId: project.automation?.id ?? project.id,
     clientName: project.automation?.name ?? "Client",
     name: project.name ?? project.automation?.name ?? "Automation",
     version: project.version?.versionLabel ?? "v1.0",
     type: project.version?.versionLabel?.toLowerCase().includes("v1.") ? "New Automation" : "Revision",
-    status: mapLifecycleToProjectStatus(project.status),
+    status: mapLifecycleToSubmissionStatus(project.status),
     pricingStatus: latestQuote ? mapQuoteStatusToPricing(latestQuote.status) : "Not Generated",
     checklistProgress: completionPercent,
     systems: derivedSystems,
@@ -1009,7 +1022,7 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
     effectiveUnitPrice: latestQuote ? Number(latestQuote.unitPrice) : undefined,
   };
 
-  const messages = mockProjectMessages[displayProject.id] || [];
+  const messages = mockSubmissionMessages[displayProject.id] || [];
 
   const handleQuoteStatus = async (nextStatus: "SENT" | "SIGNED") => {
     if (!latestQuote) return;
@@ -1056,13 +1069,13 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
   };
 
   const handlePricingSave = async ({ setupFee, unitPrice }: { setupFee: number; unitPrice: number }) => {
-    if (!project.version || savingQuote) {
+    if (!project.version || savingQuote || !submissionId) {
       return;
     }
     setSavingQuote(true);
     setError(null);
     try {
-      const response = await fetch(`/api/admin/projects/${params.projectId}/quote`, {
+      const response = await fetch(`/api/admin/submissions/${submissionId}/quote`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ setupFee, unitPrice }),
@@ -1104,7 +1117,7 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
 
   return (
     <div className="flex flex-col h-full bg-gray-50 text-[#1A1A1A] font-sans">
-      <ProjectHeader
+      <SubmissionHeader
         displayProject={displayProject}
         projectName={project.name}
         canMarkLive={project.version?.status === "BuildInProgress"}
@@ -1237,8 +1250,8 @@ export default function ProjectDetailPage({ params }: ProjectDetailPageProps) {
                 ) : (
                   <div className="h-full flex items-center justify-center text-gray-500">
                     <div className="text-center">
-                      <p className="text-sm">No automation version found for this project.</p>
-                      <p className="text-xs text-gray-400 mt-2">Chat is only available for projects with an automation version.</p>
+                      <p className="text-sm">No automation version found for this submission.</p>
+                      <p className="text-xs text-gray-400 mt-2">Chat is only available for submissions with an automation version.</p>
                     </div>
                   </div>
                 )}

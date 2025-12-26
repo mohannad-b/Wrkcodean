@@ -71,6 +71,13 @@
       "when": 1765325074771,
       "tag": "add_automation_version_tags",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "0010",
+      "when": 1765400000000,
+      "tag": "rename_projects_to_submissions",
+      "breakpoints": true
     }
   ]
 }

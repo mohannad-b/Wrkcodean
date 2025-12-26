@@ -5,6 +5,7 @@ const canMock = vi.fn();
 const updateQuoteStatusMock = vi.fn();
 const signQuoteAndPromoteMock = vi.fn();
 const logAuditMock = vi.fn();
+const requireTenantSessionMock = vi.fn();
 
 const limitMock = vi.fn();
 const whereMock = vi.fn(() => ({ limit: limitMock }));
@@ -17,9 +18,26 @@ vi.mock("@/lib/auth/session", () => ({
   getSession: getSessionMock,
 }));
 
-vi.mock("@/lib/auth/rbac", () => ({
-  can: canMock,
+vi.mock("@/lib/api/context", () => ({
+  requireTenantSession: requireTenantSessionMock,
+  ApiError: class ApiError extends Error {
+    status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.status = status;
+    }
+  },
+  handleApiError: (error: any) =>
+    new Response(JSON.stringify({ error: error.message }), { status: error.status ?? 500 }),
 }));
+
+vi.mock("@/lib/auth/rbac", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/auth/rbac")>("@/lib/auth/rbac");
+  return {
+    ...actual,
+    can: canMock,
+  };
+});
 
 class MockSigningError extends Error {
   status: number;
@@ -31,7 +49,7 @@ class MockSigningError extends Error {
   }
 }
 
-vi.mock("@/lib/services/projects", () => ({
+vi.mock("@/lib/services/submissions", () => ({
   updateQuoteStatus: updateQuoteStatusMock,
   signQuoteAndPromote: signQuoteAndPromoteMock,
   SigningError: MockSigningError,
@@ -50,9 +68,9 @@ vi.mock("@/db", () => ({
 
 describe("PATCH /api/quotes/[id]/status", () => {
   beforeEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
     getSessionMock.mockResolvedValue({ userId: "ops-1", tenantId: "tenant-1", roles: ["admin"] });
+    requireTenantSessionMock.mockResolvedValue({ userId: "ops-1", tenantId: "tenant-1", kind: "tenant", roles: ["admin"] });
     canMock.mockReturnValue(true);
     selectMock.mockReturnValue({ from: fromMock });
     fromMock.mockReturnValue({ where: whereMock });
@@ -62,15 +80,15 @@ describe("PATCH /api/quotes/[id]/status", () => {
     insertMock.mockReturnValue({ values: insertValuesMock });
   });
 
-  it("updates automation and project when quote is signed", async () => {
+  it("updates automation and submission when quote is signed", async () => {
     limitMock.mockResolvedValue([{ id: "quote-1", tenantId: "tenant-1", automationVersionId: "ver-1", status: "sent" }]);
     signQuoteAndPromoteMock.mockResolvedValue({
       quote: { id: "quote-1", status: "accepted" },
       automationVersion: { id: "ver-1", status: "BuildInProgress" },
-      project: { id: "proj-1", status: "BuildInProgress" },
+      submission: { id: "sub-1", status: "BuildInProgress", pricingStatus: "Sent" },
       previousQuoteStatus: "SENT",
       previousAutomationStatus: "NeedsPricing",
-      previousProjectStatus: "NeedsPricing",
+      previousSubmissionStatus: "NeedsPricing",
     });
     const { PATCH } = await import("@/app/api/quotes/[id]/status/route");
 
@@ -83,6 +101,7 @@ describe("PATCH /api/quotes/[id]/status", () => {
       { params: { id: "quote-1" } }
     );
 
+    await response.json().catch(() => ({}));
     expect(response.status).toBe(200);
     expect(response.status).toBe(200);
     expect(signQuoteAndPromoteMock).toHaveBeenCalledWith(

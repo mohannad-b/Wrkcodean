@@ -1,10 +1,10 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { automationVersions, projects, quotes } from "@/db/schema";
+import { automationVersions, submissions, quotes } from "@/db/schema";
 import { priceWorkflow, PricingInput, PricingResult } from "@/lib/pricing/engine";
 import { loadWrkActionCatalog } from "@/lib/pricing/wrkactions-catalog";
 import { toDbQuoteStatus } from "@/lib/quotes/status";
-import { ensureProjectForVersion } from "@/lib/services/automations";
+import { ensureSubmissionForVersion } from "@/lib/services/automations";
 import { fromDbAutomationStatus, toDbAutomationStatus } from "@/lib/automations/status";
 import { ensureDiscountOffersForVersion, findActiveDiscountByCode, markDiscountUsed } from "@/lib/services/discounts";
 
@@ -19,7 +19,7 @@ export type PriceAndCreateQuoteParams = {
 
 export type PriceAndCreateQuoteResult = {
   quoteId: string;
-  projectId: string;
+  submissionId: string;
   automationVersionId: string;
   pricing: PricingResult;
 };
@@ -37,8 +37,8 @@ export async function priceAndCreateQuoteForVersion(
     throw new Error("Automation version not found");
   }
 
-  // Ensure a project exists for this version so pricing can attach to it.
-  const project = await ensureProjectForVersion(versionRow[0]);
+  // Ensure a submission exists for this version so pricing can attach to it.
+  const submission = await ensureSubmissionForVersion(versionRow[0]);
 
   const actionCatalog = params.pricing.actionCatalog ?? (await loadWrkActionCatalog());
   await ensureDiscountOffersForVersion(params.tenantId, params.automationVersionId);
@@ -81,11 +81,11 @@ export async function priceAndCreateQuoteForVersion(
     })
     .returning();
 
-  // Mark project pricing status as Sent (pricing generated).
-  const projectUpdate = await db
-    .update(projects)
+  // Mark submission pricing status as Sent (pricing generated).
+  const submissionUpdate = await db
+    .update(submissions)
     .set({ pricingStatus: "Sent", status: toDbAutomationStatus("AwaitingClientApproval") })
-    .where(and(eq(projects.id, project.id), eq(projects.tenantId, params.tenantId)))
+    .where(and(eq(submissions.id, submission.id), eq(submissions.tenantId, params.tenantId)))
     .returning();
 
   // Ensure automation version moves to AwaitingClientApproval if not already further along.
@@ -99,7 +99,7 @@ export async function priceAndCreateQuoteForVersion(
 
   return {
     quoteId: quote.id,
-    projectId: projectUpdate[0]?.id ?? project.id,
+    submissionId: submissionUpdate[0]?.id ?? submission.id,
     automationVersionId: params.automationVersionId,
     pricing: pricingResult,
   };

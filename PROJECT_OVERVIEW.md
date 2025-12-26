@@ -99,9 +99,9 @@ The design + orchestration + management layer:
   - Blueprint JSON (sections + steps + metadata driving the canvas)
   - Intake progress (% completeness)
 
-### Projects (Ops View)
+### Submissions (Ops View)
 
-- **Project** – Ops-facing wrapper around automation work, usually 1:1 with an automation version.
+- **Submission** – Ops-facing wrapper around automation work, usually 1:1 with an automation version.
   - Type: `new_automation` or `revision`
   - Pricing status: `Not Generated → Draft → Sent → Signed`
   - Checklist progress: build/QA tasks completion
@@ -172,8 +172,8 @@ _1:1: each client maps to exactly one tenant._
 | --- | --- | --- |
 | Clients List | Table of clients with spend, utilization, health, projects, owner | `/admin/clients` |
 | Client Detail | Overview, projects, quotes, spend summary, activity | `/admin/clients/[id]` |
-| Projects List | Table/Kanban of projects by status/type/owner | `/admin/projects` |
-| Project Detail | Blueprint, pricing, quote, build tasks, messages, activity | `/admin/projects/[id]` |
+| Submissions List | Table/Kanban of submissions by status/type/owner | `/admin/submissions` |
+| Submission Detail | Blueprint, pricing, quote, build tasks, messages, activity | `/admin/submissions/[id]` |
 | Build Pipeline | Kanban board (Build in Progress, QA, Ready to Launch, etc.) | `/admin/projects` (Kanban view) |
 | Pricing Overrides | Admin controls for override scenarios | Project detail tab |
 

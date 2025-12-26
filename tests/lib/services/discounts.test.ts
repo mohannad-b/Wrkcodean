@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => {
 });
 
 const schema = vi.hoisted(() => ({
-  projects: { id: "projects.id", tenantId: "projects.tenantId" },
+  submissions: { id: "submissions.id", tenantId: "submissions.tenantId" },
   discountOffers: {
     id: "discountOffers.id",
     tenantId: "discountOffers.tenantId",
@@ -56,8 +56,8 @@ describe("discounts service", () => {
     vi.resetAllMocks();
   });
 
-  it("creates first-workflow offers (10% + 25%) when no projects exist", async () => {
-    mocks.limitMock.mockResolvedValueOnce([]); // isFirstWorkflow: projects empty
+  it("creates first-workflow offers (10% + 25%) when no submissions exist", async () => {
+    mocks.limitMock.mockResolvedValueOnce([]); // isFirstWorkflow: submissions empty
     mocks.selectWhereMock.mockResolvedValueOnce([]); // existing offers for this version
     mocks.insertValuesMock.mockResolvedValue(undefined);
 
@@ -69,8 +69,8 @@ describe("discounts service", () => {
     expect(percents).toEqual([0.1, 0.25]);
   });
 
-  it("creates followup offers (5% + 10%) when projects exist", async () => {
-    mocks.limitMock.mockResolvedValueOnce([{ id: "p1" }]); // isFirstWorkflow: one project exists
+  it("creates followup offers (5% + 10%) when submissions exist", async () => {
+    mocks.limitMock.mockResolvedValueOnce([{ id: "p1" }]); // isFirstWorkflow: one submission exists
     mocks.selectWhereMock.mockResolvedValueOnce([]); // existing offers for this version
     mocks.insertValuesMock.mockResolvedValue(undefined);
 

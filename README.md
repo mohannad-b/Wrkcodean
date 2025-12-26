@@ -22,7 +22,7 @@ Top-level layout:
 - `app/(studio)/` – Studio-side routes (client-facing)
   - `automations/` – Automation listing and detail views
 - `app/(admin)/` – Admin-side routes (internal ops)
-  - `projects/` – Projects dashboard and admin views
+  - `submissions/` – Submissions dashboard and admin views
 - `app/(settings)/` – Workspace and user settings
 - `app/layout.tsx` – Root layout with AppShell
 - `app/page.tsx` – Home page (typically redirects to `/automations`)
@@ -58,7 +58,7 @@ Top-level layout:
 
 #### Admin Side (Internal)
 
-**Projects Dashboard** (`/admin/projects`)
+**Submissions Dashboard** (`/admin/submissions`)
 - Internal view of client projects and automations.
 - Shows build/QA/deploy status, pricing state, key dates, and health.
 - Entry point for ops to trigger flows like Request Build, QA approval, Deploy to Production, Pause/Resume, Archive, etc.

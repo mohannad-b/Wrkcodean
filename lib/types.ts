@@ -88,7 +88,7 @@ export type PricingStatus = "Not Generated" | "Draft" | "Sent" | "Signed";
 
 export type MessageType = "client" | "ops" | "internal_note";
 
-export interface AdminProject {
+export interface AdminSubmission {
   id: string;
   clientId: string;
   clientName: string;
@@ -111,9 +111,11 @@ export interface AdminProject {
   effectiveUnitPrice?: number;
 }
 
-export interface ProjectMessage {
+export type AdminProject = AdminSubmission;
+
+export interface SubmissionMessage {
   id: string;
-  projectId: string;
+  submissionId: string;
   type: MessageType;
   sender: {
     name: string;
@@ -125,6 +127,8 @@ export interface ProjectMessage {
   attachments?: string[];
   tags?: string[];
 }
+
+export type ProjectMessage = SubmissionMessage;
 
 export interface SpendSummary {
   committedMonthlySpend: number;

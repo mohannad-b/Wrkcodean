@@ -31,7 +31,7 @@ export function ConversationThread({ messages: initialMessages, onSend }: Conver
 
     const newMsg: ProjectMessage = {
       id: Date.now().toString(),
-      projectId: messages[0]?.projectId || "",
+      submissionId: messages[0]?.submissionId || "",
       type: isInternalNote ? "internal_note" : "ops",
       sender: {
         name: "Sarah Connor",

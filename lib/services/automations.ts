@@ -330,7 +330,7 @@ export async function createAutomationVersion(params: CreateAutomationVersionPar
           sourceTasks.map((task) => ({
             tenantId: params.tenantId,
             automationVersionId: version.id,
-            projectId: task.projectId,
+            submissionId: task.submissionId,
             title: task.title,
             description: task.description,
             status: task.status,
@@ -476,10 +476,10 @@ export async function getAutomationVersionDetail(tenantId: string, automationVer
     .where(and(eq(automations.id, version.automationId), eq(automations.tenantId, tenantId)))
     .limit(1);
 
-  const projectRows = await db
+  const submissionRows = await db
     .select()
-    .from(projects)
-    .where(and(eq(projects.automationVersionId, version.id), eq(projects.tenantId, tenantId)))
+    .from(submissions)
+    .where(and(eq(submissions.automationVersionId, version.id), eq(submissions.tenantId, tenantId)))
     .limit(1);
 
   const quoteRows = await db
@@ -498,7 +498,7 @@ export async function getAutomationVersionDetail(tenantId: string, automationVer
   return {
     version,
     automation: automationRow[0] ?? null,
-    project: projectRows[0] ?? null,
+    project: submissionRows[0] ?? null,
     latestQuote: quoteRows[0] ?? null,
     tasks: taskRows,
     latestMetrics: latestMetric,
@@ -548,9 +548,9 @@ export async function updateAutomationVersionStatus(params: UpdateStatusParams):
   }
 
   if (params.nextStatus === "NeedsPricing") {
-    await ensureProjectForVersion(updated);
+    await ensureSubmissionForVersion(updated);
   } else if (params.nextStatus !== "IntakeInProgress") {
-    await syncProjectStatus(updated, params.nextStatus);
+    await syncSubmissionStatus(updated, params.nextStatus);
   }
 
   return { version: updated, previousStatus: currentStatus };
@@ -582,8 +582,7 @@ export async function deleteAutomationVersion(params: { tenantId: string; automa
   });
 }
 
-export async function ensureProjectForVersion(version: AutomationVersion) {
-  console.warn("[DEPRECATION] ensureProjectForVersion is deprecated; use submissions.");
+export async function ensureSubmissionForVersion(version: AutomationVersion) {
   const existing = await db
     .select()
     .from(submissions)
@@ -591,7 +590,7 @@ export async function ensureProjectForVersion(version: AutomationVersion) {
     .limit(1);
 
   if (existing.length > 0) {
-    await syncProjectStatus(existing[0], "NeedsPricing");
+    await syncSubmissionStatus(existing[0], "NeedsPricing");
     return existing[0];
   }
 
@@ -607,7 +606,7 @@ export async function ensureProjectForVersion(version: AutomationVersion) {
 
   const dbStatus = toDbAutomationStatus("NeedsPricing");
 
-  const [project] = await db
+  const [submission] = await db
     .insert(submissions)
     .values({
       tenantId: version.tenantId,
@@ -618,27 +617,29 @@ export async function ensureProjectForVersion(version: AutomationVersion) {
     })
     .returning();
 
-  return project;
+  return submission;
 }
 
-async function syncProjectStatus(projectOrVersion: Submission | AutomationVersion, nextStatus: AutomationLifecycleStatus) {
+export const ensureProjectForVersion = ensureSubmissionForVersion;
+
+async function syncSubmissionStatus(submissionOrVersion: Submission | AutomationVersion, nextStatus: AutomationLifecycleStatus) {
   const dbStatus = toDbAutomationStatus(nextStatus);
 
-  if (isProjectRecord(projectOrVersion)) {
+  if (isSubmissionRecord(submissionOrVersion)) {
     await db
       .update(submissions)
       .set({ status: dbStatus })
-      .where(eq(submissions.id, projectOrVersion.id));
+      .where(eq(submissions.id, submissionOrVersion.id));
     return;
   }
 
   await db
     .update(submissions)
     .set({ status: dbStatus })
-    .where(eq(submissions.automationVersionId, projectOrVersion.id));
+    .where(eq(submissions.automationVersionId, submissionOrVersion.id));
 }
 
-function isProjectRecord(record: Submission | AutomationVersion): record is Submission {
+function isSubmissionRecord(record: Submission | AutomationVersion): record is Submission {
   return typeof (record as Submission).automationVersionId !== "undefined";
 }
 

@@ -5,7 +5,7 @@ import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { parseQuoteStatus, fromDbQuoteStatus } from "@/lib/quotes/status";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
-import { signQuoteAndPromote, SigningError } from "@/lib/services/projects";
+import { signQuoteAndPromote, SigningError } from "@/lib/services/submissions";
 import { logAudit } from "@/lib/audit/log";
 import { verifySigningToken } from "@/lib/auth/signing-token";
 import { db } from "@/db";
@@ -124,9 +124,20 @@ export async function PATCH(request: Request, { params }: RouteParams) {
         automationStatus: result.previousAutomationStatus
           ? { from: result.previousAutomationStatus, to: result.automationVersion ? fromDbAutomationStatus(result.automationVersion.status) : null }
           : null,
-        projectId: result.project?.id ?? null,
-        projectStatus: result.previousProjectStatus
-          ? { from: result.previousProjectStatus, to: result.project ? fromDbAutomationStatus(result.project.status) : null }
+        submissionId: result.submission?.id ?? null,
+        submissionStatus: result.previousSubmissionStatus
+          ? {
+              from: result.previousSubmissionStatus,
+              to: result.submission ? fromDbAutomationStatus(result.submission.status) : null,
+            }
+          : null,
+        // Legacy aliases for the migration window
+        projectId: result.submission?.id ?? null,
+        projectStatus: result.previousSubmissionStatus
+          ? {
+              from: result.previousSubmissionStatus,
+              to: result.submission ? fromDbAutomationStatus(result.submission.status) : null,
+            }
           : null,
       },
     });
@@ -144,10 +155,17 @@ export async function PATCH(request: Request, { params }: RouteParams) {
             status: fromDbAutomationStatus(result.automationVersion.status),
           }
         : null,
-      project: result.project
+      submission: result.submission
         ? {
-            id: result.project.id,
-            status: fromDbAutomationStatus(result.project.status),
+            id: result.submission.id,
+            status: fromDbAutomationStatus(result.submission.status),
+          }
+        : null,
+      // Legacy alias for migration window
+      project: result.submission
+        ? {
+            id: result.submission.id,
+            status: fromDbAutomationStatus(result.submission.status),
           }
         : null,
     });

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
 export default function WrkAdminProjectsRedirect() {
-  redirect("/wrk-admin/clients");
+  redirect("/wrk-admin/submissions");
 }
 

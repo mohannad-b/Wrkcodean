@@ -103,7 +103,7 @@ describe("createAutomationVersion", () => {
         id: "task-1",
         tenantId: "t1",
         automationVersionId: "v1",
-        projectId: "p1",
+        submissionId: "p1",
         title: "Do thing",
         description: "desc",
         status: "pending",

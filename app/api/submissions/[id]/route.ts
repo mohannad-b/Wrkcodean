@@ -1,3 +1,3 @@
-// Compatibility wrapper for submissions detail; delegates to legacy projects handler with deprecation notice.
-export { GET, PATCH, DELETE } from "@/app/api/admin/projects/[id]/route";
+// Compatibility wrapper for submissions detail; delegates to canonical admin submissions handler.
+export { GET, PATCH, DELETE } from "@/app/api/admin/submissions/[id]/route";
 

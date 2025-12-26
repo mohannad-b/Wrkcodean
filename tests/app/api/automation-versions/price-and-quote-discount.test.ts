@@ -34,7 +34,7 @@ describe("POST /api/automation-versions/[id]/price-and-quote with discount code"
     canMock.mockReturnValue(true);
     priceAndCreateMock.mockResolvedValue({
       quoteId: "q1",
-      projectId: "p1",
+      submissionId: "p1",
       automationVersionId: "v1",
       pricing: {},
     });

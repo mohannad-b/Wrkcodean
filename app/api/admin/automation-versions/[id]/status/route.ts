@@ -69,6 +69,8 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
       metadata: {
         from: persistedStatus ?? previousStatus,
         to: nextStatus,
+        submissionId: detail.project?.id ?? null,
+        // Legacy alias during migration
         projectId: detail.project?.id ?? null,
       },
     });

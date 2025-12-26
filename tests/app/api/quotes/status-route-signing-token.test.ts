@@ -25,7 +25,7 @@ vi.mock("@/lib/auth/rbac", () => ({
   can: canMock,
 }));
 
-vi.mock("@/lib/services/projects", () => ({
+vi.mock("@/lib/services/submissions", () => ({
   signQuoteAndPromote: signQuoteAndPromoteMock,
   SigningError: class SigningError extends Error {
     code: string;
@@ -65,7 +65,7 @@ describe("PATCH /api/quotes/[id]/status signing token", () => {
     signQuoteAndPromoteMock.mockResolvedValue({
       quote: { id: "q1", status: "accepted", signedAt: new Date().toISOString() },
       automationVersion: null,
-      project: null,
+      submission: null,
       previousQuoteStatus: "SENT",
     });
     selectMock.mockReturnValue([{ id: "q1", tenantId: "t1", status: "sent" }]);

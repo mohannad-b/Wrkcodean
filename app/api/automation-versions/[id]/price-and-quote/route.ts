@@ -121,7 +121,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     return NextResponse.json(
       {
         quoteId: result.quoteId,
-        projectId: result.projectId,
+        submissionId: result.submissionId,
         automationVersionId: result.automationVersionId,
         pricing: result.pricing,
       },

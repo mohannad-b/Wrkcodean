@@ -75,6 +75,8 @@ export type LegacyAction =
   | "workspace:update"
   | "admin:project:read"
   | "admin:project:write"
+  | "admin:submission:read"
+  | "admin:submission:write"
   | "admin:quote:create"
   | "admin:quote:update"
   | "wrk:chat:read"
@@ -274,6 +276,8 @@ const LEGACY_ACTION_MAP: Partial<Record<LegacyAction, WorkspaceAction | Workflow
   "workspace:update": "workspace:update",
   "admin:project:read": "workspace:read",
   "admin:project:write": "workspace:update",
+  "admin:submission:read": "workspace:read",
+  "admin:submission:write": "workspace:update",
   "admin:quote:create": "workspace:billing:manage",
   "admin:quote:update": "workspace:billing:manage",
   "wrk:chat:read": "platform:chat:read",

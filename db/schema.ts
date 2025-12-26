@@ -20,8 +20,8 @@ export const automationStatusEnum = pgEnum("automation_status", [
   "Archived",
 ]);
 
-const submissionPricingStatusEnum = pgEnum("project_pricing_status", ["NotGenerated", "Draft", "Sent", "Signed"]);
-const submissionTypeEnum = pgEnum("project_type", ["new_automation", "revision"]);
+const submissionPricingStatusEnum = pgEnum("submission_pricing_status", ["NotGenerated", "Draft", "Sent", "Signed"]);
+const submissionTypeEnum = pgEnum("submission_type", ["new_automation", "revision"]);
 
 const quoteStatusEnum = pgEnum("quote_status", ["draft", "sent", "accepted", "rejected"]);
 const quoteTypeEnum = pgEnum("quote_type", ["initial_commitment", "change_order"]);
@@ -373,7 +373,7 @@ export const aiJobs = pgTable(
 );
 
 export const submissions = pgTable(
-  "projects",
+  "submissions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
@@ -393,11 +393,14 @@ export const submissions = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
-    tenantIdx: index("projects_tenant_idx").on(table.tenantId),
-    statusIdx: index("projects_status_idx").on(table.status),
-    pricingStatusIdx: index("projects_pricing_status_idx").on(table.pricingStatus),
+    tenantIdx: index("submissions_tenant_idx").on(table.tenantId),
+    statusIdx: index("submissions_status_idx").on(table.status),
+    pricingStatusIdx: index("submissions_pricing_status_idx").on(table.pricingStatus),
   })
 );
+
+// Deprecated alias for backward compatibility during migration.
+export const projects = submissions;
 
 export const quotes = pgTable(
   "quotes",
@@ -438,7 +441,7 @@ export const invoices = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    projectId: uuid("project_id").references(() => submissions.id, { onDelete: "set null" }),
+    submissionId: uuid("submission_id").references(() => submissions.id, { onDelete: "set null" }),
     quoteId: uuid("quote_id").references(() => quotes.id, { onDelete: "set null" }),
     type: invoiceTypeEnum("type").notNull().default("setup_fee"),
     status: invoiceStatusEnum("status").notNull().default("pending"),
@@ -452,7 +455,7 @@ export const invoices = pgTable(
   (table) => ({
     tenantIdx: index("invoices_tenant_idx").on(table.tenantId),
     quoteIdx: index("invoices_quote_idx").on(table.quoteId),
-    projectIdx: index("invoices_project_idx").on(table.projectId),
+    submissionIdx: index("invoices_submission_idx").on(table.submissionId),
   })
 );
 
@@ -520,7 +523,7 @@ export const messages = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    projectId: uuid("project_id").references(() => submissions.id, { onDelete: "cascade" }),
+    submissionId: uuid("submission_id").references(() => submissions.id, { onDelete: "cascade" }),
     automationVersionId: uuid("automation_version_id").references(() => automationVersions.id, {
       onDelete: "set null",
     }),
@@ -533,7 +536,7 @@ export const messages = pgTable(
   },
   (table) => ({
     tenantIdx: index("messages_tenant_idx").on(table.tenantId),
-    projectIdx: index("messages_project_idx").on(table.projectId),
+    submissionIdx: index("messages_submission_idx").on(table.submissionId),
   })
 );
 
@@ -550,7 +553,7 @@ export const tasks = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    projectId: uuid("project_id").references(() => submissions.id, { onDelete: "cascade" }),
+    submissionId: uuid("submission_id").references(() => submissions.id, { onDelete: "cascade" }),
     automationVersionId: uuid("automation_version_id").references(() => automationVersions.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     description: text("description"),
@@ -567,7 +570,7 @@ export const tasks = pgTable(
   },
   (table) => ({
     tenantIdx: index("tasks_tenant_idx").on(table.tenantId),
-    projectIdx: index("tasks_project_idx").on(table.projectId),
+    submissionIdx: index("tasks_submission_idx").on(table.submissionId),
     versionIdx: index("tasks_version_idx").on(table.automationVersionId),
   })
 );

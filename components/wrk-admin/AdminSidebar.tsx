@@ -22,7 +22,7 @@ type AdminSidebarProps = {
 
 const baseLinks = [
   { href: "/wrk-admin/clients", label: "Clients", icon: Users },
-  { href: "/wrk-admin/projects", label: "Projects", icon: FolderKanban },
+  { href: "/wrk-admin/submissions", label: "Submissions", icon: FolderKanban },
 ];
 
 export function AdminSidebar({ staffRole, staffName, staffEmail }: AdminSidebarProps) {

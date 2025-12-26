@@ -23,7 +23,7 @@ DROP TABLE IF EXISTS copilot_messages CASCADE;
 DROP TABLE IF EXISTS discount_offers CASCADE;
 DROP TABLE IF EXISTS quotes CASCADE;
 DROP TABLE IF EXISTS invoices CASCADE;
-DROP TABLE IF EXISTS projects CASCADE;
+DROP TABLE IF EXISTS submissions CASCADE;
 DROP TABLE IF EXISTS ai_jobs CASCADE;
 DROP TABLE IF EXISTS automation_version_metrics CASCADE;
 DROP TABLE IF EXISTS automation_metric_configs CASCADE;
@@ -53,8 +53,8 @@ DROP TYPE IF EXISTS invoice_type CASCADE;
 DROP TYPE IF EXISTS discount_applies CASCADE;
 DROP TYPE IF EXISTS discount_kind CASCADE;
 DROP TYPE IF EXISTS automation_status CASCADE;
-DROP TYPE IF EXISTS project_pricing_status CASCADE;
-DROP TYPE IF EXISTS project_type CASCADE;
+DROP TYPE IF EXISTS submission_pricing_status CASCADE;
+DROP TYPE IF EXISTS submission_type CASCADE;
 DROP TYPE IF EXISTS tenant_status CASCADE;
 DROP TYPE IF EXISTS user_status CASCADE;
 DROP TYPE IF EXISTS membership_role CASCADE;
@@ -84,8 +84,8 @@ CREATE TYPE automation_status AS ENUM (
   'Live',
   'Archived'
 );
-CREATE TYPE project_pricing_status AS ENUM ('NotGenerated','Draft','Sent','Signed');
-CREATE TYPE project_type AS ENUM ('new_automation','revision');
+CREATE TYPE submission_pricing_status AS ENUM ('NotGenerated','Draft','Sent','Signed');
+CREATE TYPE submission_type AS ENUM ('new_automation','revision');
 CREATE TYPE quote_type AS ENUM ('initial_commitment','change_order');
 CREATE TYPE quote_status AS ENUM ('draft','sent','accepted','rejected');
 CREATE TYPE invoice_status AS ENUM ('pending','paid','failed');
@@ -322,16 +322,16 @@ CREATE TABLE ai_jobs (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Projects
-CREATE TABLE projects (
+-- Submissions
+CREATE TABLE submissions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   automation_id uuid REFERENCES automations(id) ON DELETE SET NULL,
   automation_version_id uuid REFERENCES automation_versions(id) ON DELETE SET NULL,
   name text NOT NULL,
   status automation_status NOT NULL DEFAULT 'IntakeInProgress',
-  pricing_status project_pricing_status NOT NULL DEFAULT 'NotGenerated',
-  type project_type NOT NULL DEFAULT 'new_automation',
+  pricing_status submission_pricing_status NOT NULL DEFAULT 'NotGenerated',
+  type submission_type NOT NULL DEFAULT 'new_automation',
   checklist_progress integer NOT NULL DEFAULT 0,
   owner_id uuid REFERENCES users(id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -364,7 +364,7 @@ CREATE TABLE quotes (
 CREATE TABLE invoices (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  project_id uuid REFERENCES projects(id) ON DELETE SET NULL,
+  submission_id uuid REFERENCES submissions(id) ON DELETE SET NULL,
   quote_id uuid REFERENCES quotes(id) ON DELETE SET NULL,
   type invoice_type NOT NULL DEFAULT 'setup_fee',
   status invoice_status NOT NULL DEFAULT 'pending',
@@ -415,7 +415,7 @@ CREATE TABLE copilot_analyses (
 CREATE TABLE messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  project_id uuid REFERENCES projects(id) ON DELETE CASCADE,
+  submission_id uuid REFERENCES submissions(id) ON DELETE CASCADE,
   automation_version_id uuid REFERENCES automation_versions(id) ON DELETE SET NULL,
   type message_type NOT NULL,
   sender_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -427,7 +427,7 @@ CREATE TABLE messages (
 CREATE TABLE tasks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  project_id uuid REFERENCES projects(id) ON DELETE CASCADE,
+  submission_id uuid REFERENCES submissions(id) ON DELETE CASCADE,
   automation_version_id uuid REFERENCES automation_versions(id) ON DELETE CASCADE,
   title text NOT NULL,
   description text,
@@ -543,10 +543,10 @@ CREATE INDEX file_versions_file_idx ON file_versions(file_id);
 CREATE INDEX ai_jobs_tenant_idx ON ai_jobs(tenant_id);
 CREATE INDEX ai_jobs_version_idx ON ai_jobs(automation_version_id);
 
--- Projects indexes
-CREATE INDEX projects_tenant_idx ON projects(tenant_id);
-CREATE INDEX projects_status_idx ON projects(status);
-CREATE INDEX projects_pricing_status_idx ON projects(pricing_status);
+-- Submissions indexes
+CREATE INDEX submissions_tenant_idx ON submissions(tenant_id);
+CREATE INDEX submissions_status_idx ON submissions(status);
+CREATE INDEX submissions_pricing_status_idx ON submissions(pricing_status);
 
 -- Quotes indexes
 CREATE INDEX quotes_tenant_idx ON quotes(tenant_id);
@@ -555,7 +555,7 @@ CREATE INDEX quotes_version_idx ON quotes(automation_version_id);
 -- Invoices indexes
 CREATE INDEX invoices_tenant_idx ON invoices(tenant_id);
 CREATE INDEX invoices_quote_idx ON invoices(quote_id);
-CREATE INDEX invoices_project_idx ON invoices(project_id);
+CREATE INDEX invoices_submission_idx ON invoices(submission_id);
 
 -- Discount Offers indexes
 CREATE INDEX discount_offers_tenant_idx ON discount_offers(tenant_id);
@@ -568,11 +568,11 @@ CREATE INDEX copilot_messages_version_created_at_idx ON copilot_messages(automat
 
 -- Messages indexes
 CREATE INDEX messages_tenant_idx ON messages(tenant_id);
-CREATE INDEX messages_project_idx ON messages(project_id);
+CREATE INDEX messages_submission_idx ON messages(submission_id);
 
 -- Tasks indexes
 CREATE INDEX tasks_tenant_idx ON tasks(tenant_id);
-CREATE INDEX tasks_project_idx ON tasks(project_id);
+CREATE INDEX tasks_submission_idx ON tasks(submission_id);
 CREATE INDEX tasks_version_idx ON tasks(automation_version_id);
 
 -- Audit Logs indexes
