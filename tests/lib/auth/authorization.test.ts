@@ -38,12 +38,22 @@ const staffOperator: StaffSession = {
   roles: [],
 };
 
-const staffSuperAdmin: StaffSession = {
+const staffAdmin: StaffSession = {
   kind: "staff",
   tenantId: null,
   userId: "s3",
   email: "s3@wrk.com",
   name: "Super Admin",
+  wrkStaffRole: "wrk_admin",
+  roles: [],
+};
+
+const staffMasterAdmin: StaffSession = {
+  kind: "staff",
+  tenantId: null,
+  userId: "s4",
+  email: "s4@wrk.com",
+  name: "Master Admin",
   wrkStaffRole: "wrk_master_admin",
   roles: [],
 };
@@ -71,8 +81,9 @@ describe("authorize / can", () => {
     expect(() => authorize("workflow:chat:write", ctx, staffViewer)).toThrow(AuthorizationError);
   });
 
-  it("only superadmin can impersonate", () => {
-    expect(() => authorize("platform:wrk_staff:write", { type: "platform" }, staffSuperAdmin)).not.toThrow();
+  it("only master admin can manage wrk staff", () => {
+    expect(() => authorize("platform:wrk_staff:write", { type: "platform" }, staffMasterAdmin)).not.toThrow();
+    expect(() => authorize("platform:wrk_staff:write", { type: "platform" }, staffAdmin)).toThrow(AuthorizationError);
     expect(() => authorize("platform:wrk_staff:write", { type: "platform" }, staffOperator)).toThrow(AuthorizationError);
   });
 

@@ -20,7 +20,7 @@ export default function StaffTable({ staff, staffRole }: { staff: StaffRow[]; st
   const router = useRouter();
   const toast = useToast();
   const [loadingId, setLoadingId] = useState<string | null>(null);
-  const canManage = staffRole === "wrk_admin" || staffRole === "wrk_master_admin";
+  const canManage = staffRole === "wrk_master_admin";
 
   async function updateRole(userId: string, role: WrkStaffRole) {
     setLoadingId(userId);

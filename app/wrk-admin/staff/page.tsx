@@ -10,7 +10,25 @@ export type StaffRow = Awaited<ReturnType<typeof listStaffUsers>>[number];
 export default async function StaffPage() {
   const session = await requireWrkStaffSession();
   const staffRole = session.wrkStaffRole;
-  const canManage = staffRole === "wrk_admin" || staffRole === "wrk_master_admin";
+
+  if (staffRole !== "wrk_master_admin") {
+    return (
+      <div className="p-8 space-y-4">
+        <h1 className="text-2xl font-semibold">Staff</h1>
+        <Card>
+          <CardHeader>
+            <CardTitle>Not authorized</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Only Master Admins can manage Wrk staff roles.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   const staff = await listStaffUsers();
 
   return (
@@ -19,16 +37,14 @@ export default async function StaffPage() {
         <h1 className="text-2xl font-semibold">Staff</h1>
         <p className="text-sm text-muted-foreground">Manage WRK staff roles and access.</p>
       </div>
-      {canManage && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Add Staff</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <AddStaffForm />
-          </CardContent>
-        </Card>
-      )}
+      <Card>
+        <CardHeader>
+          <CardTitle>Add Staff</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <AddStaffForm />
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>Staff Directory</CardTitle>

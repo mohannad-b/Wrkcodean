@@ -6,6 +6,7 @@
  * 
  * Examples:
  *   npx tsx scripts/add-wrk-staff.ts admin@wrk.com wrk_admin
+ *   npx tsx scripts/add-wrk-staff.ts master@wrk.com wrk_master_admin
  *   npx tsx scripts/add-wrk-staff.ts operator@wrk.com wrk_operator
  *   npx tsx scripts/add-wrk-staff.ts viewer@wrk.com wrk_viewer
  */
@@ -14,7 +15,7 @@ import { db } from "@/db";
 import { users, wrkStaffMemberships } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
-const VALID_ROLES = ["wrk_admin", "wrk_operator", "wrk_viewer"] as const;
+const VALID_ROLES = ["wrk_master_admin", "wrk_admin", "wrk_operator", "wrk_viewer"] as const;
 type WrkStaffRole = (typeof VALID_ROLES)[number];
 
 async function addWrkStaff(email: string, role: WrkStaffRole) {
@@ -67,6 +68,7 @@ async function main() {
     VALID_ROLES.forEach((role) => console.error(`  - ${role}`));
     console.error("\nExamples:");
     console.error("  npx tsx scripts/add-wrk-staff.ts admin@wrk.com wrk_admin");
+    console.error("  npx tsx scripts/add-wrk-staff.ts master@wrk.com wrk_master_admin");
     console.error("  npx tsx scripts/add-wrk-staff.ts operator@wrk.com wrk_operator");
     process.exit(1);
   }

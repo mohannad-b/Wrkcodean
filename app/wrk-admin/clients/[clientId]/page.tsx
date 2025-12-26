@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Mail, MessageSquare, Users } from "lucide-react";
 import { and, eq } from "drizzle-orm";
 import { requireWrkStaffSession } from "@/lib/api/context";
@@ -17,6 +17,10 @@ import WorkspaceActions, { ResendInviteButton, RevokeInviteButton } from "../wor
 
 export default async function WrkAdminWorkspaceDetail({ params }: { params: { clientId: string } }) {
   const session = await requireWrkStaffSession();
+
+  if (params.clientId === "new") {
+    redirect("/wrk-admin/clients");
+  }
 
   const workspace = await db.query.tenants.findFirst({
     where: eq(tenants.id, params.clientId),
@@ -306,24 +310,20 @@ export default async function WrkAdminWorkspaceDetail({ params }: { params: { cl
                     <p className="text-xs text-slate-500">{owner ? owner.email : "Owner not set"}</p>
                   </div>
                 </div>
-                <div className="mt-4 flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    asChild
-                    disabled={!owner?.email}
-                    className="flex-1"
-                  >
-                    <Link href={owner?.email ? `mailto:${owner.email}` : "#"}>
-                      <Mail className="h-4 w-4 mr-2" />
-                      Email
-                    </Link>
-                  </Button>
-                  <Button variant="outline" size="sm" className="flex-1">
-                    <MessageSquare className="h-4 w-4 mr-2" />
-                    Chat
-                  </Button>
-                </div>
+                {owner?.email && (
+                  <div className="mt-4 flex gap-2">
+                    <Button variant="outline" size="sm" className="flex-1" asChild>
+                      <a href={`mailto:${owner.email}`} target="_blank" rel="noreferrer">
+                        <Mail className="h-4 w-4 mr-2" />
+                        Email
+                      </a>
+                    </Button>
+                    <Button variant="outline" size="sm" className="flex-1">
+                      <MessageSquare className="h-4 w-4 mr-2" />
+                      Chat
+                    </Button>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
