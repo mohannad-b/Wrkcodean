@@ -5,6 +5,8 @@ import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components
 import StaffTable from "./staffTable";
 import { AddStaffForm } from "./addStaffForm";
 
+export const dynamic = "force-dynamic";
+
 export type StaffRow = Awaited<ReturnType<typeof listStaffUsers>>[number];
 
 export default async function StaffPage() {

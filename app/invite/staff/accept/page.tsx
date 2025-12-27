@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 type State = { status: "loading" | "success" | "error"; message?: string };
 
-export default function StaffInviteAcceptPage() {
+function StaffInviteAcceptInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const token = searchParams?.get("token");
@@ -69,6 +69,14 @@ export default function StaffInviteAcceptPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function StaffInviteAcceptPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+      <StaffInviteAcceptInner />
+    </Suspense>
   );
 }
 

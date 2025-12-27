@@ -9,6 +9,8 @@ import { format } from "date-fns";
 import ClientsTable from "./clientsTable";
 import { wrkAdminRoutes } from "@/lib/admin/routes";
 
+export const dynamic = "force-dynamic";
+
 export type WorkspaceRow = {
   id: string;
   name: string;

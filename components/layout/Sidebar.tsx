@@ -42,7 +42,6 @@ const navItems = [
     label: "Workspace Settings",
     href: "/workspace-settings",
   },
-  { id: "team", icon: Users, label: "Team", href: "/team" },
 ];
 
 const adminNavItems = [

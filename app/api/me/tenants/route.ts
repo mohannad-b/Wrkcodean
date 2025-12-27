@@ -6,6 +6,7 @@ import { getOrCreateUserFromAuth0Session } from "@/lib/auth/session";
 import { handleApiError } from "@/lib/api/context";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
