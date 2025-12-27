@@ -200,7 +200,7 @@ export async function getSubmissionDetail(tenantId: string, submissionId: string
     ? await db
         .select()
         .from(users)
-        .where(and(inArray(users.id, assigneeIds), eq(users.tenantId, tenantId)))
+        .where(inArray(users.id, assigneeIds))
     : [];
   const assigneeMap = new Map<string, User>();
   assignees.forEach((user) => assigneeMap.set(user.id, user));

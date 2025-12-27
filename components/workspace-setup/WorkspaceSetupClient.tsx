@@ -964,7 +964,7 @@ export function WorkspaceSetupClient({
         if (key === "tos") {
           if (tosAccepted) return "complete";
           if (currentStep === "tos") return "current";
-          return verifyState === "verified" ? "upcoming" : "upcoming";
+        return "upcoming";
         }
         if (key === "imports") {
           if (currentStep === "imports") return "current";

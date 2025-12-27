@@ -270,7 +270,6 @@ export async function createWorkspaceInvite(params: {
     where: eq(users.id, params.invitedBy),
   });
 
-  const recipientFirstName = invite.email.split("@")[0] || "there";
   const inviterName =
     `${inviter?.firstName ?? ""} ${inviter?.lastName ?? ""}`.trim() || inviter?.name || inviter?.email || "A teammate";
 

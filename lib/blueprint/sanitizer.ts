@@ -235,7 +235,7 @@ export function sanitizeBlueprintTopology(
     }
   });
 
-  attachOrphans(sanitizedSteps, stepMap, parentMap, summary, stepNumberLookup, linkParentChild);
+  attachOrphans(sanitizedSteps, parentMap, summary, stepNumberLookup, linkParentChild);
 
   const legacyBranchIdLookup = new Map(
     (blueprint.branches ?? []).map((branch) => [`${branch.parentStepId}:${branch.targetStepId}`, branch.id])
@@ -268,7 +268,6 @@ export function sanitizeBlueprintTopology(
 
 function attachOrphans(
   steps: BlueprintStep[],
-  stepMap: StepMap,
   parentMap: ParentMap,
   summary: SanitizationSummary,
   stepNumberLookup: Map<string, BlueprintStep>,

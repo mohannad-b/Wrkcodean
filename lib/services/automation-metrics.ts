@@ -105,7 +105,7 @@ export async function upsertMetricConfig(params: MetricConfigInput) {
     patch.manualSecondsPerExecution = manualSeconds;
   }
   if (hourlyRate !== undefined) {
-    patch.hourlyRateUsd = hourlyRate;
+    patch.hourlyRateUsd = hourlyRate.toString();
   }
   if (Object.keys(patch).length === 0) {
     return existing;
@@ -137,7 +137,7 @@ export async function recordDailyMetricSnapshot(params: MetricSnapshotInput) {
     throw new Error("Automation version not found for tenant");
   }
 
-  const asOfDate = toDateOnly(params.asOfDate ?? new Date());
+  const asOfDate = toDateOnly(params.asOfDate ?? new Date()).toISOString().slice(0, 10);
   const config = await getOrCreateMetricConfig(tenantId, automationVersionId);
   const usage = params.usage ?? (await fetchUsageFromWrkPlatform(automationVersionId));
   const latestQuote = await getLatestQuote(automationVersionId, tenantId);
@@ -153,11 +153,14 @@ export async function recordDailyMetricSnapshot(params: MetricSnapshotInput) {
 
   const previousMonthSnapshot = await getLatestPriorMonthMetric(tenantId, automationVersionId, asOfDate);
 
-  const hoursSavedDeltaPct = computeDeltaPct(hoursSaved, previousMonthSnapshot?.hoursSaved);
-  const costSavingsDeltaPct = computeDeltaPct(estimatedCostSavings, previousMonthSnapshot?.estimatedCostSavings);
-  const executionsDeltaPct = computeDeltaPct(total, previousMonthSnapshot?.totalExecutions);
-  const successRateDeltaPct = computeDeltaPct(successRate, previousMonthSnapshot?.successRate);
-  const spendDeltaPct = computeDeltaPct(spendUsd, previousMonthSnapshot?.spendUsd);
+  const hoursSavedDeltaPct = computeDeltaPct(hoursSaved, toNumberOrNull(previousMonthSnapshot?.hoursSaved));
+  const costSavingsDeltaPct = computeDeltaPct(
+    estimatedCostSavings,
+    toNumberOrNull(previousMonthSnapshot?.estimatedCostSavings)
+  );
+  const executionsDeltaPct = computeDeltaPct(total, toNumberOrNull(previousMonthSnapshot?.totalExecutions));
+  const successRateDeltaPct = computeDeltaPct(successRate, toNumberOrNull(previousMonthSnapshot?.successRate));
+  const spendDeltaPct = computeDeltaPct(spendUsd, toNumberOrNull(previousMonthSnapshot?.spendUsd));
 
   const insertPayload: typeof automationVersionMetrics.$inferInsert = {
     tenantId,
@@ -166,15 +169,15 @@ export async function recordDailyMetricSnapshot(params: MetricSnapshotInput) {
     totalExecutions: total,
     successCount: usage.successCount,
     failureCount: usage.failureCount,
-    successRate,
-    spendUsd,
-    hoursSaved,
-    estimatedCostSavings,
-    hoursSavedDeltaPct,
-    estimatedCostSavingsDeltaPct: costSavingsDeltaPct,
-    executionsDeltaPct,
-    successRateDeltaPct,
-    spendDeltaPct,
+    successRate: successRate.toString(),
+    spendUsd: spendUsd.toString(),
+    hoursSaved: hoursSaved.toString(),
+    estimatedCostSavings: estimatedCostSavings.toString(),
+    hoursSavedDeltaPct: hoursSavedDeltaPct === null ? null : hoursSavedDeltaPct.toString(),
+    estimatedCostSavingsDeltaPct: costSavingsDeltaPct === null ? null : costSavingsDeltaPct.toString(),
+    executionsDeltaPct: executionsDeltaPct === null ? null : executionsDeltaPct.toString(),
+    successRateDeltaPct: successRateDeltaPct === null ? null : successRateDeltaPct.toString(),
+    spendDeltaPct: spendDeltaPct === null ? null : spendDeltaPct.toString(),
     source: usage.source,
   };
 
@@ -193,8 +196,8 @@ export async function recordDailyMetricSnapshot(params: MetricSnapshotInput) {
   return snapshot;
 }
 
-async function getLatestPriorMonthMetric(tenantId: string, automationVersionId: string, asOfDate: Date) {
-  const monthStart = new Date(Date.UTC(asOfDate.getUTCFullYear(), asOfDate.getUTCMonth(), 1));
+async function getLatestPriorMonthMetric(tenantId: string, automationVersionId: string, asOfDate: string) {
+  const monthStart = new Date(`${asOfDate}T00:00:00Z`);
   const rows = await db
     .select()
     .from(automationVersionMetrics)
@@ -202,7 +205,7 @@ async function getLatestPriorMonthMetric(tenantId: string, automationVersionId: 
       and(
         eq(automationVersionMetrics.tenantId, tenantId),
         eq(automationVersionMetrics.automationVersionId, automationVersionId),
-        lt(automationVersionMetrics.asOfDate, toDateOnly(monthStart))
+        lt(automationVersionMetrics.asOfDate, toDateOnly(monthStart).toISOString().slice(0, 10))
       )
     )
     .orderBy(desc(automationVersionMetrics.asOfDate))
@@ -269,5 +272,11 @@ async function fetchUsageFromWrkPlatform(automationVersionId: string): Promise<U
 
 function toDateOnly(value: Date) {
   return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+}
+
+function toNumberOrNull(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  const num = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(num) ? num : null;
 }
 

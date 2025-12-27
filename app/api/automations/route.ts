@@ -233,7 +233,7 @@ export async function POST(request: Request) {
       name,
       description,
       intakeNotes,
-      requirementsText: automationType && processDescription ? processDescription : null,
+      requirementsText: automationType && processDescription ? processDescription : undefined,
     });
 
     // If this is the new flow, create an initial copilot message with the context

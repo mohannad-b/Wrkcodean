@@ -5,7 +5,6 @@ import { applyStepNumbers } from "./step-numbering";
 import { BLUEPRINT_SYSTEM_PROMPT, formatBlueprintPrompt } from "@/lib/ai/prompts";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { sanitizeBlueprintTopology, type SanitizationSummary } from "@/lib/blueprint/sanitizer";
-import { syncAutomationTasks } from "@/lib/blueprint/task-sync";
 
 const BLUEPRINT_MODEL = process.env.BLUEPRINT_MODEL ?? "gpt-4-turbo-preview";
 
@@ -50,9 +49,11 @@ type AIStep = {
   systemsInvolved?: string[];
   nextSteps?: string[];
   branches?: Array<{
-    label: string;
-    targetStep: string;
+    label?: string;
+    targetStep?: string;
+    targetStepId?: string;
     description?: string;
+    branchCondition?: string;
   }>;
   branchCondition?: string;
   branchLabel?: string;
@@ -84,12 +85,15 @@ type AIResponse = {
     branches?: AIBranch[];
     tasks?: AITask[];
     sections?: Record<string, string>;
+    requirementsText?: string;
+    sanitizationSummary?: SanitizationSummary;
   };
   steps?: AIStep[];
   branches?: AIBranch[];
   tasks?: AITask[];
   sections?: Record<string, string>;
   requirementsText?: string;
+  sanitizationSummary?: SanitizationSummary;
 };
 
 /**
@@ -140,7 +144,8 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       : Array.isArray(aiResponse.branches)
         ? aiResponse.branches
         : [];
-    const normalizedSections = aiResponse.blueprint?.sections ?? aiResponse.sections ?? {};
+  const normalizedSections = aiResponse.blueprint?.sections ?? aiResponse.sections ?? {};
+  const normalizedSanitizationSummary = aiResponse.blueprint?.sanitizationSummary ?? aiResponse.sanitizationSummary;
     // Check both top-level and nested in blueprint object
     const updatedRequirementsText = (aiResponse.requirementsText ?? aiResponse.blueprint?.requirementsText)?.trim() || undefined;
 
@@ -168,7 +173,15 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       tasks: merged.tasks,
       chatResponse,
       followUpQuestion,
-      sanitizationSummary: merged.sanitizationSummary,
+      sanitizationSummary:
+        merged.sanitizationSummary ??
+        normalizedSanitizationSummary ?? {
+          removedDuplicateEdges: 0,
+          reparentedBranches: 0,
+          removedCycles: 0,
+          trimmedConnections: 0,
+          attachedOrphans: 0,
+        },
       requirementsText: updatedRequirementsText,
     };
   } catch (error) {
@@ -197,13 +210,23 @@ function normalizeChatResponse(response?: string): string {
 function mergeAIResponse(
   currentBlueprint: Blueprint,
   aiResponse: { steps: AIStep[]; tasks: AITask[]; branches?: AIBranch[]; sections?: Record<string, string> }
-): { blueprint: Blueprint; tasks: AITask[] } {
+): { blueprint: Blueprint; tasks: AITask[]; sanitizationSummary: SanitizationSummary } {
   const aiSteps = Array.isArray(aiResponse.steps) ? aiResponse.steps : [];
   const aiTasks = Array.isArray(aiResponse.tasks) ? aiResponse.tasks : [];
   const aiBranches = Array.isArray(aiResponse.branches) ? aiResponse.branches : [];
 
   if (aiSteps.length === 0 && aiTasks.length === 0) {
-    return { blueprint: currentBlueprint, tasks: [] };
+    return {
+      blueprint: currentBlueprint,
+      tasks: [],
+      sanitizationSummary: {
+        removedDuplicateEdges: 0,
+        reparentedBranches: 0,
+        removedCycles: 0,
+        trimmedConnections: 0,
+        attachedOrphans: 0,
+      },
+    };
   }
 
   const currentSteps = Array.isArray(currentBlueprint.steps) ? currentBlueprint.steps : [];
@@ -353,7 +376,6 @@ function mergeAIResponse(
   // Populate sections from AI response if provided
   let updatedSections = mergedBlueprint.sections;
   if (aiResponse.sections && Object.keys(aiResponse.sections).length > 0) {
-    const sectionMap = new Map(mergedBlueprint.sections.map((s) => [s.key, s]));
     const sectionsChanged = updatedSections.map((section) => {
       const aiContent = aiResponse.sections?.[section.key];
       // Only update if section is currently empty and AI provided content
@@ -370,7 +392,9 @@ function mergeAIResponse(
     sections: updatedSections,
   };
 
-  const { blueprint: sanitizedBlueprint, summary: sanitizationSummary } = sanitizeBlueprintTopology(mergedBlueprintWithSections);
+  const { blueprint: sanitizedBlueprint, summary: sanitizationSummary } = sanitizeBlueprintTopology(
+    mergedBlueprintWithSections
+  );
 
   return {
     blueprint: sanitizedBlueprint,
@@ -405,7 +429,7 @@ function buildBranchesFromSteps(
         id: randomUUID(),
         parentStepId: parentId,
         condition: aiStep.branchCondition || branch.description || "",
-        label: branch.label,
+        label: branch.label ?? "",
         targetStepId: targetId,
       });
     });
@@ -438,7 +462,7 @@ function convertExplicitBranches(
     branches.push({
       id: randomUUID(),
       parentStepId: parentId,
-      label: branch.label,
+      label: branch.label ?? "",
       condition: branch.description ?? branch.condition ?? branch.branchCondition ?? "",
       targetStepId: targetId,
     });

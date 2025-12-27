@@ -82,7 +82,7 @@ export async function priceAndCreateQuoteForVersion(
       estimatedVolume: pricingResult.estimatedVolume,
       notes: params.notes ?? null,
       clientMessage: params.clientMessage ?? null,
-    discountsJson: pricingResult.discountsApplied,
+      discountsJson: (pricingResult.discountsApplied ?? []) as unknown as Record<string, unknown>,
     })
     .returning();
 

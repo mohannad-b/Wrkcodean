@@ -72,9 +72,7 @@ export function generateStepNumbers(blueprint: Blueprint): Map<string, StepNumbe
       stepNumber = `${numberPrefix}${letter}`;
     }
 
-    // Get branch label for display
     const branchLabel = step.branchLabel ? ` (${step.branchLabel})` : "";
-    const displayLabel = `Step ${stepNumber}${branchLabel}`;
 
     // Ensure uniqueness: if a number already exists, append a counter suffix
     const baseKey = stepNumber;

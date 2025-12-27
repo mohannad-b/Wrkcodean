@@ -99,7 +99,8 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
 
   const latestVersionIds = Array.from(latestVersionMap.values())
     .filter(Boolean)
-    .map((version) => version.id);
+    .map((version) => version.id)
+    .filter((id): id is string => Boolean(id));
 
   const metricsQueryStart = Date.now();
   const latestMetricMap = await getLatestMetricsForVersions(tenantId, latestVersionIds);
@@ -137,8 +138,9 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
       latestVersion: version
         ? {
             ...version,
-            latestQuote: latestQuoteMap.get(version.id) ?? null,
-            latestMetrics: latestMetricMap.get(version.id) ?? null,
+            id: version.id ?? "",
+            latestQuote: latestQuoteMap.get(version.id ?? "") ?? null,
+            latestMetrics: latestMetricMap.get(version.id ?? "") ?? null,
           }
         : null,
       creator,
@@ -162,7 +164,9 @@ export async function getAutomationDetail(tenantId: string, automationId: string
     .from(automationVersions)
     .where(and(eq(automationVersions.automationId, automationId), eq(automationVersions.tenantId, tenantId)))
     .orderBy(desc(automationVersions.createdAt));
-  const versionIds = versionRows.map((version) => version.id);
+  const versionIds = versionRows
+    .map((version) => version.id)
+    .filter((id): id is string => Boolean(id));
 
   const quoteRows = versionIds.length
     ? await db
@@ -187,21 +191,27 @@ export async function getAutomationDetail(tenantId: string, automationId: string
     : [];
   const tasksByVersion = new Map<string, Task[]>();
   for (const task of taskRows) {
-    if (!tasksByVersion.has(task.automationVersionId)) {
-      tasksByVersion.set(task.automationVersionId, []);
+    const taskVersionId = task.automationVersionId ?? "";
+    if (!taskVersionId) continue;
+    if (!tasksByVersion.has(taskVersionId)) {
+      tasksByVersion.set(taskVersionId, []);
     }
-    tasksByVersion.get(task.automationVersionId)!.push(task);
+    tasksByVersion.get(taskVersionId)!.push(task);
   }
   const metricsByVersion = await getLatestMetricsForVersions(tenantId, versionIds);
 
   return {
     automation: automationRow[0],
-    versions: versionRows.map((version) => ({
-      ...version,
-      latestQuote: latestQuoteMap.get(version.id) ?? null,
-      tasks: tasksByVersion.get(version.id) ?? [],
-      latestMetrics: metricsByVersion.get(version.id) ?? null,
-    })),
+    versions: versionRows.map((version) => {
+      const versionId = version.id ?? "";
+      return {
+        ...version,
+        id: versionId,
+        latestQuote: latestQuoteMap.get(versionId) ?? null,
+        tasks: tasksByVersion.get(versionId) ?? [],
+        latestMetrics: metricsByVersion.get(versionId) ?? null,
+      };
+    }),
   };
 }
 
@@ -211,7 +221,7 @@ type CreateAutomationParams = {
   name: string;
   description?: string | null;
   intakeNotes?: string | null;
-  requirementsText?: string | null;
+  requirementsText?: string;
   versionLabel?: string;
 };
 
@@ -370,7 +380,7 @@ async function nextVersionLabel(automationId: string, tenantId: string) {
   return `v${major}.${minor + 1}`;
 }
 
-type UpdateMetadataParams = {
+export type UpdateMetadataParams = {
   tenantId: string;
   automationVersionId: string;
   automationName?: string;
@@ -477,24 +487,23 @@ export async function getAutomationVersionDetail(tenantId: string, automationVer
     .where(and(eq(automations.id, version.automationId), eq(automations.tenantId, tenantId)))
     .limit(1);
 
+  const versionId = version.id ?? "";
+
   const submissionRows = await db
     .select()
     .from(submissions)
-    .where(and(eq(submissions.automationVersionId, version.id), eq(submissions.tenantId, tenantId)))
+    .where(and(eq(submissions.automationVersionId, versionId), eq(submissions.tenantId, tenantId)))
     .limit(1);
 
   const quoteRows = await db
     .select()
     .from(quotes)
-    .where(and(eq(quotes.automationVersionId, version.id), eq(quotes.tenantId, tenantId)))
+    .where(and(eq(quotes.automationVersionId, versionId), eq(quotes.tenantId, tenantId)))
     .orderBy(desc(quotes.createdAt))
     .limit(1);
 
-  const taskRows = await db
-    .select()
-    .from(tasks)
-    .where(and(eq(tasks.automationVersionId, version.id), eq(tasks.tenantId, tenantId)));
-  const latestMetric = await getLatestMetricForVersion(tenantId, version.id);
+  const taskRows = await db.select().from(tasks).where(and(eq(tasks.automationVersionId, versionId), eq(tasks.tenantId, tenantId)));
+  const latestMetric = await getLatestMetricForVersion(tenantId, versionId);
 
   const workflowView: WorkflowViewModel = buildWorkflowViewModel(version.workflowJson);
 

@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
-import { deleteAutomationVersion, getAutomationVersionDetail, updateAutomationVersionMetadata } from "@/lib/services/automations";
+import {
+  deleteAutomationVersion,
+  getAutomationVersionDetail,
+  updateAutomationVersionMetadata,
+  type UpdateMetadataParams,
+} from "@/lib/services/automations";
 import { logAudit } from "@/lib/audit/log";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
@@ -28,11 +33,8 @@ type UpdatePayload = {
 };
 
 function validateIntakeNotes(value: unknown) {
-  if (value === undefined) {
+  if (value === undefined || value === null) {
     return undefined;
-  }
-  if (value === null) {
-    return null;
   }
   if (typeof value !== "string") {
     throw new ApiError(400, "intakeNotes must be a string.");
@@ -43,12 +45,9 @@ function validateIntakeNotes(value: unknown) {
   return value;
 }
 
-function validateRequirementsText(value: unknown) {
-  if (value === undefined) {
+function validateRequirementsText(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
     return undefined;
-  }
-  if (value === null) {
-    return null;
   }
   if (typeof value !== "string") {
     throw new ApiError(400, "requirementsText must be a string.");
@@ -163,7 +162,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
         versionLabel: detail.version.versionLabel,
         status: fromDbAutomationStatus(detail.version.status),
         intakeNotes: detail.version.intakeNotes,
-        requirementsText: workflow.requirementsText,
+        requirementsText: workflow.requirementsText ?? undefined,
         workflowJson: workflow.workflowSpec,
         blueprintJson: workflow.blueprintJson,
         summary: detail.version.summary,
@@ -266,9 +265,10 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     }
     // #endregion
 
-    const requirementsTextValue: string | undefined = requirementsText ?? undefined;
+    const requirementsTextValue: string | undefined =
+      typeof requirementsText === "string" ? requirementsText : undefined;
 
-    const updated = await updateAutomationVersionMetadata({
+    const updateParams = {
       tenantId: session.tenantId,
       automationVersionId: params.id,
       automationName,
@@ -278,8 +278,9 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       intakeNotes,
       requirementsText: requirementsTextValue,
       workflowJson: blueprintJson,
-      blueprintJson,
-    });
+    } as unknown as UpdateMetadataParams;
+
+    const updated = await updateAutomationVersionMetadata(updateParams);
 
     const nextWorkflow = buildWorkflowViewModel(updated.version.workflowJson);
 
