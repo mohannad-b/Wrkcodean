@@ -6,6 +6,7 @@ import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/contex
 import { parseQuoteStatus, fromDbQuoteStatus } from "@/lib/quotes/status";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { signQuoteAndPromote, SigningError } from "@/lib/services/submissions";
+import { deriveLifecycleActorRole } from "@/lib/submissions/actor-role";
 import { logAudit } from "@/lib/audit/log";
 import { verifySigningToken } from "@/lib/auth/signing-token";
 import { db } from "@/db";
@@ -26,7 +27,7 @@ type StatusPayload = {
 const PayloadSchema = z.object({
   status: z.string(),
   last_known_updated_at: z.string().optional().nullable(),
-  signature_metadata: z.record(z.unknown()).optional().nullable(),
+  signature_metadata: z.record(z.string(), z.unknown()).optional().nullable(),
 });
 
 async function parsePayload(request: Request): Promise<StatusPayload> {
@@ -95,11 +96,14 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       throw new ApiError(404, "Quote not found");
     }
 
+    const actorRole = session ? deriveLifecycleActorRole(session) : "tenant_admin";
+
     const result = await signQuoteAndPromote({
       tenantId,
       quoteId: params.id,
       lastKnownUpdatedAt: payload.last_known_updated_at,
       signatureMetadata: payload.signature_metadata,
+      actorRole,
     }).catch((error: unknown) => {
       if (error instanceof SigningError) {
         throw new ApiError(error.status, error.code);
@@ -114,7 +118,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
     await logAudit({
       tenantId,
-      userId: session?.userId ?? null,
+      userId: session?.userId ?? "",
       action: "automation.quote.accepted",
       resourceType: "quote",
       resourceId: params.id,

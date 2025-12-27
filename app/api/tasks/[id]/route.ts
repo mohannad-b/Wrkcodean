@@ -40,7 +40,7 @@ function parsePayload(body: UpdateTaskPayload) {
     if (body.metadata !== null && typeof body.metadata !== "object") {
       throw new ApiError(400, "metadata must be an object or null");
     }
-    patch.metadata = body.metadata as Record<string, unknown> | null;
+    patch.metadata = body.metadata === null ? undefined : (body.metadata as Record<string, unknown>);
   }
 
   if (Object.keys(patch).length === 0) {

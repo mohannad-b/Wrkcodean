@@ -6,14 +6,7 @@ import { ActivityFeedItem } from "@/components/ui/ActivityFeedItem";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  DropdownMenuSeparator,
-  DropdownMenuCheckboxItem,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
   Popover,
   PopoverContent,
@@ -23,7 +16,6 @@ import {
   ArrowRight,
   ArrowUpRight,
   Plus,
-  Zap,
   Filter,
   Search,
   Briefcase,
@@ -37,6 +29,7 @@ import { useRouter } from "next/navigation";
 import { toDashboardAutomation, type ApiAutomationSummary } from "@/lib/dashboard/mapper";
 import type { DashboardAutomation } from "@/lib/mock-dashboard";
 import { buildKpiStats, type KpiStat, type VersionMetric } from "@/lib/metrics/kpi";
+import { getStatusLabel, KANBAN_COLUMNS, resolveStatus } from "@/lib/submissions/lifecycle";
 
 type TenantMembership = {
   tenantId: string;
@@ -231,9 +224,9 @@ export default function DashboardPage() {
         auto.version.toLowerCase().includes(searchLower);
 
       // Status filter - compare against original enum status for accurate filtering
-      const matchesStatus =
-        statusFilter.has("all") || 
-        (auto.statusEnum && statusFilter.has(auto.statusEnum));
+      const normalizedStatus =
+        resolveStatus(auto.statusEnum ?? "IntakeInProgress") ?? (auto.statusEnum as string) ?? "IntakeInProgress";
+      const matchesStatus = statusFilter.has("all") || statusFilter.has(normalizedStatus);
 
       return matchesSearch && matchesStatus;
     });
@@ -241,14 +234,12 @@ export default function DashboardPage() {
 
   const statusOptions = [
     { value: "all", label: "All Statuses" },
-    { value: "IntakeInProgress", label: "Intake in Progress" },
-    { value: "NeedsPricing", label: "Needs Pricing" },
-    { value: "AwaitingClientApproval", label: "Awaiting Client Approval" },
-    { value: "ReadyForBuild", label: "Ready for Build" },
-    { value: "BuildInProgress", label: "Build in Progress" },
-    { value: "QATesting", label: "QA & Testing" },
-    { value: "Live", label: "Live" },
-    { value: "Archived", label: "Archived" },
+    ...KANBAN_COLUMNS.flatMap((column) =>
+      column.statuses.map((status) => ({
+        value: status,
+        label: getStatusLabel(status),
+      }))
+    ),
   ];
 
   return (
@@ -561,17 +552,8 @@ export default function DashboardPage() {
   );
 }
 
-function aggregateMetrics(automations: ApiAutomationSummary[]): VersionMetric | null {
-  const metrics = automations
-    .filter((automation) => automation.latestVersion && automation.latestVersion.status !== "Archived")
-    .map((automation) => automation.latestVersion?.latestMetrics)
-    .filter((metric): metric is NonNullable<ApiAutomationSummary["latestVersion"]>["latestMetrics"] => Boolean(metric));
-
-  if (metrics.length === 0) {
-    return null;
-  }
-
-  const normalized: VersionMetric[] = metrics.map((metric) => ({
+function toDashboardMetrics(metric?: Partial<VersionMetric> | null): VersionMetric {
+  return {
     asOfDate: metric?.asOfDate ?? new Date().toISOString(),
     totalExecutions: Number(metric?.totalExecutions ?? 0),
     successRate: Number(metric?.successRate ?? 0),
@@ -580,43 +562,42 @@ function aggregateMetrics(automations: ApiAutomationSummary[]): VersionMetric | 
     spendUsd: Number(metric?.spendUsd ?? 0),
     hoursSaved: Number(metric?.hoursSaved ?? 0),
     estimatedCostSavings: Number(metric?.estimatedCostSavings ?? 0),
-    hoursSavedDeltaPct: metric?.hoursSavedDeltaPct !== null && metric?.hoursSavedDeltaPct !== undefined ? Number(metric.hoursSavedDeltaPct) : null,
-    estimatedCostSavingsDeltaPct:
-      metric?.estimatedCostSavingsDeltaPct !== null && metric?.estimatedCostSavingsDeltaPct !== undefined
-        ? Number(metric.estimatedCostSavingsDeltaPct)
-        : null,
-    executionsDeltaPct:
-      metric?.executionsDeltaPct !== null && metric?.executionsDeltaPct !== undefined ? Number(metric.executionsDeltaPct) : null,
-    successRateDeltaPct:
-      metric?.successRateDeltaPct !== null && metric?.successRateDeltaPct !== undefined ? Number(metric.successRateDeltaPct) : null,
-    spendDeltaPct: metric?.spendDeltaPct !== null && metric?.spendDeltaPct !== undefined ? Number(metric.spendDeltaPct) : null,
+    hoursSavedDeltaPct: metric?.hoursSavedDeltaPct ?? null,
+    estimatedCostSavingsDeltaPct: metric?.estimatedCostSavingsDeltaPct ?? null,
+    executionsDeltaPct: metric?.executionsDeltaPct ?? null,
+    successRateDeltaPct: metric?.successRateDeltaPct ?? null,
+    spendDeltaPct: metric?.spendDeltaPct ?? null,
     source: metric?.source ?? "unknown",
-  }));
+  };
+}
 
-  const sum = (fn: (m: VersionMetric) => number) => normalized.reduce((acc, metric) => acc + fn(metric), 0);
-  const latestDate = normalized.reduce<string | null>((latest, metric) => {
+function aggregateMetrics(automations: ApiAutomationSummary[]): VersionMetric | null {
+  const metrics = automations
+    .filter((automation) => automation.latestVersion && automation.latestVersion.status !== "Archived")
+    .map((automation) => toDashboardMetrics(automation.latestVersion?.latestMetrics));
+
+  if (metrics.length === 0) {
+    return null;
+  }
+
+  const sum = (fn: (m: VersionMetric) => number) => metrics.reduce((acc, metric) => acc + fn(metric), 0);
+  const latestDate = metrics.reduce<string | null>((latest, metric) => {
     if (!metric.asOfDate) return latest;
     return !latest || new Date(metric.asOfDate) > new Date(latest) ? metric.asOfDate : latest;
   }, null);
 
   const totalExecutions = sum((m) => m.totalExecutions);
-  const successCount = sum((m) =>
-    m.successCount || Math.max(0, Math.round((m.successRate / 100) * m.totalExecutions))
-  );
-  const failureCount = sum((m) =>
-    m.failureCount || Math.max(0, m.totalExecutions - (m.successCount || Math.round((m.successRate / 100) * m.totalExecutions)))
-  );
-
+  const successCount = sum((m) => m.successCount);
+  const failureCount = sum((m) => m.failureCount);
   const spendUsd = sum((m) => m.spendUsd);
   const hoursSaved = sum((m) => m.hoursSaved);
   const estimatedCostSavings = sum((m) => m.estimatedCostSavings);
 
   const successRate = totalExecutions > 0 ? (successCount / totalExecutions) * 100 : 0;
-  const averageDelta = (key: keyof VersionMetric) => {
-    const values = normalized
-      .map((metric) => metric?.[key])
-      .filter((value): value is number => value !== null && value !== undefined && !Number.isNaN(Number(value)));
-    return values.length ? values.reduce((acc, val) => acc + Number(val), 0) / values.length : null;
+  const average = (values: Array<number | null>) => {
+    const valid = values.filter((v): v is number => v !== null && Number.isFinite(v));
+    if (valid.length === 0) return null;
+    return valid.reduce((acc, v) => acc + v, 0) / valid.length;
   };
 
   return {
@@ -628,12 +609,12 @@ function aggregateMetrics(automations: ApiAutomationSummary[]): VersionMetric | 
     spendUsd,
     hoursSaved,
     estimatedCostSavings,
-    hoursSavedDeltaPct: averageDelta("hoursSavedDeltaPct"),
-    estimatedCostSavingsDeltaPct: averageDelta("estimatedCostSavingsDeltaPct"),
-    executionsDeltaPct: averageDelta("executionsDeltaPct"),
-    successRateDeltaPct: averageDelta("successRateDeltaPct"),
-    spendDeltaPct: averageDelta("spendDeltaPct"),
-    source: "aggregate",
+    hoursSavedDeltaPct: average(metrics.map((m) => m.hoursSavedDeltaPct)),
+    estimatedCostSavingsDeltaPct: average(metrics.map((m) => m.estimatedCostSavingsDeltaPct)),
+    executionsDeltaPct: average(metrics.map((m) => m.executionsDeltaPct)),
+    successRateDeltaPct: average(metrics.map((m) => m.successRateDeltaPct)),
+    spendDeltaPct: average(metrics.map((m) => m.spendDeltaPct)),
+    source: metrics[0]?.source ?? "unknown",
   };
 }
 

@@ -5,10 +5,11 @@ import { deleteAutomationVersion, getAutomationVersionDetail, updateAutomationVe
 import { logAudit } from "@/lib/audit/log";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
-import { BlueprintSchema, parseBlueprint } from "@/lib/blueprint/schema";
+import { BlueprintSchema } from "@/lib/blueprint/schema";
 import type { Blueprint } from "@/lib/blueprint/types";
 import { diffBlueprint } from "@/lib/blueprint/diff";
 import type { Task } from "@/db/schema";
+import { buildWorkflowViewModel } from "@/lib/workflows/view-model";
 
 type RouteParams = {
   params: {
@@ -154,14 +155,17 @@ export async function GET(_request: Request, { params }: RouteParams) {
       throw new ApiError(404, "Automation version not found");
     }
 
+    const workflow = buildWorkflowViewModel(detail.version.workflowJson);
+
     return NextResponse.json({
       version: {
         id: detail.version.id,
         versionLabel: detail.version.versionLabel,
         status: fromDbAutomationStatus(detail.version.status),
         intakeNotes: detail.version.intakeNotes,
-        requirementsText: detail.version.requirementsText,
-        blueprintJson: parseBlueprint(detail.version.workflowJson),
+        requirementsText: workflow.requirementsText,
+        workflowJson: workflow.workflowSpec,
+        blueprintJson: workflow.blueprintJson,
         summary: detail.version.summary,
         businessOwner: detail.version.businessOwner ?? null,
         tags: Array.isArray((detail.version as any).tags) ? (detail.version as any).tags : [],
@@ -238,19 +242,20 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     if (!existingDetail) {
       throw new ApiError(404, "Automation version not found");
     }
-    const previousBlueprint = parseBlueprint(existingDetail.version.workflowJson ?? existingDetail.version.blueprintJson);
+    const existingWorkflow = existingDetail.workflowView ?? buildWorkflowViewModel(existingDetail.version.workflowJson);
+    const previousBlueprint = existingWorkflow.workflowSpec;
     
     // #region agent log - Track step counts before save
     const previousStepCount = previousBlueprint?.steps?.length ?? 0;
     const newStepCount = blueprintJson?.steps?.length ?? 0;
     if (blueprintJson !== undefined) {
-      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:237',message:'Blueprint save - step count check',data:{versionId:params.id,previousStepCount,newStepCount,stepLoss:previousStepCount>newStepCount?previousStepCount-newStepCount:0,previousStepIds:previousBlueprint?.steps?.map(s=>s.id)??[],newStepIds:blueprintJson?.steps?.map(s=>s.id)??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:237',message:'Blueprint save - step count check',data:{versionId:params.id,previousStepCount,newStepCount,stepLoss:previousStepCount>newStepCount?previousStepCount-newStepCount:0,previousStepIds:previousBlueprint?.steps?.map((step: { id: string })=>step.id)??[],newStepIds:blueprintJson?.steps?.map((step: { id: string })=>step.id)??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
       
       // Safeguard: Warn if significant step loss detected (more than 1 step lost)
       if (previousStepCount > 0 && newStepCount < previousStepCount - 1) {
         const stepsLost = previousStepCount - newStepCount;
         console.error(`⚠️ Step loss detected: ${previousStepCount} → ${newStepCount} steps (lost ${stepsLost} steps)`);
-        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:243',message:'⚠️ STEP LOSS DETECTED',data:{versionId:params.id,previousStepCount,newStepCount,stepsLost,previousStepIds:previousBlueprint?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))??[],newStepIds:blueprintJson?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:243',message:'⚠️ STEP LOSS DETECTED',data:{versionId:params.id,previousStepCount,newStepCount,stepsLost,previousStepIds:previousBlueprint?.steps?.map((step: { id: string; name?: string; stepNumber?: number | string })=>({id:step.id,name:step.name,stepNumber:typeof step.stepNumber === 'number' ? step.stepNumber : Number(step.stepNumber)}))??[],newStepIds:blueprintJson?.steps?.map((step: { id: string; name?: string; stepNumber?: number | string })=>({id:step.id,name:step.name,stepNumber:typeof step.stepNumber === 'number' ? step.stepNumber : Number(step.stepNumber)}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
         
         // Prevent save if more than 50% of steps are lost (safety threshold)
         const lossPercentage = (stepsLost / previousStepCount) * 100;
@@ -269,10 +274,12 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       businessOwner,
       tags,
       intakeNotes,
-      requirementsText,
+      requirementsText: requirementsText ?? undefined,
       workflowJson: blueprintJson,
       blueprintJson,
     });
+
+    const nextWorkflow = buildWorkflowViewModel(updated.version.workflowJson);
 
     const metadata: Record<string, unknown> = {
       updatedFields: {
@@ -284,7 +291,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     };
 
     if (blueprintJson !== undefined) {
-      const nextBlueprint = parseBlueprint(updated.version.workflowJson);
+      const nextBlueprint = nextWorkflow.workflowSpec;
       const blueprintDiff = diffBlueprint(previousBlueprint, nextBlueprint);
       metadata.blueprintSummary = blueprintDiff.summary;
       metadata.blueprintDiff = blueprintDiff;
@@ -321,8 +328,9 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       version: {
         id: updated.version.id,
         intakeNotes: updated.version.intakeNotes,
-        requirementsText: updated.version.requirementsText,
-        blueprintJson: updated.version.workflowJson,
+        requirementsText: nextWorkflow.requirementsText ?? undefined,
+        workflowJson: nextWorkflow.workflowSpec,
+        blueprintJson: nextWorkflow.blueprintJson,
         businessOwner: updated.version.businessOwner ?? null,
         tags: Array.isArray((updated.version as any).tags) ? (updated.version as any).tags : [],
         updatedAt: updated.version.updatedAt,

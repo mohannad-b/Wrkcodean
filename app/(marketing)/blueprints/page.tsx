@@ -1,5 +1,5 @@
 import React from "react";
-import { Bot, Database, FileText, LayoutTemplate, Search, Slack, Users, Zap } from "lucide-react";
+import { Bot, Database, LayoutTemplate, Search, Slack, Users } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";

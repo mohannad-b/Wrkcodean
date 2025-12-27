@@ -85,10 +85,11 @@ export type LegacyAction =
 
 export type AuthorizationAction = WorkspaceAction | WorkflowAction | PlatformAction | LegacyAction;
 
-export type AuthorizationContext =
-  | { type: "workspace"; tenantId: string }
-  | { type: "workflow"; tenantId: string; workflowId: string }
-  | { type: "platform" };
+export type AuthorizationContext = {
+  type: string;
+  tenantId?: string | null;
+  workflowId?: string;
+};
 
 // --------------------------
 // Errors

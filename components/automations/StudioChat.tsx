@@ -28,7 +28,7 @@ interface StudioChatProps {
   blueprintEmpty: boolean;
   disabled?: boolean;
   onConversationChange?: (messages: CopilotMessage[]) => void;
-  onBlueprintUpdates?: (updates: BlueprintUpdates) => void;
+  onBlueprintUpdates?: (updates: BlueprintUpdates | Blueprint) => void;
   onBlueprintRefresh?: () => Promise<void> | void;
   onProgressUpdate?: (progress: BlueprintProgressSnapshot | null) => void;
   injectedMessage?: CopilotMessage | null;

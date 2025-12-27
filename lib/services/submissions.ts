@@ -14,7 +14,13 @@ import {
   type Task,
   type User,
 } from "@/db/schema";
-import { fromDbAutomationStatus, toDbAutomationStatus, AutomationLifecycleStatus } from "@/lib/automations/status";
+import {
+  applyAutomationTransition,
+  fromDbAutomationStatus,
+  toDbAutomationStatus,
+  AutomationLifecycleStatus,
+} from "@/lib/automations/status";
+import { getNextStatusForEvent } from "@/lib/submissions/lifecycle";
 import { canQuoteTransition, fromDbQuoteStatus, QuoteLifecycleStatus, toDbQuoteStatus } from "@/lib/quotes/status";
 
 export type SubmissionListItem = {
@@ -287,6 +293,7 @@ type SignQuoteParams = {
   quoteId: string;
   lastKnownUpdatedAt?: string | null;
   signatureMetadata?: Record<string, unknown> | null;
+  actorRole: Parameters<typeof applyAutomationTransition>[0]["actorRole"];
 };
 
 type QuoteType = "initial_commitment" | "change_order";
@@ -306,6 +313,9 @@ function isAllowedBillingActiveStatus(status: AutomationLifecycleStatus | null) 
 }
 
 export async function signQuoteAndPromote(params: SignQuoteParams): Promise<SignQuoteResult> {
+  if (!params.actorRole) {
+    throw new SigningError("missing_actor_role", "actorRole is required for lifecycle transitions", 400);
+  }
   const { tenantId, quoteId, lastKnownUpdatedAt, signatureMetadata } = params;
 
   return db.transaction(async (tx) => {
@@ -378,22 +388,38 @@ export async function signQuoteAndPromote(params: SignQuoteParams): Promise<Sign
         // Normalize statuses forward to the expected triad gating (Flow 16) if behind.
         if (quoteType === "initial_commitment") {
           if (previousAutomationStatus === "NeedsPricing") {
+            const awaitingStatus =
+              getNextStatusForEvent("quote.sent", previousAutomationStatus) ?? "AwaitingClientApproval";
+              const promotedStatus = applyAutomationTransition({
+                from: previousAutomationStatus,
+                to: awaitingStatus,
+                actorRole: params.actorRole,
+                reason: "quote.sent:autoVersion",
+              });
             const [updatedVersion] = await tx
               .update(automationVersions)
-              .set({ status: toDbAutomationStatus("AwaitingClientApproval") })
+              .set({ status: toDbAutomationStatus(promotedStatus) })
               .where(eq(automationVersions.id, versionRows[0].id))
               .returning();
             automationVersionResult = updatedVersion ?? automationVersionResult;
-            previousAutomationStatus = fromDbAutomationStatus(automationVersionResult.status);
+            previousAutomationStatus = promotedStatus;
           }
           if (previousSubmissionStatus === "NeedsPricing") {
+            const awaitingStatus =
+              getNextStatusForEvent("quote.sent", previousSubmissionStatus) ?? "AwaitingClientApproval";
+              const promotedStatus = applyAutomationTransition({
+                from: previousSubmissionStatus,
+                to: awaitingStatus,
+                actorRole: params.actorRole,
+                reason: "quote.sent:submission",
+              });
             const [updatedSubmission] = await tx
               .update(submissions)
-              .set({ status: toDbAutomationStatus("AwaitingClientApproval"), pricingStatus: "Sent" })
+              .set({ status: toDbAutomationStatus(promotedStatus), pricingStatus: "Sent" })
               .where(eq(submissions.id, submissionResult?.id ?? submissionRows[0].id))
               .returning();
             submissionResult = updatedSubmission ?? submissionResult;
-            previousSubmissionStatus = fromDbAutomationStatus(submissionResult.status);
+            previousSubmissionStatus = promotedStatus;
           }
         }
       }
@@ -437,19 +463,33 @@ export async function signQuoteAndPromote(params: SignQuoteParams): Promise<Sign
     // Update automation + submission lifecycles.
     if (automationVersionResult) {
       if (quoteType === "initial_commitment" && previousAutomationStatus !== "ReadyForBuild") {
+        const targetStatus = applyAutomationTransition({
+          from: previousAutomationStatus ?? "AwaitingClientApproval",
+          to: "ReadyForBuild",
+          actorRole: params.actorRole,
+          reason: "quote.signed:autoVersion",
+        });
         const [updatedVersion] = await tx
           .update(automationVersions)
-          .set({ status: toDbAutomationStatus("ReadyForBuild") })
+          .set({ status: toDbAutomationStatus(targetStatus) })
           .where(eq(automationVersions.id, automationVersionResult.id))
           .returning();
         automationVersionResult = updatedVersion ?? automationVersionResult;
+        previousAutomationStatus = targetStatus;
       }
     }
 
     if (submissionResult) {
       const updates: Partial<typeof submissions.$inferInsert> = { pricingStatus: "Signed" };
       if (quoteType === "initial_commitment" && previousSubmissionStatus !== "ReadyForBuild") {
-        updates.status = toDbAutomationStatus("ReadyForBuild");
+        const targetStatus = applyAutomationTransition({
+          from: previousSubmissionStatus ?? "AwaitingClientApproval",
+          to: "ReadyForBuild",
+          actorRole: params.actorRole,
+          reason: "quote.signed:submission",
+        });
+        updates.status = toDbAutomationStatus(targetStatus);
+        previousSubmissionStatus = targetStatus;
       }
       const [updatedSubmission] = await tx
         .update(submissions)

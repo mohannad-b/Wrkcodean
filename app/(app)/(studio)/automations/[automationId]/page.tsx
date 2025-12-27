@@ -8,7 +8,7 @@ import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
@@ -24,21 +24,19 @@ import {
   Calendar,
   Clock,
   DollarSign,
-  Zap,
   CheckCircle2,
   ArrowUpRight,
   ArrowRight,
   History,
   ListChecks,
-  Lightbulb,
   FileText,
   GitBranch,
   CheckSquare,
-  X,
   Settings2,
 } from "lucide-react";
 import type { Connection, Node, Edge, EdgeChange, NodeChange } from "reactflow";
 import { StudioChat, type CopilotMessage } from "@/components/automations/StudioChat";
+import type { StudioCanvasProps } from "@/components/StudioCanvas";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 import { ActivityTab } from "@/components/automations/ActivityTab";
 import { BuildStatusTab } from "@/components/automations/BuildStatusTab";
@@ -60,7 +58,7 @@ import { AUTOMATION_TABS, type AutomationTab } from "@/lib/automations/tabs";
 import { VersionSelector, type VersionOption } from "@/components/ui/VersionSelector";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { BUILD_STATUS_ORDER, type BuildStatus } from "@/lib/build-status/types";
+import { ACTIVE_LIFECYCLE_ORDER, resolveStatus } from "@/lib/submissions/lifecycle";
 import { TaskDrawer } from "@/components/automations/TaskDrawer";
 import { NeedsAttentionCard } from "@/components/automations/NeedsAttentionCard";
 import { getAttentionTasks, type AutomationTask } from "@/lib/automations/tasks";
@@ -74,17 +72,14 @@ import {
 import { buildKpiStats, type KpiStat, type MetricConfig, type VersionMetric } from "@/lib/metrics/kpi";
 import { createVersionWithRedirect } from "./create-version";
 
-const StudioCanvas = dynamic(
-  () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex h-full items-center justify-center bg-gray-50">
-        <span className="text-sm text-gray-500">Loading canvas…</span>
-      </div>
-    ),
-  }
-);
+const StudioCanvas = dynamic<StudioCanvasProps>(() => import("@/components/StudioCanvas").then((m) => m.StudioCanvas), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center bg-gray-50">
+      <span className="text-sm text-gray-500">Loading canvas…</span>
+    </div>
+  ),
+});
 
 type QuoteSummary = {
   id: string;
@@ -183,18 +178,6 @@ interface AutomationDetailPageProps {
   };
 }
 
-const currency = (value?: string | null) => {
-  if (!value) return "—";
-  const parsed = Number(value);
-  return Number.isNaN(parsed) ? value : `$${parsed.toLocaleString()}`;
-};
-
-const perUnit = (value?: string | null) => {
-  if (!value) return "—";
-  const parsed = Number(value);
-  return Number.isNaN(parsed) ? value : `$${parsed.toFixed(4)}`;
-};
-
 const formatDateTime = (value?: string | null) => {
   if (!value) return "—";
   try {
@@ -205,6 +188,8 @@ const formatDateTime = (value?: string | null) => {
 };
 
 
+type LifecycleStage = (typeof ACTIVE_LIFECYCLE_ORDER)[number];
+
 type BlueprintChecklistItem = {
   id: string;
   label: string;
@@ -214,16 +199,14 @@ type BlueprintChecklistItem = {
 
 const cloneBlueprint = (blueprint: Blueprint | null) => (blueprint ? (JSON.parse(JSON.stringify(blueprint)) as Blueprint) : null);
 
-const isAtOrBeyondBuild = (status: AutomationLifecycleStatus | null, target: BuildStatus): boolean => {
-  if (!status) {
+const isAtOrBeyondBuild = (status: AutomationLifecycleStatus | null, target: LifecycleStage): boolean => {
+  const resolved = resolveStatus(status ?? "");
+  if (!resolved || resolved === "Archived") {
     return false;
   }
-  const targetIndex = BUILD_STATUS_ORDER.indexOf(target);
-  const statusIndex = BUILD_STATUS_ORDER.indexOf(status as BuildStatus);
-  if (statusIndex === -1) {
-    return status === "Archived";
-  }
-  return statusIndex >= targetIndex;
+  const targetIndex = ACTIVE_LIFECYCLE_ORDER.indexOf(target);
+  const statusIndex = ACTIVE_LIFECYCLE_ORDER.indexOf(resolved as LifecycleStage);
+  return statusIndex !== -1 && targetIndex !== -1 && statusIndex >= targetIndex;
 };
 
 type ActivityEntry = {
@@ -819,7 +802,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   );
 
   const handleBlueprintAIUpdates = useCallback(
-    (updates: CopilotBlueprintUpdates) => {
+    (updates: CopilotBlueprintUpdates | Blueprint) => {
       setIsSynthesizingBlueprint(true);
       if (synthesisTimeoutRef.current) {
         clearTimeout(synthesisTimeoutRef.current);
@@ -827,7 +810,17 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       synthesisTimeoutRef.current = setTimeout(() => {
         setIsSynthesizingBlueprint(false);
       }, 1500);
-      applyBlueprintUpdate((current) => applyBlueprintUpdates(current, updates));
+      applyBlueprintUpdate((current) => {
+        if (!current) return current;
+        const maybeBlueprint = updates as Blueprint;
+        if (Array.isArray(maybeBlueprint?.steps) && Array.isArray((maybeBlueprint as any)?.sections)) {
+          setBlueprint(maybeBlueprint);
+          setBlueprintDirty(true);
+          setBlueprintError(null);
+          return maybeBlueprint;
+        }
+        return applyBlueprintUpdates(current, updates as CopilotBlueprintUpdates);
+      });
     },
     [applyBlueprintUpdate]
   );
@@ -1195,8 +1188,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       }));
   }, [selectedStep?.stepNumber, versionTasks]);
   const blueprintIsEmpty = useMemo(() => isBlueprintEffectivelyEmpty(blueprint), [blueprint]);
-  const summaryComplete = completion.summaryComplete;
-
   // Simple checkmark-based checklist - only show the 4 required items
   const REQUIRED_CHECKLIST_ITEMS = [
     { id: "business_requirements", label: "Business Requirements", sectionKey: "business_requirements" as BlueprintSectionKey },
@@ -2248,11 +2239,6 @@ function RecentActivity({ entries, onViewAll, isLoading, error }: RecentActivity
   );
 }
 
-interface NeedsAttentionCardProps {
-  tasks: VersionTask[];
-  onGoToWorkflow?: () => void;
-}
-
 interface AutomationTasksTabProps {
   tasks: VersionTask[];
   blockersRemaining?: number;
@@ -2647,7 +2633,6 @@ function getStatusBadgeClasses(status: VersionTask["status"]) {
   }
 }
 
-export { TaskDrawer };
 
 function getPriorityBadgeClasses(priority: NonNullable<VersionTask["priority"]>) {
   switch (priority) {

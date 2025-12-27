@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { requireUserSession } from "@/lib/api/context";
 
 const DEFAULT_TOS_VERSION = "2025-07-19"; // matches https://wrk.com/terms-of-service/
@@ -24,7 +25,7 @@ export async function POST(request: NextRequest) {
       tosVersion,
       updatedAt: acceptedAt,
     })
-    .where(users.id.eq(session.userId));
+    .where(eq(users.id, session.userId));
 
   return NextResponse.json({
     status: "accepted",

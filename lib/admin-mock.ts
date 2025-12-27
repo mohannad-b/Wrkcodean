@@ -7,6 +7,7 @@ import {
   SubmissionMessage,
   MessageType,
   SpendSummary,
+  ProjectMessage,
 } from "./types";
 
 // Re-export types for convenience
@@ -18,6 +19,7 @@ export type {
   AdminProject,
   SubmissionMessage,
   SpendSummary,
+  ProjectMessage,
 };
 
 // Mock Submissions

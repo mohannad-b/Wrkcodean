@@ -7,6 +7,7 @@ import {
   listSubmissionRequestsForTenant,
 } from "@/lib/services/submissions";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
+import { deriveLifecycleActorRole } from "@/lib/submissions/actor-role";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
 import { db } from "@/db";
 import { automationVersions, users } from "@/db/schema";
@@ -140,7 +141,8 @@ export async function POST(request: Request) {
       throw new ApiError(400, "automationId does not match version");
     }
 
-    const submission = await ensureSubmissionForVersion(versionRow[0]);
+    const actorRole = deriveLifecycleActorRole(session);
+    const submission = await ensureSubmissionForVersion(versionRow[0], actorRole);
 
     return NextResponse.json(
       {

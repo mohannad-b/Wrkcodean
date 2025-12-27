@@ -7,7 +7,7 @@ import { useParams } from "next/navigation";
 
 export default function WorkflowChatPage() {
   const params = useParams();
-  const workflowId = params.workflowId as string;
+  const workflowId = typeof params?.workflowId === "string" ? params.workflowId : "";
   const [workflowName, setWorkflowName] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 

@@ -1,15 +1,15 @@
 'use client';
 
-import React, { useState } from 'react';
-import { 
-  CheckCircle2, 
-  Clock, 
-  AlertTriangle, 
-  FileText, 
-  Hammer, 
-  Search, 
-  Rocket, 
-  Sparkles, 
+import React, { useState } from "react";
+import {
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  FileText,
+  Hammer,
+  Search,
+  Rocket,
+  Sparkles,
   ChevronRight,
   FileSignature,
   GitBranch,
@@ -17,9 +17,9 @@ import {
   History,
   Layout,
   Info,
-  Zap
-} from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+  Zap,
+} from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
@@ -27,35 +27,15 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
 import { QuoteSignatureModal } from "@/components/modals/QuoteSignatureModal";
 import { cn } from "@/lib/utils";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { getStatusLabel, type SubmissionLifecycleStatus } from "@/lib/submissions/lifecycle";
 
-type VersionStatus = 
-  | 'Intake in Progress' 
-  | 'Needs Pricing' 
-  | 'Awaiting Client Approval' 
-  | 'Build in Progress' 
-  | 'QA & Testing' 
-  | 'Ready to Launch' 
-  | 'Live' 
-  | 'Blocked' 
-  | 'Archived';
+type VersionStatus = Exclude<SubmissionLifecycleStatus, "Archived">;
 
 export const BuildStatusTab: React.FC = () => {
-  // State representing the current version context
-  const [versionStatus, setVersionStatus] = useState<VersionStatus>('Awaiting Client Approval');
-  const [currentStep, setCurrentStep] = useState(2); // Step 2 = Awaiting Client Approval
+  const [versionStatus, setVersionStatus] = useState<VersionStatus>("AwaitingClientApproval");
+  const [currentStep, setCurrentStep] = useState(2);
   const [volume, setVolume] = useState([15000]);
   const [showQuoteModal, setShowQuoteModal] = useState(false);
   const [showLaunchModal, setShowLaunchModal] = useState(false);
@@ -80,16 +60,17 @@ export const BuildStatusTab: React.FC = () => {
 
   // Build Pipeline Steps
   const steps = [
-    { id: 'intake', label: 'Intake in Progress', icon: FileText, desc: 'Scope changes for v1.1', date: 'Nov 12' },
-    { id: 'pricing', label: 'Needs Pricing', icon: Search, desc: 'Delta analysis', date: 'Nov 13' },
-    { id: 'approval', label: 'Awaiting Client Approval', icon: FileSignature, desc: 'Approve amendment' },
-    { id: 'build', label: 'Build in Progress', icon: Hammer, desc: 'Implementing changes' },
-    { id: 'qa', label: 'QA & Testing', icon: CheckCircle2, desc: 'Regression testing' },
-    { id: 'launch', label: 'Ready to Launch', icon: Rocket, desc: 'Deploy v1.1' },
+    { id: "IntakeInProgress" as VersionStatus, label: getStatusLabel("IntakeInProgress"), icon: FileText, desc: "Scope changes for v1.1", date: "Nov 12" },
+    { id: "NeedsPricing" as VersionStatus, label: getStatusLabel("NeedsPricing"), icon: Search, desc: "Delta analysis", date: "Nov 13" },
+    { id: "AwaitingClientApproval" as VersionStatus, label: getStatusLabel("AwaitingClientApproval"), icon: FileSignature, desc: "Approve amendment" },
+    { id: "BuildInProgress" as VersionStatus, label: getStatusLabel("BuildInProgress"), icon: Hammer, desc: "Implementing changes" },
+    { id: "QATesting" as VersionStatus, label: getStatusLabel("QATesting"), icon: CheckCircle2, desc: "Regression testing" },
+    { id: "ReadyForBuild" as VersionStatus, label: getStatusLabel("ReadyForBuild"), icon: Rocket, desc: "Deploy v1.1" },
+    { id: "Live" as VersionStatus, label: getStatusLabel("Live"), icon: Rocket, desc: "Live" },
   ];
 
   const handleQuoteSigned = () => {
-    setVersionStatus('Build in Progress');
+    setVersionStatus("BuildInProgress");
     setCurrentStep(3); // Move to Build
     setShowQuoteModal(false);
     // Clear approval item
@@ -102,18 +83,21 @@ export const BuildStatusTab: React.FC = () => {
 
   // Helper to render status badge
   const getStatusBadge = () => {
-    switch (versionStatus) {
-      case 'Intake in Progress': return <Badge variant="outline" className="bg-gray-100 text-gray-600 border-gray-200">Intake</Badge>;
-      case 'Needs Pricing': return <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">Pricing</Badge>;
-      case 'Awaiting Client Approval': return <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">Awaiting Approval</Badge>;
-      case 'Build in Progress': return <Badge variant="outline" className="bg-red-50 text-[#E43632] border-red-200 animate-pulse">Building</Badge>;
-      case 'QA & Testing': return <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">QA Testing</Badge>;
-      case 'Ready to Launch': return <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">Ready</Badge>;
-      case 'Live': return <Badge className="bg-emerald-500 text-white border-none">Live</Badge>;
-      case 'Blocked': return <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200">Blocked</Badge>;
-      case 'Archived': return <Badge variant="outline" className="bg-gray-100 text-gray-500 border-gray-200">Archived</Badge>;
-      default: return null;
-    }
+    const label = getStatusLabel(versionStatus);
+    const classes: Record<VersionStatus, string> = {
+      IntakeInProgress: "bg-gray-100 text-gray-600 border-gray-200",
+      NeedsPricing: "bg-amber-50 text-amber-700 border-amber-200",
+      AwaitingClientApproval: "bg-blue-50 text-blue-700 border-blue-200",
+      ReadyForBuild: "bg-blue-50 text-blue-700 border-blue-200",
+      BuildInProgress: "bg-red-50 text-[#E43632] border-red-200 animate-pulse",
+      QATesting: "bg-purple-50 text-purple-700 border-purple-200",
+      Live: "bg-emerald-500 text-white border-none",
+    };
+    return (
+      <Badge variant="outline" className={cn("border", classes[versionStatus] ?? "bg-gray-50 text-gray-600 border-gray-200")}>
+        {label}
+      </Badge>
+    );
   };
 
   return (

@@ -4,7 +4,6 @@ import { can } from "@/lib/auth/rbac";
 import { ApiError, requireTenantSession } from "@/lib/api/context";
 import { getAutomationVersionDetail } from "@/lib/services/automations";
 import { listCopilotMessages, createCopilotMessage } from "@/lib/services/copilot-messages";
-import { parseBlueprint } from "@/lib/blueprint/schema";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import { buildBlueprintFromChat } from "@/lib/blueprint/ai-builder-simple";
 import { applyStepNumbers } from "@/lib/blueprint/step-numbering";
@@ -14,10 +13,18 @@ import { automationVersions } from "@/db/schema";
 import { db } from "@/db";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { determineConversationPhase, generateThinkingSteps } from "@/lib/ai/copilot-orchestrator";
-import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
 import { logAudit } from "@/lib/audit/log";
 import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
-import type { CopilotChatMessage } from "@/lib/ai/openai-client";
+import { buildWorkflowViewModel } from "@/lib/workflows/view-model";
+
+type ConversationMessage = {
+  role: "assistant" | "user";
+  content: string;
+};
+
+type SuggestPayload = {
+  messages?: unknown;
+};
 
 const MAX_HISTORY_MESSAGES = 12;
 
@@ -36,7 +43,7 @@ type StreamEvent =
     }
   | { status: "error"; message: string };
 
-export async function POST(_request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, { params }: { params: { id: string } }) {
   const stream = new TransformStream();
   const writer = stream.writable.getWriter();
   const encoder = new TextEncoder();
@@ -56,13 +63,26 @@ export async function POST(_request: Request, { params }: { params: { id: string
     if (!detail) {
       throw new ApiError(404, "Automation version not found.");
     }
+    const workflow = detail.workflowView ?? buildWorkflowViewModel(detail.version.workflowJson);
 
-    const currentBlueprint = parseBlueprint(detail.version.blueprintJson) ?? createEmptyBlueprint();
-    const history = await listCopilotMessages({
-      tenantId: session.tenantId,
-      automationVersionId: params.id,
-    });
-    const conversationHistory = toConversationHistory(history);
+    const currentBlueprint = workflow.workflowSpec ?? createEmptyBlueprint();
+    const body = (await request.json().catch(() => ({}))) as SuggestPayload;
+    let conversationHistory: ConversationMessage[];
+    if (Array.isArray(body.messages)) {
+      const validated = body.messages
+        .map((msg) => (isMessage(msg) ? { role: msg.role, content: msg.content } : null))
+        .filter((msg): msg is ConversationMessage => Boolean(msg));
+      if (validated.length === 0) {
+        throw new ApiError(400, "messages must be non-empty and contain role/content strings");
+      }
+      conversationHistory = validated;
+    } else {
+      const history = await listCopilotMessages({
+        tenantId: session.tenantId,
+        automationVersionId: params.id,
+      });
+      conversationHistory = toConversationHistory(history);
+    }
 
     send({ status: "thinking" });
 
@@ -98,7 +118,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
     const [savedVersion] = await db
       .update(automationVersions)
       .set({
-        blueprintJson: validatedBlueprint,
+        workflowJson: validatedBlueprint,
         updatedAt: new Date(),
       })
       .where(eq(automationVersions.id, params.id))
@@ -123,7 +143,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
       createdBy: null,
     });
 
-    const augmentedHistory: CopilotChatMessage[] = [
+    const augmentedHistory: ConversationMessage[] = [
       ...conversationHistory,
       { role: "assistant", content: responseMessage },
     ];
@@ -186,7 +206,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
 
 function toConversationHistory(
   messages: Awaited<ReturnType<typeof listCopilotMessages>>
-): CopilotChatMessage[] {
+): ConversationMessage[] {
   return messages
     .map((message) => {
       if (message.role === "assistant") {
@@ -197,5 +217,12 @@ function toConversationHistory(
     })
     .filter((message) => message.content.trim().length > 0)
     .slice(-MAX_HISTORY_MESSAGES);
+}
+
+function isMessage(value: unknown): value is ConversationMessage {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as { role?: unknown; content?: unknown };
+  if (candidate.role !== "assistant" && candidate.role !== "user") return false;
+  return typeof candidate.content === "string" && candidate.content.trim().length > 0;
 }
 

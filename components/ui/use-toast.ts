@@ -3,7 +3,7 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
 
-export type ToastVariant = "default" | "success" | "error";
+export type ToastVariant = "default" | "success" | "error" | "warning";
 
 export interface ToastOptions {
   title: string;
@@ -27,6 +27,14 @@ export function useToast() {
       return;
     }
 
+    if (variant === "warning") {
+      if (typeof toast.warning === "function") {
+        toast.warning(title, toastArgs);
+      } else {
+        toast(title, toastArgs);
+      }
+      return;
+    }
     toast(title, toastArgs);
   }, []);
 }

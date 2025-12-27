@@ -17,36 +17,33 @@ import {
   ShieldAlert,
   Signature,
 } from "lucide-react";
-import { mockSubmissionMessages } from "@/lib/admin-mock";
+// import { mockSubmissionMessages } from "@/lib/admin-mock";
 import type { AdminSubmission, PricingStatus, ProjectStatus } from "@/lib/types";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { PricingOverridePanel } from "@/components/admin/PricingOverridePanel";
-import { ConversationThread } from "@/components/admin/ConversationThread";
+// import { ConversationThread } from "@/components/admin/ConversationThread";
 import { WorkflowChatView } from "@/components/workflow-chat/WorkflowChatView";
 import dynamic from "next/dynamic";
+import { useNodesState, useEdgesState, type Edge } from "reactflow";
+import type { StudioCanvasProps } from "@/components/StudioCanvas";
+import type { CanvasNodeData } from "@/lib/blueprint/canvas-utils";
 import { blueprintToEdges, blueprintToNodes } from "@/lib/blueprint/canvas-utils";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
 import { BLUEPRINT_SECTION_KEYS, BLUEPRINT_SECTION_TITLES, type Blueprint } from "@/lib/blueprint/types";
+import { getStatusLabel, resolveStatus } from "@/lib/submissions/lifecycle";
 
 // Dynamically import StudioCanvas to reduce initial bundle size
 // ReactFlow is heavy (~200KB), so we only load it when the Blueprint tab is active
-const StudioCanvas = dynamic(
-  () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
-  {
-    loading: () => (
-      <div className="w-full h-full flex items-center justify-center bg-[#F9FAFB]">
-        <div className="text-sm text-gray-500">Loading canvas...</div>
-      </div>
-    ),
-    ssr: false, // ReactFlow requires client-side only
-  }
-);
-const ReactFlowHooks = dynamic(
-  () => import("reactflow").then((mod) => ({ default: { useNodesState: mod.useNodesState, useEdgesState: mod.useEdgesState } })),
-  { ssr: false }
-);
+const StudioCanvas = dynamic<StudioCanvasProps>(() => import("@/components/StudioCanvas").then((m) => m.StudioCanvas), {
+  loading: () => (
+    <div className="w-full h-full flex items-center justify-center bg-[#F9FAFB]">
+      <div className="text-sm text-gray-500">Loading canvas...</div>
+    </div>
+  ),
+  ssr: false, // ReactFlow requires client-side only
+});
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
@@ -79,6 +76,7 @@ type SubmissionDetail = {
   id: string;
   name: string;
   status: AutomationLifecycleStatus | string;
+  owner?: { name?: string | null } | null;
   automation: {
     id: string;
     name: string;
@@ -136,27 +134,11 @@ type ProjectTask = {
 };
 
 const mapLifecycleToSubmissionStatus = (status?: AutomationLifecycleStatus | string | null): ProjectStatus => {
-  switch (status) {
-    case "NeedsPricing":
-      return "Needs Pricing";
-    case "AwaitingClientApproval":
-      return "Awaiting Client Approval";
-    case "BuildInProgress":
-      return "Build in Progress";
-    case "QATesting":
-      return "QA & Testing";
-    case "Live":
-      return "Live";
-    case "Archived":
-      return "Archived";
-    case "Blocked":
-      return "Blocked";
-    case "ReadyToLaunch":
-    case "READY_TO_LAUNCH":
-      return "Ready to Launch";
-    default:
-      return "Intake in Progress";
+  const resolved = resolveStatus(status ?? "");
+  if (resolved === "ReadyForBuild") {
+    return "Ready to Launch";
   }
+  return getStatusLabel(resolved ?? "IntakeInProgress") as ProjectStatus;
 };
 
 const mapQuoteStatusToPricing = (status?: string | null): PricingStatus => {
@@ -424,33 +406,8 @@ function BlueprintTab({ requirementsText, workflow }: { requirementsText?: strin
   const initialNodes = useMemo(() => blueprintToNodes(blueprint), [blueprint]);
   const initialEdges = useMemo(() => blueprintToEdges(blueprint), [blueprint]);
 
-  const [rfHooks, setRfHooks] = useState<null | {
-    useNodesState: typeof import("reactflow").useNodesState;
-    useEdgesState: typeof import("reactflow").useEdgesState;
-  }>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    void import("reactflow").then((mod) => {
-      if (mounted) {
-        setRfHooks({ useNodesState: mod.useNodesState, useEdgesState: mod.useEdgesState });
-      }
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  if (!rfHooks) {
-    return (
-      <div className="flex h-full items-center justify-center bg-gray-50 text-xs text-gray-500 border-t border-gray-200">
-        Loading canvas…
-      </div>
-    );
-  }
-
-  const [nodes, setNodes, onNodesChange] = rfHooks.useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = rfHooks.useEdgesState(initialEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNodeData>(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialEdges);
 
   useEffect(() => {
     setNodes(blueprintToNodes(blueprint));
@@ -458,14 +415,6 @@ function BlueprintTab({ requirementsText, workflow }: { requirementsText?: strin
   }, [blueprint, setEdges, setNodes]);
 
   const hasSteps = blueprint.steps.length > 0;
-  const mockIntakeChat = [
-    { role: "user", text: "We need to add a check for high value invoices.", time: "2d ago" },
-    { role: "ai", text: "Understood. What is the threshold?", time: "2d ago" },
-    { role: "user", text: "$10,000. Also check the vendor name against a sanctions list.", time: "2d ago" },
-  ];
-
-  const mockFiles = ["Sanctions_List_API_Docs.pdf", "Updated_SOP_v2.docx"];
-
   return (
     <div className="flex h-full border-t border-gray-200">
       {/* Left: Requirements */}
@@ -1021,8 +970,6 @@ export default function SubmissionDetailPage({ params }: SubmissionDetailPagePro
     unitPrice: latestQuote ? Number(latestQuote.unitPrice) : undefined,
     effectiveUnitPrice: latestQuote ? Number(latestQuote.unitPrice) : undefined,
   };
-
-  const messages = mockSubmissionMessages[displayProject.id] || [];
 
   const handleQuoteStatus = async (nextStatus: "SENT" | "SIGNED") => {
     if (!latestQuote) return;

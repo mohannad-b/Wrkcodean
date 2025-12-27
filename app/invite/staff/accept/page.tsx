@@ -10,7 +10,7 @@ type State = { status: "loading" | "success" | "error"; message?: string };
 export default function StaffInviteAcceptPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const token = searchParams.get("token");
+  const token = searchParams?.get("token");
   const [state, setState] = useState<State>({ status: "loading" });
 
   useEffect(() => {

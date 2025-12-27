@@ -18,6 +18,10 @@ type AuditParams = {
 export async function logAudit(params: AuditParams) {
   try {
     const tenantId = params.tenantId ?? PLATFORM_TENANT_FALLBACK;
+    if (!tenantId || tenantId === "00000000-0000-0000-0000-000000000000") {
+      console.warn("[audit] skip logging because tenantId is missing and fallback is not configured");
+      return;
+    }
     await db.insert(auditLogs).values({
       tenantId,
       userId: params.userId,

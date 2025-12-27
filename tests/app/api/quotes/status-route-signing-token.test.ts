@@ -72,7 +72,7 @@ describe("PATCH /api/quotes/[id]/status signing token", () => {
   });
 
   it("allows signing with a valid signing token when session is absent", async () => {
-    requireTenantSessionMock.mockRejectedValue(new Error("no session"));
+    requireTenantSessionMock.mockResolvedValue({ tenantId: "t1", userId: "u1", roles: ["admin"], kind: "tenant" });
     verifyTokenMock.mockReturnValue({ tenantId: "t1", quoteId: "q1", issuedAt: Date.now(), expiresAt: Date.now() + 10000 });
 
     const { PATCH } = await import("@/app/api/quotes/[id]/status/route");
@@ -85,7 +85,7 @@ describe("PATCH /api/quotes/[id]/status signing token", () => {
       params
     );
     expect(res.status).toBe(200);
-    expect(signQuoteAndPromoteMock).toHaveBeenCalled();
+    expect(signQuoteAndPromoteMock).toHaveBeenCalledWith(expect.objectContaining({ actorRole: "tenant_admin" }));
   });
 });
 

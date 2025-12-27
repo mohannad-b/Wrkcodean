@@ -8,7 +8,7 @@ import ReactFlow, {
   Connection,
   OnNodesChange,
   OnEdgesChange,
-  OnEdgeUpdate,
+  OnEdgeUpdateFunc,
   NodeTypes,
   BackgroundVariant,
   ReactFlowInstance,
@@ -45,7 +45,7 @@ interface StudioCanvasProps {
   onNodesChange?: OnNodesChange;
   onEdgesChange?: OnEdgesChange;
   onConnect?: (connection: Connection) => void;
-  onEdgeUpdate?: OnEdgeUpdate;
+  onEdgeUpdate?: OnEdgeUpdateFunc;
   onNodeClick?: (event: React.MouseEvent, node: Node) => void;
   isSynthesizing?: boolean;
   emptyState?: React.ReactNode;

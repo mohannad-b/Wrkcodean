@@ -1,27 +1,23 @@
 import { describe, it, expect } from "vitest";
-import { BUILD_STATUS_ORDER, canTransitionBuildStatus, BuildStatus } from "@/lib/build-status/types";
+import { ACTIVE_LIFECYCLE_ORDER, canTransition, type SubmissionLifecycleStatus } from "@/lib/submissions/lifecycle";
 
-describe("canTransitionBuildStatus", () => {
-  it("allows moving forward or staying on the same stage", () => {
-    for (let index = 0; index < BUILD_STATUS_ORDER.length; index += 1) {
-      const from = BUILD_STATUS_ORDER[index];
-      expect(canTransitionBuildStatus(from, from)).toBe(true);
+describe("lifecycle adjacency", () => {
+  it("allows staying on the same stage or moving forward by one step", () => {
+    for (let index = 0; index < ACTIVE_LIFECYCLE_ORDER.length; index += 1) {
+      const from = ACTIVE_LIFECYCLE_ORDER[index];
+      expect(canTransition(from, from)).toBe(true);
 
-      for (let next = index; next < BUILD_STATUS_ORDER.length; next += 1) {
-        const to = BUILD_STATUS_ORDER[next];
-        expect(canTransitionBuildStatus(from, to)).toBe(true);
+      const next = ACTIVE_LIFECYCLE_ORDER[index + 1] as SubmissionLifecycleStatus | undefined;
+      if (next) {
+        expect(canTransition(from, next)).toBe(true);
       }
     }
   });
 
-  it("blocks backwards transitions", () => {
-    const from: BuildStatus = "BuildInProgress";
-    expect(canTransitionBuildStatus(from, "NeedsPricing")).toBe(false);
-    expect(canTransitionBuildStatus("QATesting", "AwaitingClientApproval")).toBe(false);
-  });
-
-  it("returns false for unknown statuses", () => {
-    expect(canTransitionBuildStatus("IntakeInProgress", "Paused" as BuildStatus)).toBe(false);
+  it("blocks skipped or backwards transitions", () => {
+    const from: SubmissionLifecycleStatus = "BuildInProgress";
+    expect(canTransition(from, "NeedsPricing")).toBe(false);
+    expect(canTransition("NeedsPricing", "BuildInProgress")).toBe(false);
+    expect(canTransition("QATesting", "AwaitingClientApproval")).toBe(false);
   });
 });
-

@@ -1,4 +1,4 @@
-import type { Toast } from "@/components/ui/use-toast";
+import type { ToastOptions } from "@/components/ui/use-toast";
 
 type CreateVersionArgs = {
   automationId: string;
@@ -10,7 +10,7 @@ type CreateVersionArgs = {
   } | null;
   fetchAutomation: (options?: { preserveSelection?: boolean }) => Promise<void>;
   setSelectedVersionId: (id: string) => void;
-  toast: (toast: Toast) => void;
+  toast: (toast: ToastOptions) => void;
 };
 
 /**

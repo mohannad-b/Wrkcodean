@@ -45,6 +45,8 @@ function DefaultEdge({
           stroke: selected || isHovered ? "#E43632" : style.stroke || "#9CA3AF",
           transition: "stroke 0.2s ease, stroke-width 0.2s ease",
         }}
+        // reactflow supports mouse handlers on edges for hover affordances
+        // @ts-expect-error upstream types omit these handlers
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       />

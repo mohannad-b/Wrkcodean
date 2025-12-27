@@ -30,7 +30,7 @@ describe("POST /api/automation-versions/[id]/price-and-quote with discount code"
 
   beforeEach(() => {
     vi.resetAllMocks();
-    requireTenantSessionMock.mockResolvedValue({ tenantId: "t1", userId: "u1", roles: ["workspace_admin"] });
+    requireTenantSessionMock.mockResolvedValue({ tenantId: "t1", userId: "u1", roles: ["admin"], kind: "tenant" });
     canMock.mockReturnValue(true);
     priceAndCreateMock.mockResolvedValue({
       quoteId: "q1",
@@ -60,6 +60,7 @@ describe("POST /api/automation-versions/[id]/price-and-quote with discount code"
     expect(priceAndCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         discountCode: "FIRST-ABC",
+        actorRole: "tenant_admin",
       })
     );
   });

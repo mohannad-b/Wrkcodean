@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   AlertCircle,
   Loader2,
@@ -936,11 +936,9 @@ export default function NewAutomationPage() {
   const [isSuggestingUseCases, setIsSuggestingUseCases] = useState(false);
   const [suggestUseCasesError, setSuggestUseCasesError] = useState<string | null>(null);
   const [suggestionsPage, setSuggestionsPage] = useState(0);
-  const [suggestionCache, setSuggestionCache] = useState<Record<string, Array<{ text: string; description: string; icon: React.ReactNode }>>>({});
   const [isLoadingUseCases, setIsLoadingUseCases] = useState(false);
   const [aiThinkingSeconds, setAiThinkingSeconds] = useState(0);
   const [expandingSeconds, setExpandingSeconds] = useState(0);
-  const selectionKey = `${selectedIndustry || "none"}|${selectedDepartment || "none"}`;
 
   // Clear suggested use cases and show loading when selections change
   useEffect(() => {
@@ -959,7 +957,9 @@ export default function NewAutomationPage() {
       setSuggestedUseCases([]);
       setSuggestionsPage(0);
       setIsLoadingUseCases(false);
+      return undefined;
     }
+    return undefined;
   }, [selectedIndustry, selectedDepartment, selectedSystem]);
 
   const handleAIExpand = async () => {
@@ -1121,7 +1121,6 @@ export default function NewAutomationPage() {
 
       setSuggestedUseCases((prev) => {
         const merged = [...prev, ...normalized];
-        setSuggestionCache((cache) => ({ ...cache, [selectionKey]: merged }));
         const nextPage = Math.max(0, Math.ceil(merged.length / SUGGESTIONS_PER_PAGE) - 1);
         setSuggestionsPage(nextPage);
         return merged;

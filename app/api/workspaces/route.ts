@@ -141,11 +141,13 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (body.industry !== undefined) {
-    updates.industry = body.industry.trim() || null;
+    const trimmed = body.industry.trim();
+    updates.industry = trimmed.length > 0 ? trimmed : undefined;
   }
 
   if (body.currency !== undefined) {
-    updates.currency = body.currency.trim() || "usd";
+    const trimmed = body.currency.trim();
+    updates.currency = trimmed.length > 0 ? trimmed : "usd";
   }
 
   if (body.timezone !== undefined) {

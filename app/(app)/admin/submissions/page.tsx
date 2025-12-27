@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { cn } from "@/lib/utils";
+import { getStatusLabel, resolveStatus } from "@/lib/submissions/lifecycle";
 
 type SubmissionRow = {
   id: string;
@@ -29,24 +30,8 @@ type ApiPayload = {
 };
 
 function mapStatus(status?: string) {
-  switch (status) {
-    case "NeedsPricing":
-      return "Needs Pricing";
-    case "AwaitingClientApproval":
-      return "Awaiting Client Approval";
-    case "BuildInProgress":
-      return "Build in Progress";
-    case "QATesting":
-      return "QA & Testing";
-    case "ReadyForBuild":
-      return "Ready for Build";
-    case "Live":
-      return "Live";
-    case "Archived":
-      return "Archived";
-    default:
-      return "Intake in Progress";
-  }
+  const resolved = resolveStatus(status ?? "");
+  return getStatusLabel(resolved ?? "IntakeInProgress");
 }
 
 export default function AdminSubmissionsPage() {

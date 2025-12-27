@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { ApiError, handleApiError, requireWrkStaffSession } from "@/lib/api/context";
+import { handleApiError, requireWrkStaffSession } from "@/lib/api/context";
 import { authorize } from "@/lib/auth/rbac";
 import { listWrkInboxConversations, getUnreadCount } from "@/lib/services/workflow-chat";
 import { db } from "@/db";
 import { workflowConversations, automationVersions, automations, workflowMessages } from "@/db/schema";
-import { eq, and, desc, sql, isNull } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 
 export async function GET(request: Request) {
   try {

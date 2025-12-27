@@ -104,7 +104,7 @@ function parseOpenAiJson(content: string, catalog: Record<string, { listPrice: n
   }
 }
 
-export async function POST(request: Request, { params }: RouteParams) {
+export async function POST(_request: Request, { params }: RouteParams) {
   try {
     const session = await requireTenantSession();
 

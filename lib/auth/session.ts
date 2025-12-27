@@ -31,7 +31,7 @@ function resolveDefaultTenantRole(): MembershipRole {
 
 const DEFAULT_TENANT_ROLE = resolveDefaultTenantRole();
 
-const withCache = <T extends (...args: any[]) => Promise<AppSession>>(fn: T) => fn;
+const withCache = <T extends (...args: any[]) => Promise<unknown>>(fn: T) => fn;
 
 export class NoTenantMembershipError extends Error {
   code = "NO_TENANT_MEMBERSHIP";

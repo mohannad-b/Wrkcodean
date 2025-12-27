@@ -1,22 +1,26 @@
 import { Badge } from "./badge";
 import { cn } from "@/lib/utils";
 import { AutomationStatus } from "@/lib/types";
-import { BUILD_STATUS_LABELS, BuildStatus } from "@/lib/build-status/types";
+import type { AutomationLifecycleStatus } from "@/lib/automations/status";
+import { getStatusLabel, resolveStatus } from "@/lib/submissions/lifecycle";
 
 interface StatusBadgeProps {
   status: AutomationStatus | string;
   className?: string;
 }
 
-const BUILD_STATUS_CLASSES: Record<BuildStatus | "Archived", string> = {
+const STATUS_CLASSES: Record<AutomationLifecycleStatus, string> = {
   IntakeInProgress: "bg-gray-50 text-gray-600 border-gray-200",
   NeedsPricing: "bg-amber-50 text-amber-700 border-amber-200",
   AwaitingClientApproval: "bg-blue-50 text-blue-700 border-blue-200",
+  ReadyForBuild: "bg-blue-50 text-blue-700 border-blue-200",
   BuildInProgress: "bg-red-50 text-[#E43632] border-red-200",
   QATesting: "bg-purple-50 text-purple-700 border-purple-200",
   Live: "bg-emerald-100 text-emerald-800 border-emerald-300",
   Archived: "bg-gray-100 text-gray-500 border-gray-200",
 };
+
+const normalize = (value: string) => value.replace(/[\s&_-]+/g, "").toLowerCase();
 
 const FALLBACK_STATUS_STYLES: Record<string, { label: string; classes: string }> = {
   readytolaunch: { label: "Ready to Launch", classes: "bg-emerald-50 text-emerald-700 border-emerald-200" },
@@ -29,49 +33,13 @@ const FALLBACK_STATUS_STYLES: Record<string, { label: string; classes: string }>
   pending: { label: "Pending", classes: "bg-gray-50 text-gray-600 border-gray-200" },
 };
 
-const LEGACY_BUILD_STATUS_MAP: Record<string, BuildStatus | "Archived"> = {
-  draft: "IntakeInProgress",
-  needspricing: "NeedsPricing",
-  needs_pricing: "NeedsPricing",
-  awaitingapproval: "AwaitingClientApproval",
-  awaiting_client_approval: "AwaitingClientApproval",
-  ready_to_build: "AwaitingClientApproval",
-  buildinprogress: "BuildInProgress",
-  build_in_progress: "BuildInProgress",
-  qa_testing: "QATesting",
-  qaandtesting: "QATesting",
-  live: "Live",
-  archived: "Archived",
-};
-
-const normalize = (value: string) => value.replace(/[\s&_-]+/g, "").toLowerCase();
-
-function resolveBuildStatus(value: string): BuildStatus | "Archived" | null {
-  if (!value) {
-    return null;
-  }
-
-  const normalized = normalize(value);
-  if (!normalized) {
-    return null;
-  }
-
-  for (const status of Object.keys(BUILD_STATUS_LABELS) as BuildStatus[]) {
-    if (normalize(status) === normalized || normalize(BUILD_STATUS_LABELS[status]) === normalized) {
-      return status;
-    }
-  }
-
-  return LEGACY_BUILD_STATUS_MAP[normalized] ?? null;
-}
-
 export function StatusBadge({ status, className }: StatusBadgeProps) {
   const rawStatus = typeof status === "string" ? status : String(status);
-  const buildStatus = resolveBuildStatus(rawStatus);
+  const buildStatus = resolveStatus(rawStatus);
 
   if (buildStatus) {
-    const label = buildStatus === "Archived" ? "Archived" : BUILD_STATUS_LABELS[buildStatus];
-    const classes = BUILD_STATUS_CLASSES[buildStatus];
+    const label = getStatusLabel(buildStatus);
+    const classes = STATUS_CLASSES[buildStatus];
     return (
       <Badge
         variant="outline"

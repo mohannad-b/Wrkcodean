@@ -6,14 +6,9 @@ import { Card } from "@/components/ui/card";
 import { NeedsAttentionCard } from "@/components/automations/NeedsAttentionCard";
 import { QuoteSignatureModal } from "@/components/modals/QuoteSignatureModal";
 import { cn } from "@/lib/utils";
-import {
-  BUILD_STATUS_LABELS,
-  BUILD_STATUS_ORDER,
-  BuildStatus,
-  DEFAULT_BUILD_STATUS,
-} from "@/lib/build-status/types";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
 import { getAttentionTasks, type AutomationTask } from "@/lib/automations/tasks";
+import { ACTIVE_LIFECYCLE_ORDER, getStatusLabel, resolveStatus } from "@/lib/submissions/lifecycle";
 import { AlertTriangle, Check, CheckCircle2, FileSignature, Hammer, Sparkles, Rocket } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -57,14 +52,19 @@ const formatTimestamp = (value?: string | null) => {
   }
 };
 
-const resolveBuildStatus = (status?: AutomationLifecycleStatus | null): BuildStatus => {
-  if (!status || status === "Archived") {
-    return DEFAULT_BUILD_STATUS;
+type LifecycleStage = (typeof ACTIVE_LIFECYCLE_ORDER)[number];
+
+const resolveBuildStatus = (status?: AutomationLifecycleStatus | null): LifecycleStage => {
+  const resolved = resolveStatus(status ?? "");
+  if (!resolved || resolved === "Archived") {
+    return ACTIVE_LIFECYCLE_ORDER[0];
   }
-  return (BUILD_STATUS_ORDER as AutomationLifecycleStatus[]).includes(status) ? (status as BuildStatus) : DEFAULT_BUILD_STATUS;
+  return ACTIVE_LIFECYCLE_ORDER.includes(resolved as LifecycleStage)
+    ? (resolved as LifecycleStage)
+    : ACTIVE_LIFECYCLE_ORDER[0];
 };
 
-const STAGE_ICONS: Record<BuildStatus, React.ComponentType<{ size?: number | string }>> = {
+const STAGE_ICONS: Record<LifecycleStage, React.ComponentType<{ size?: number | string }>> = {
   IntakeInProgress: CheckCircle2,
   NeedsPricing: CheckCircle2,
   AwaitingClientApproval: FileSignature,
@@ -84,14 +84,14 @@ export function BuildStatusTab({
   automationVersionId,
   onPricingRefresh,
 }: BuildStatusTabProps) {
-  const [localStatus, setLocalStatus] = useState<BuildStatus>(resolveBuildStatus(status));
+  const [localStatus, setLocalStatus] = useState<LifecycleStage>(resolveBuildStatus(status));
   useEffect(() => {
     setLocalStatus(resolveBuildStatus(status));
   }, [status]);
   const currentStatus = localStatus;
-  const currentIndex = BUILD_STATUS_ORDER.indexOf(currentStatus);
+  const currentIndex = ACTIVE_LIFECYCLE_ORDER.indexOf(currentStatus);
   const attentionTasks = getAttentionTasks(tasks);
-  const onTrack = currentIndex >= BUILD_STATUS_ORDER.indexOf("BuildInProgress");
+  const onTrack = currentIndex >= ACTIVE_LIFECYCLE_ORDER.indexOf("BuildInProgress");
   const pricingLocked = currentStatus === "IntakeInProgress";
   const versionDisplay = versionLabel ? `Version ${versionLabel}` : "Version";
   const minVolume = 100;
@@ -166,7 +166,7 @@ export function BuildStatusTab({
               <div className="flex items-center gap-3">
                 <h2 className="text-3xl font-bold text-[#0A0A0A] leading-tight">{versionDisplay}</h2>
                 <Badge variant="secondary" className="bg-[#E8F0FF] text-[#2B64E3] text-xs px-3 py-1.5 rounded-full">
-                  Awaiting Approval
+                  {getStatusLabel(currentStatus)}
                 </Badge>
               </div>
               <div className="flex items-center gap-2 text-sm text-gray-600">
@@ -182,7 +182,7 @@ export function BuildStatusTab({
             <div className="relative">
               <div className="absolute left-10 right-10 top-7 h-1 bg-gray-100" />
             <div className="flex justify-between relative">
-              {BUILD_STATUS_ORDER.map((stage, index) => {
+              {ACTIVE_LIFECYCLE_ORDER.map((stage, index) => {
                 const isComplete = index < currentIndex;
                 const isActive = index === currentIndex;
                   const Icon = STAGE_ICONS[stage];
@@ -207,7 +207,7 @@ export function BuildStatusTab({
                           isComplete || isActive ? "text-[#0A0A0A]" : "text-gray-400"
                         )}
                       >
-                        {BUILD_STATUS_LABELS[stage]}
+                        {getStatusLabel(stage)}
                       </p>
                     </div>
                   </div>

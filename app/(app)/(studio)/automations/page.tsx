@@ -14,6 +14,7 @@ import { AutomationList } from "@/components/ui/AutomationList";
 import type { AutomationSummary as LegacyAutomationSummary, AutomationStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
+import { getStatusLabel, KANBAN_COLUMNS, resolveStatus } from "@/lib/submissions/lifecycle";
 
 type ApiAutomationSummary = {
   id: string;
@@ -53,21 +54,16 @@ type ApiVersionMetrics = {
 };
 
 type QuoteFilter = "ALL" | "NO_QUOTE" | "DRAFT" | "SENT" | "SIGNED";
-type StatusChipValue = AutomationLifecycleStatus | "ALL" | "BLOCKED";
+type StatusChipValue = AutomationLifecycleStatus | "ALL";
 
 const STATUS_FILTERS: Array<{ label: string; value: StatusChipValue; helper?: string }> = [
   { label: "All Automations", value: "ALL" },
-  { label: "Intake in Progress", value: "IntakeInProgress" },
-  { label: "Needs Pricing", value: "NeedsPricing" },
-  { label: "Awaiting client approval", value: "AwaitingClientApproval" },
-  { label: "Build in progress", value: "BuildInProgress" },
-  { label: "QA & Testing", value: "QATesting" },
-  { label: "Live", value: "Live" },
-  {
-    label: "Blocked",
-    value: "BLOCKED",
-    helper: "No blocked automations yet",
-  },
+  ...KANBAN_COLUMNS.map((column) =>
+    column.statuses.map((status) => ({
+      label: getStatusLabel(status),
+      value: status,
+    }))
+  ).flat(),
 ];
 
 const QUOTE_STATUS_FILTERS: QuoteFilter[] = ["DRAFT", "SENT", "SIGNED"];
@@ -86,24 +82,8 @@ const formatQuoteFilterLabel = (value: QuoteFilter) => {
     .join(" ");
 };
 
-const mapStatusForCards = (status: AutomationLifecycleStatus): AutomationStatus => {
-  switch (status) {
-    case "NeedsPricing":
-      return "Needs Pricing";
-    case "AwaitingClientApproval":
-      return "Awaiting Client Approval";
-    case "BuildInProgress":
-      return "Build in Progress";
-    case "QATesting":
-      return "QA & Testing";
-    case "Live":
-      return "Live";
-    case "Archived":
-      return "Archived";
-    default:
-      return "Intake in Progress";
-  }
-};
+const mapStatusForCards = (status: AutomationLifecycleStatus): AutomationStatus =>
+  getStatusLabel(status) as AutomationStatus;
 
 const getPlaceholderAvatar = (name: string) =>
   `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}&backgroundType=gradientLinear`;
@@ -195,11 +175,8 @@ export default function AutomationsPage() {
         );
       })
       .filter((automation) => {
-        const status = automation.latestVersion?.status ?? "IntakeInProgress";
+        const status = resolveStatus(automation.latestVersion?.status ?? "IntakeInProgress") ?? "IntakeInProgress";
         if (statusFilter === "ALL") return true;
-        if (statusFilter === "BLOCKED") {
-          return false;
-        }
         return status === statusFilter;
       })
       .filter((automation) => {
@@ -214,7 +191,8 @@ export default function AutomationsPage() {
 
   const presentationData: LegacyAutomationSummary[] = filteredAutomations.map((automation) => {
     const version = automation.latestVersion;
-    const status = mapStatusForCards(version?.status ?? "IntakeInProgress");
+    const statusValue = resolveStatus(version?.status ?? "IntakeInProgress") ?? "IntakeInProgress";
+    const status = mapStatusForCards(statusValue);
     const metrics = version?.latestMetrics ?? null;
     const fallbackMetrics = getMockAutomationMetrics(automation.id);
     const spend = metrics

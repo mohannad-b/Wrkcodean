@@ -9,11 +9,13 @@ type Params = {
   id: string;
 };
 
-function parseRole(input: unknown) {
+const ALLOWED_ROLES = ["owner", "admin", "editor", "viewer", "billing"] as const;
+type MembershipRole = (typeof ALLOWED_ROLES)[number];
+
+function parseRole(input: unknown): MembershipRole | null {
   if (typeof input !== "string") return null;
   const normalized = input.toLowerCase();
-  const allowed = ["owner", "admin", "editor", "viewer", "billing"];
-  return allowed.includes(normalized) ? normalized : null;
+  return (ALLOWED_ROLES as readonly string[]).includes(normalized) ? (normalized as MembershipRole) : null;
 }
 
 export async function PATCH(request: Request, { params }: { params: Params }) {

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
 import { buildRateLimitKey, ensureRateLimit } from "@/lib/rate-limit";
@@ -9,7 +9,7 @@ import { getAutomationVersionDetail } from "@/lib/services/automations";
 import { logAudit } from "@/lib/audit/log";
 import { createEmptyBlueprint } from "@/lib/blueprint/factory";
 import type { Blueprint } from "@/lib/blueprint/types";
-import { BlueprintSchema, parseBlueprint } from "@/lib/blueprint/schema";
+import { BlueprintSchema } from "@/lib/blueprint/schema";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
 import { buildBlueprintFromChat, type AITask } from "@/lib/blueprint/ai-builder-simple";
 import { applyStepNumbers } from "@/lib/blueprint/step-numbering";
@@ -30,6 +30,7 @@ import {
   type CopilotMemory,
 } from "@/lib/blueprint/copilot-analysis";
 import { getCopilotAnalysis, upsertCopilotAnalysis } from "@/lib/services/copilot-analysis";
+import { buildWorkflowViewModel } from "@/lib/workflows/view-model";
 
 const DraftRequestSchema = z.object({
   messages: z
@@ -95,6 +96,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (!detail) {
       throw new ApiError(404, "Automation version not found.");
     }
+    const workflow = detail.workflowView ?? buildWorkflowViewModel(detail.version.workflowJson);
 
     const existingAnalysis =
       (await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id })) ??
@@ -129,8 +131,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     const contextSummary = buildConversationSummary(normalizedMessages, payload.intakeNotes ?? detail.version.intakeNotes);
-    const currentBlueprint =
-      parseBlueprint(detail.version.workflowJson ?? (detail as any).version.blueprintJson) ?? createEmptyBlueprint();
+    const currentBlueprint = workflow.workflowSpec ?? createEmptyBlueprint();
     const userMessageContent =
       latestUserMessage?.content ??
       normalizedMessages.find((message) => message.role === "user")?.content ??
@@ -141,7 +142,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     let commandExecuted = false;
     let blueprintWithTasks: Blueprint;
     let aiTasks: AITask[] = [];
-    let updatedRequirementsText: string | null | undefined = undefined;
+    let updatedRequirementsText: string | null | undefined;
 
     if (directCommand && latestUserMessage) {
       commandExecuted = true;
@@ -180,7 +181,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         chatResponse,
         followUpQuestion,
         sanitizationSummary,
-        requirementsText: updatedRequirementsText,
+        requirementsText: newRequirementsText,
       } = await buildBlueprintFromChat({
         userMessage: userMessageContent,
         currentBlueprint,
@@ -188,10 +189,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
           role: message.role,
           content: message.content,
         })),
-        requirementsText: detail.version.requirementsText,
+        requirementsText: workflow.requirementsText,
         memorySummary: analysisState.memory?.summary_compact ?? null,
         memoryFacts: analysisState.memory?.facts ?? {},
       });
+      updatedRequirementsText = newRequirementsText;
 
       const numberedBlueprint = applyStepNumbers(aiGeneratedBlueprint);
       aiTasks = generatedTasks;
@@ -258,8 +260,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
     };
     
     // Update requirements text if AI provided an update (non-empty string)
-    if (commandExecuted === false && updatedRequirementsText !== undefined && typeof updatedRequirementsText === 'string' && updatedRequirementsText.trim().length > 0) {
-      updatePayload.requirementsText = updatedRequirementsText.trim();
+    if (commandExecuted === false && typeof updatedRequirementsText === "string") {
+      const trimmed = updatedRequirementsText.trim();
+      if (trimmed.length > 0) {
+        updatePayload.requirementsText = trimmed;
+      }
     }
 
     const [savedVersion] = await db

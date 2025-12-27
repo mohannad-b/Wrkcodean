@@ -8,34 +8,22 @@ import { Zap, MoreVertical } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "motion/react";
 import { useRouter } from "next/navigation";
+import type { AutomationLifecycleStatus } from "@/lib/automations/status";
+import { getStatusLabel, resolveStatus } from "@/lib/submissions/lifecycle";
 
 interface AutomationListProps {
   automations: AutomationSummary[];
 }
 
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case "Live":
-      return "bg-emerald-100 text-emerald-800 border-emerald-200";
-    case "Ready to Launch":
-      return "bg-emerald-50 text-emerald-700 border-emerald-200";
-    case "QA & Testing":
-      return "bg-purple-50 text-purple-700 border-purple-200";
-    case "Build in Progress":
-      return "bg-red-50 text-[#E43632] border-red-200";
-    case "Awaiting Client Approval":
-      return "bg-blue-50 text-blue-700 border-blue-200";
-    case "Needs Pricing":
-      return "bg-amber-50 text-amber-700 border-amber-200";
-    case "Intake in Progress":
-      return "bg-gray-50 text-gray-600 border-gray-200";
-    case "Blocked":
-      return "bg-orange-50 text-orange-700 border-orange-200";
-    case "Archived":
-      return "bg-gray-100 text-gray-500 border-gray-200";
-    default:
-      return "bg-gray-50 text-gray-600 border-gray-200";
-  }
+const STATUS_BADGE_CLASSES: Record<AutomationLifecycleStatus, string> = {
+  IntakeInProgress: "bg-gray-50 text-gray-600 border-gray-200",
+  NeedsPricing: "bg-amber-50 text-amber-700 border-amber-200",
+  AwaitingClientApproval: "bg-blue-50 text-blue-700 border-blue-200",
+  ReadyForBuild: "bg-blue-50 text-blue-700 border-blue-200",
+  BuildInProgress: "bg-red-50 text-[#E43632] border-red-200",
+  QATesting: "bg-purple-50 text-purple-700 border-purple-200",
+  Live: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  Archived: "bg-gray-100 text-gray-500 border-gray-200",
 };
 
 export function AutomationList({ automations }: AutomationListProps) {
@@ -80,15 +68,21 @@ export function AutomationList({ automations }: AutomationListProps) {
           </div>
 
           <div className="w-[120px] shrink-0">
-            <Badge
-              variant="outline"
-              className={cn(
-                "text-[10px] font-medium border px-2 py-0.5",
-                getStatusColor(automation.status)
-              )}
-            >
-              {automation.status}
-            </Badge>
+            {(() => {
+              const resolvedStatus = resolveStatus(automation.status);
+              const badgeLabel = resolvedStatus ? getStatusLabel(resolvedStatus) : automation.status;
+              const badgeClasses =
+                (resolvedStatus ? STATUS_BADGE_CLASSES[resolvedStatus] : null) ??
+                "bg-gray-50 text-gray-600 border-gray-200";
+              return (
+                <Badge
+                  variant="outline"
+                  className={cn("text-[10px] font-medium border px-2 py-0.5", badgeClasses)}
+                >
+                  {badgeLabel}
+                </Badge>
+              );
+            })()}
           </div>
 
           <div className="w-[100px] shrink-0 text-right">

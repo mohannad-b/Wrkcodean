@@ -18,7 +18,7 @@ import {
 import {
   API_AUTOMATION_STATUSES,
   AutomationLifecycleStatus,
-  canTransition,
+  applyAutomationTransition,
   fromDbAutomationStatus,
   toDbAutomationStatus,
 } from "@/lib/automations/status";
@@ -26,6 +26,7 @@ import type { Workflow } from "@/lib/blueprint/types";
 import { createEmptyWorkflow } from "@/lib/blueprint/factory";
 import { getLatestMetricForVersion, getLatestMetricsForVersions } from "@/lib/services/automation-metrics";
 import { ApiError } from "@/lib/api/context";
+import { buildWorkflowViewModel, type WorkflowViewModel } from "@/lib/workflows/view-model";
 
 type AutomationWithLatestVersion = Automation & {
   latestVersion: (AutomationVersion & { latestQuote: Quote | null; latestMetrics: AutomationVersionMetric | null }) | null;
@@ -495,8 +496,11 @@ export async function getAutomationVersionDetail(tenantId: string, automationVer
     .where(and(eq(tasks.automationVersionId, version.id), eq(tasks.tenantId, tenantId)));
   const latestMetric = await getLatestMetricForVersion(tenantId, version.id);
 
+  const workflowView: WorkflowViewModel = buildWorkflowViewModel(version.workflowJson);
+
   return {
     version,
+    workflowView,
     automation: automationRow[0] ?? null,
     project: submissionRows[0] ?? null,
     latestQuote: quoteRows[0] ?? null,
@@ -509,6 +513,7 @@ type UpdateStatusParams = {
   tenantId: string;
   automationVersionId: string;
   nextStatus: AutomationLifecycleStatus;
+  actorRole: Parameters<typeof applyAutomationTransition>[0]["actorRole"];
 };
 
 type UpdateStatusResult = {
@@ -532,14 +537,20 @@ export async function updateAutomationVersionStatus(params: UpdateStatusParams):
   }
 
   const currentStatus = fromDbAutomationStatus(versionRow[0].status);
-
-  if (!canTransition(currentStatus, params.nextStatus)) {
-    throw new Error("Invalid status transition");
+  const actorRole = params.actorRole;
+  if (!actorRole) {
+    throw new Error("actorRole is required for lifecycle transitions");
   }
+  const validatedNextStatus = applyAutomationTransition({
+    from: currentStatus,
+    to: params.nextStatus,
+    actorRole,
+    reason: "updateAutomationVersionStatus",
+  });
 
   const [updated] = await db
     .update(automationVersions)
-    .set({ status: toDbAutomationStatus(params.nextStatus) })
+    .set({ status: toDbAutomationStatus(validatedNextStatus) })
     .where(eq(automationVersions.id, params.automationVersionId))
     .returning();
 
@@ -547,10 +558,10 @@ export async function updateAutomationVersionStatus(params: UpdateStatusParams):
     throw new Error("Failed to update automation version");
   }
 
-  if (params.nextStatus === "NeedsPricing") {
-    await ensureSubmissionForVersion(updated);
-  } else if (params.nextStatus !== "IntakeInProgress") {
-    await syncSubmissionStatus(updated, params.nextStatus);
+  if (validatedNextStatus === "NeedsPricing") {
+    await ensureSubmissionForVersion(updated, actorRole);
+  } else if (validatedNextStatus !== "IntakeInProgress") {
+    await syncSubmissionStatus(updated, validatedNextStatus, actorRole);
   }
 
   return { version: updated, previousStatus: currentStatus };
@@ -582,7 +593,10 @@ export async function deleteAutomationVersion(params: { tenantId: string; automa
   });
 }
 
-export async function ensureSubmissionForVersion(version: AutomationVersion) {
+export async function ensureSubmissionForVersion(
+  version: AutomationVersion,
+  actorRole: Parameters<typeof applyAutomationTransition>[0]["actorRole"]
+) {
   const existing = await db
     .select()
     .from(submissions)
@@ -590,7 +604,16 @@ export async function ensureSubmissionForVersion(version: AutomationVersion) {
     .limit(1);
 
   if (existing.length > 0) {
-    await syncSubmissionStatus(existing[0], "NeedsPricing");
+    const currentStatus = fromDbAutomationStatus(existing[0].status);
+    if (currentStatus === "IntakeInProgress") {
+      const nextStatus = applyAutomationTransition({
+        from: currentStatus,
+        to: "NeedsPricing",
+        actorRole,
+        reason: "ensureSubmissionForVersion",
+      });
+      await syncSubmissionStatus(existing[0], nextStatus, actorRole);
+    }
     return existing[0];
   }
 
@@ -604,7 +627,17 @@ export async function ensureSubmissionForVersion(version: AutomationVersion) {
     throw new Error("Automation not found for version");
   }
 
-  const dbStatus = toDbAutomationStatus("NeedsPricing");
+  const versionStatus = fromDbAutomationStatus(version.status);
+  const targetStatus =
+    versionStatus === "IntakeInProgress"
+      ? applyAutomationTransition({
+          from: versionStatus,
+          to: "NeedsPricing",
+          actorRole,
+          reason: "ensureSubmissionForVersion:create",
+        })
+      : versionStatus;
+  const dbStatus = toDbAutomationStatus(targetStatus);
 
   const [submission] = await db
     .insert(submissions)
@@ -622,8 +655,19 @@ export async function ensureSubmissionForVersion(version: AutomationVersion) {
 
 export const ensureProjectForVersion = ensureSubmissionForVersion;
 
-async function syncSubmissionStatus(submissionOrVersion: Submission | AutomationVersion, nextStatus: AutomationLifecycleStatus) {
-  const dbStatus = toDbAutomationStatus(nextStatus);
+async function syncSubmissionStatus(
+  submissionOrVersion: Submission | AutomationVersion,
+  nextStatus: AutomationLifecycleStatus,
+  actorRole: Parameters<typeof applyAutomationTransition>[0]["actorRole"]
+) {
+  const currentStatus = fromDbAutomationStatus(submissionOrVersion.status);
+  const validatedStatus = applyAutomationTransition({
+    from: currentStatus,
+    to: nextStatus,
+    actorRole,
+    reason: "syncSubmissionStatus",
+  });
+  const dbStatus = toDbAutomationStatus(validatedStatus);
 
   if (isSubmissionRecord(submissionOrVersion)) {
     await db

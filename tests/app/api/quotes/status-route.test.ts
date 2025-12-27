@@ -108,6 +108,7 @@ describe("PATCH /api/quotes/[id]/status", () => {
       expect.objectContaining({
         quoteId: "quote-1",
         tenantId: "tenant-1",
+        actorRole: "tenant_admin",
       })
     );
     expect(updateQuoteStatusMock).not.toHaveBeenCalled();

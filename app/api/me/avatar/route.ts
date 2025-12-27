@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { handleApiError, requireTenantSession, ApiError } from "@/lib/api/context";
-import { storeLocalFile } from "@/lib/storage/secure-file-storage";
 import { uploadFile } from "@/lib/storage/file-service";
 import { updateUserProfile } from "@/lib/user/profile";
 import { logAudit } from "@/lib/audit/log";

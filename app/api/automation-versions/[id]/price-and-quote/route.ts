@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
 import { priceAndCreateQuoteForVersion } from "@/lib/services/pricing";
+import { deriveLifecycleActorRole } from "@/lib/submissions/actor-role";
 
 type RouteParams = {
   params: {
@@ -101,20 +102,22 @@ export async function POST(request: Request, { params }: RouteParams) {
     const notes = typeof payload.notes === "string" ? payload.notes : undefined;
     const discountCode = typeof payload.discountCode === "string" ? payload.discountCode.trim() : undefined;
 
+    const actorRole = deriveLifecycleActorRole(session);
+
     const result = await priceAndCreateQuoteForVersion({
       tenantId: session.tenantId,
       automationVersionId: params.id,
       clientMessage,
       notes,
       discountCode,
+      actorRole,
       pricing: {
         complexity,
         estimatedVolume,
         estimatedActions,
         discounts,
         currency,
-        // actionCatalog will be auto-loaded and cached inside the service
-        actionCatalog: undefined as any, // will be replaced inside service
+        actionCatalog: undefined as any,
       },
     });
 

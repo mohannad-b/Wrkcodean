@@ -66,7 +66,7 @@ export const mockAutomations: AutomationSummary[] = [
     department: "Legal",
     owner: currentUser,
     version: "v1.0",
-    status: "Blocked",
+    status: "Build in Progress",
     runs: 45,
     success: 82.0,
     spend: 85,

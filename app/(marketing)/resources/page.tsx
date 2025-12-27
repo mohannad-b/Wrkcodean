@@ -1,5 +1,5 @@
 import React from "react";
-import { ArrowRight, BookOpen, FileText, Terminal, Video } from "lucide-react";
+import { ArrowRight, BookOpen, Terminal, Video } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";

@@ -5,6 +5,7 @@ import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/contex
 import { parseAutomationStatus, fromDbAutomationStatus } from "@/lib/automations/status";
 import { updateAutomationVersionStatus } from "@/lib/services/automations";
 import { logAudit } from "@/lib/audit/log";
+import { deriveLifecycleActorRole } from "@/lib/submissions/actor-role";
 
 type Params = {
   id: string;
@@ -63,10 +64,13 @@ export async function PATCH(request: Request, { params }: { params: Params }) {
       throw new ApiError(403, "Only Admins or Owners can archive workflows");
     }
 
+    const actorRole = deriveLifecycleActorRole(session);
+
     const { version: updated, previousStatus } = await updateAutomationVersionStatus({
       tenantId: session.tenantId,
       automationVersionId: params.id,
       nextStatus,
+      actorRole: actorRole as any,
     }).catch((error: unknown) => {
       if (error instanceof Error) {
         if (error.message.includes("not found")) {

@@ -4,9 +4,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Loader2, X, Download, MoreHorizontal, Trash2, FileText, Upload, History, ShieldCheck, Plus, KeyRound } from "lucide-react";
-import type { VersionTask } from "@/db/schema";
 import { SystemPickerModal } from "@/components/modals/SystemPickerModal";
 import { CredentialsModal } from "@/components/modals/CredentialsModal";
+
+type VersionTask = any;
 
 export interface TaskDrawerProps {
   task: VersionTask;

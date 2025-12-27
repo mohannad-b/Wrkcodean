@@ -1,7 +1,7 @@
 import { requireWrkStaffSession } from "@/lib/api/context";
 import { listStaffUsers } from "@/lib/services/platform-admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import StaffTable from "./staffTable";
 import { AddStaffForm } from "./addStaffForm";
 

@@ -7,27 +7,11 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
-import dynamic from "next/dynamic";
+import { addEdge, useEdgesState, useNodesState, type Connection, type Edge, type Node } from "reactflow";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 import { SecureUploader } from "@/components/files/SecureUploader";
 
-// Dynamically import StudioCanvas and ReactFlow hooks to keep initial bundle light
-const StudioCanvas = dynamic(
-  () => import("@/components/automations/StudioCanvas").then((mod) => ({ default: mod.StudioCanvas })),
-  {
-    loading: () => (
-      <div className="w-full h-full flex items-center justify-center bg-[#F9FAFB]">
-        <div className="text-sm text-gray-500">Loading canvas...</div>
-      </div>
-    ),
-    ssr: false,
-  }
-);
-
-const ReactFlowHooks = dynamic(
-  () => import("reactflow").then((mod) => ({ default: { useNodesState: mod.useNodesState, useEdgesState: mod.useEdgesState, addEdge: mod.addEdge } })),
-  { ssr: false }
-);
+import StudioCanvas from "@/components/StudioCanvas";
 
 // --- TYPES ---
 interface ChecklistItem {
@@ -59,27 +43,8 @@ export function OnboardingIntake({ onNext }: { onNext: () => void }) {
   const [inputValue, setInputValue] = useState("");
   const [status, setStatus] = useState<"empty" | "building" | "complete">("empty");
 
-  // ReactFlow State (loaded lazily)
-  const [rfHooks, setRfHooks] = useState<null | {
-    useNodesState: typeof import("reactflow").useNodesState;
-    useEdgesState: typeof import("reactflow").useEdgesState;
-    addEdge: typeof import("reactflow").addEdge;
-  }>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    void import("reactflow").then((mod) => {
-      if (mounted) {
-        setRfHooks({ useNodesState: mod.useNodesState, useEdgesState: mod.useEdgesState, addEdge: mod.addEdge });
-      }
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  const [nodes, setNodes, onNodesChange] = rfHooks?.useNodesState ?? (() => [[], () => {}, () => {}]);
-  const [edges, setEdges, onEdgesChange] = rfHooks?.useEdgesState ?? (() => [[], () => {}, () => {}]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
 
@@ -98,18 +63,16 @@ export function OnboardingIntake({ onNext }: { onNext: () => void }) {
 
   // Connector Handler
   const onConnect = useCallback(
-    (params: any) => {
-      if (!rfHooks) return;
-      setEdges((eds: any) => rfHooks.addEdge({ ...params, type: "default" }, eds));
+    (params: Connection) => {
+      setEdges((eds) => addEdge({ ...params, type: "default" }, eds));
     },
-    [setEdges, rfHooks]
+    [setEdges]
   );
 
   // Derived selected step data for inspector
   const selectedNode = Array.isArray(nodes) ? nodes.find((n) => n.id === selectedStepId) : null;
   const selectedStepData = selectedNode
     ? {
-        id: selectedNode.id,
         ...selectedNode.data,
         inputs: [],
         outputs: [],

@@ -1,5 +1,6 @@
 import type { DashboardAutomation } from "@/lib/mock-dashboard";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
+import { getStatusLabel, resolveStatus } from "@/lib/submissions/lifecycle";
 
 export type ApiAutomationSummary = {
   id: string;
@@ -34,8 +35,8 @@ export type ApiAutomationSummary = {
 
 export function toDashboardAutomation(api: ApiAutomationSummary): DashboardAutomation {
   const version = api.latestVersion;
-  const statusEnum = version?.status as AutomationLifecycleStatus | undefined;
-  const status = statusEnum ? mapStatusForCards(statusEnum) : "Intake in Progress";
+  const statusEnum = resolveStatus(version?.status) as AutomationLifecycleStatus | null;
+  const status = statusEnum ? mapStatusForCards(statusEnum) : getStatusLabel("IntakeInProgress");
   const metrics = version?.latestMetrics;
   return {
     id: api.id,
@@ -61,25 +62,6 @@ export function summarizeCounts(automations: DashboardAutomation[]) {
 }
 
 function mapStatusForCards(status: AutomationLifecycleStatus): DashboardAutomation["status"] {
-  switch (status) {
-    case "IntakeInProgress":
-      return "Intake in Progress";
-    case "NeedsPricing":
-      return "Needs Pricing";
-    case "AwaitingClientApproval":
-      return "Awaiting Client Approval";
-    case "ReadyForBuild":
-      return "Ready for Build";
-    case "BuildInProgress":
-      return "Build in Progress";
-    case "QATesting":
-      return "QA & Testing";
-    case "Live":
-      return "Live";
-    case "Archived":
-      return "Archived";
-    default:
-      return "Intake in Progress";
-  }
+  return getStatusLabel(status) as DashboardAutomation["status"];
 }
 

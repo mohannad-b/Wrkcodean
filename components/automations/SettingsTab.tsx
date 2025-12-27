@@ -160,6 +160,7 @@ interface SettingsTabProps {
   onDeleteVersion?: (versionId: string) => Promise<void> | void;
   archivingVersionId?: string | null;
   deletingVersionId?: string | null;
+  creatingVersion?: boolean;
 }
 
 export function SettingsTab({
@@ -182,6 +183,7 @@ export function SettingsTab({
   onDeleteVersion,
   archivingVersionId,
   deletingVersionId,
+  creatingVersion,
 }: SettingsTabProps = {}) {
   const [activeTab, setActiveTab] = useState<SettingsTabType>("general");
   const toast = useToast();

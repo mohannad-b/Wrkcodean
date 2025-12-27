@@ -128,7 +128,7 @@ export const mockDashboardAutomations: DashboardAutomation[] = [
     id: "4",
     name: "Legal Document Review",
     version: "v1.0",
-    status: "Blocked",
+    status: "Build in Progress",
     runs: 45,
     success: 82.0,
     spend: 85,

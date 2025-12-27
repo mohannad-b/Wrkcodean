@@ -7,12 +7,10 @@ import {
   ArrowRight,
   CheckCircle2,
   GitBranch,
-  Layout,
   MessageSquare,
   Shield,
   Terminal,
   Users,
-  Zap,
 } from "lucide-react";
 
 import { ActivityTab } from "@/components/marketing/ActivityTab";

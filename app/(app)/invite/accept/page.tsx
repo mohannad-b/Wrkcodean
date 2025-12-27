@@ -11,7 +11,7 @@ type Status = "idle" | "loading" | "success" | "error";
 export default function AcceptInvitePage() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const token = useMemo(() => searchParams.get("token") ?? "", [searchParams]);
+  const token = useMemo(() => searchParams?.get("token") ?? "", [searchParams]);
 
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);

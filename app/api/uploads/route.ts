@@ -140,7 +140,6 @@ export async function POST(request: Request) {
         title,
         versionOfFileId,
         file,
-        // @ts-expect-error pass-through for audit metadata
         uploaderName,
       });
     } else if (url && typeof url === "string") {
@@ -153,7 +152,6 @@ export async function POST(request: Request) {
         title,
         versionOfFileId,
         url,
-        // @ts-expect-error pass-through for audit metadata
         uploaderName,
       });
     } else {

@@ -23,7 +23,7 @@ export async function GET(request: Request, { params }: RouteParams) {
     const url = new URL(request.url);
     const download = url.searchParams.get("download") === "1";
 
-    const buffer = await readDecryptedFile(version.storageKey, version.encryption);
+    const buffer: Uint8Array = await readDecryptedFile(version.storageKey, version.encryption);
     const headers = new Headers();
     headers.set("Content-Type", version.mimeType || "application/octet-stream");
     headers.set("Content-Length", buffer.length.toString());
@@ -67,7 +67,8 @@ export async function GET(request: Request, { params }: RouteParams) {
       },
     });
 
-    return new NextResponse(buffer, { headers });
+    const body = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    return new Response(body as unknown as BodyInit, { headers });
   } catch (error) {
     return handleApiError(error);
   }

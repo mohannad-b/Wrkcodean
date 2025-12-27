@@ -36,7 +36,7 @@ export function canTransitionBuildStatus(from: BuildStatus, to: BuildStatus): bo
   if (fromIndex === -1 || toIndex === -1) {
     return false;
   }
-  return toIndex >= fromIndex;
+  return toIndex === fromIndex + 1;
 }
 
 export function getBuildStatusLabel(status: BuildStatus): string {

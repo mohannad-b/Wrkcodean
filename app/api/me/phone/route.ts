@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { requireUserSession } from "@/lib/api/context";
 
 const DEMO_CODE = "123456";
@@ -15,7 +16,7 @@ function normalizePhone(input: string | undefined) {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await requireUserSession();
+  await requireUserSession();
   const body = (await request.json().catch(() => ({}))) as SendPayload;
   const phone = normalizePhone(body.phone);
 
@@ -53,7 +54,7 @@ export async function PUT(request: NextRequest) {
       phoneVerified: 1,
       updatedAt: new Date(),
     })
-    .where(users.id.eq(session.userId));
+    .where(eq(users.id, session.userId));
 
   return NextResponse.json({
     status: "verified",

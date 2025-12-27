@@ -23,6 +23,9 @@ export async function POST(request: Request) {
       userId: userRecord.id,
       userEmail: userRecord.email,
     });
+    if (!membership) {
+      throw new ApiError(404, "membership_not_found");
+    }
 
     const response = NextResponse.json({
       invite,

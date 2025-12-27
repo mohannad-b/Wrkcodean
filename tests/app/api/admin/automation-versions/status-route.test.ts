@@ -5,14 +5,27 @@ const canMock = vi.fn();
 const getVersionDetailMock = vi.fn();
 const updateVersionStatusMock = vi.fn();
 const logAuditMock = vi.fn();
+const requireTenantSessionMock = vi.fn();
 
 vi.mock("@/lib/auth/session", () => ({
   getSession: getSessionMock,
 }));
 
-vi.mock("@/lib/auth/rbac", () => ({
-  can: canMock,
-}));
+vi.mock("@/lib/api/context", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api/context")>("@/lib/api/context");
+  return {
+    ...actual,
+    requireTenantSession: requireTenantSessionMock,
+  };
+});
+
+vi.mock("@/lib/auth/rbac", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/auth/rbac")>("@/lib/auth/rbac");
+  return {
+    ...actual,
+    can: canMock,
+  };
+});
 
 vi.mock("@/lib/services/automations", () => ({
   getAutomationVersionDetail: getVersionDetailMock,
@@ -25,16 +38,16 @@ vi.mock("@/lib/audit/log", () => ({
 
 describe("PATCH /api/admin/automation-versions/[id]/status", () => {
   beforeEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
+    requireTenantSessionMock.mockResolvedValue({ userId: "ops-1", tenantId: "tenant-1", kind: "tenant", roles: ["admin"] });
     getSessionMock.mockResolvedValue({ userId: "ops-1", tenantId: "tenant-1", roles: ["admin"] });
     canMock.mockReturnValue(true);
   });
 
-  it("marks a BuildInProgress version as live", async () => {
+  it("marks a QATesting version as live", async () => {
     getVersionDetailMock.mockResolvedValue({
-      version: { id: "ver-1", status: "BuildInProgress" },
-      project: { id: "proj-1", status: "BuildInProgress" },
+      version: { id: "ver-1", status: "QATesting" },
+      project: { id: "proj-1", status: "QATesting" },
       automation: null,
       latestQuote: null,
     });
@@ -58,6 +71,7 @@ describe("PATCH /api/admin/automation-versions/[id]/status", () => {
       expect.objectContaining({
         automationVersionId: "ver-1",
         nextStatus: "Live",
+        actorRole: "tenant_admin",
       })
     );
     expect(logAuditMock).toHaveBeenCalledWith(

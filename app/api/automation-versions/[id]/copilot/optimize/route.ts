@@ -6,11 +6,12 @@ import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/contex
 import { getAutomationVersionDetail } from "@/lib/services/automations";
 import { sanitizeBlueprintTopology } from "@/lib/blueprint/sanitizer";
 import { applyStepNumbers } from "@/lib/blueprint/step-numbering";
-import { BlueprintSchema, parseBlueprint } from "@/lib/blueprint/schema";
+import { BlueprintSchema } from "@/lib/blueprint/schema";
 import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
 import { automationVersions } from "@/db/schema";
 import { db } from "@/db";
 import { logAudit } from "@/lib/audit/log";
+import { buildWorkflowViewModel } from "@/lib/workflows/view-model";
 
 export async function POST(_request: Request, { params }: { params: { id: string } }) {
   try {
@@ -25,7 +26,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
       throw new ApiError(404, "Automation version not found.");
     }
 
-    const currentBlueprint = parseBlueprint(detail.version.workflowJson ?? detail.version.blueprintJson);
+    const currentBlueprint = buildWorkflowViewModel(detail.version.workflowJson).workflowSpec;
     if (!currentBlueprint) {
       throw new ApiError(400, "Workflow is empty.");
     }

@@ -85,7 +85,7 @@ export async function POST(request: Request) {
 
     const { clientToken } = await loginWithOidc({
       role: oidcRole,
-      jwt: idToken ?? sessionIdToken ?? undefined,
+      jwt: (idToken ?? sessionIdToken ?? "") as string,
       code,
       redirectUri,
       codeVerifier,

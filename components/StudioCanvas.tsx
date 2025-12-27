@@ -1,24 +1,20 @@
 'use client';
-import React, { useCallback } from 'react';
-import ReactFlow, { 
-  Background, 
-  Controls, 
-  MiniMap, 
-  Node, 
-  Edge, 
-  Connection, 
-  addEdge, 
+import React from "react";
+import ReactFlow, {
+  Background,
+  Controls,
+  type Node,
+  type Edge,
+  type Connection,
   BackgroundVariant,
-  OnNodesChange,
-  OnEdgesChange,
-  NodeTypes,
-  applyNodeChanges,
-  applyEdgeChanges,
-  ReactFlowInstance
-} from 'reactflow';
-import 'reactflow/dist/style.css';
-import CustomNode from './flow/CustomNode';
-import ConditionEdge from './flow/ConditionEdge';
+  type OnNodesChange,
+  type OnEdgesChange,
+  type NodeTypes,
+  type ReactFlowInstance,
+} from "reactflow";
+import "reactflow/dist/style.css";
+import CustomNode from "./flow/CustomNode";
+import ConditionEdge from "./flow/ConditionEdge";
 
 const nodeTypes: NodeTypes = {
   custom: CustomNode,
@@ -28,13 +24,15 @@ const edgeTypes = {
   condition: ConditionEdge,
 };
 
-interface StudioCanvasProps {
+export interface StudioCanvasProps {
   nodes: Node[];
   edges: Edge[];
   onNodesChange: OnNodesChange;
   onEdgesChange: OnEdgesChange;
   onConnect: (connection: Connection) => void;
   onNodeClick: (event: React.MouseEvent, node: Node) => void;
+  onEdgeUpdate?: (oldEdge: Edge, connection: Connection) => void;
+  emptyState?: React.ReactNode;
   isSynthesizing?: boolean;
 }
 
@@ -45,6 +43,8 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
   onEdgesChange, 
   onConnect,
   onNodeClick,
+  onEdgeUpdate,
+  emptyState,
   isSynthesizing = false 
 }) => {
   const [rfInstance, setRfInstance] = React.useState<ReactFlowInstance | null>(null);
@@ -57,6 +57,7 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
       }, 100);
       return () => clearTimeout(timeout);
     }
+    return undefined;
   }, [rfInstance, nodes.length, isSynthesizing]);
   
   return (
@@ -80,6 +81,7 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onEdgeUpdate={onEdgeUpdate}
         onNodeClick={onNodeClick}
         onInit={setRfInstance}
         nodeTypes={nodeTypes}
@@ -97,7 +99,14 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#E5E7EB" />
         <Controls className="!bg-white !border-gray-200 !shadow-sm !rounded-lg overflow-hidden [&>button]:!border-b-gray-100 [&>button]:text-gray-500 hover:[&>button]:text-[#E43632]" />
+        {!nodes.length && emptyState ? (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            {emptyState}
+          </div>
+        ) : null}
       </ReactFlow>
     </div>
   );
 };
+
+export default StudioCanvas;

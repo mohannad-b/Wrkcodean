@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const getSessionMock = vi.fn();
+const requireTenantSessionMock = vi.fn();
 const canMock = vi.fn();
 const updateStatusMock = vi.fn();
 
 vi.mock("@/lib/auth/session", () => ({
   getSession: getSessionMock,
+  getTenantSession: requireTenantSessionMock,
 }));
 
 vi.mock("@/lib/auth/rbac", () => ({
@@ -21,6 +23,7 @@ describe("PATCH /api/automation-versions/[id]/status", () => {
     vi.resetModules();
     vi.clearAllMocks();
     getSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: ["admin"] });
+    requireTenantSessionMock.mockResolvedValue({ userId: "user-1", tenantId: "tenant-1", roles: ["admin"], kind: "tenant" });
     canMock.mockReturnValue(true);
   });
 
