@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import type { WorkspaceRow } from "./page";
 import { cn } from "@/components/ui/utils";
 import type { WrkStaffRole } from "@/db/schema";
+import { wrkAdminRoutes } from "@/lib/admin/routes";
 
 export default function ClientsTable({ rows, staffRole }: { rows: WorkspaceRow[]; staffRole: WrkStaffRole }) {
   const [query, setQuery] = useState("");
@@ -104,7 +105,7 @@ export default function ClientsTable({ rows, staffRole }: { rows: WorkspaceRow[]
                 <TableCell>{row.createdAt}</TableCell>
                 <TableCell className="text-right space-x-2">
                   <Button asChild variant="ghost" size="sm">
-                    <Link href={`/wrk-admin/clients/${row.id}`}>Open</Link>
+                    <Link href={wrkAdminRoutes.workspaceDetail(row.id)}>Open</Link>
                   </Button>
                   <Button
                     variant={row.status === "suspended" ? "secondary" : "destructive"}

@@ -1,7 +1,6 @@
-import { redirect } from "next/navigation";
+import SubmissionsPage from "@/components/wrk-admin/SubmissionsPage";
 
-// Submissions surface currently reuses client view.
-export default function WrkAdminSubmissionsRedirect() {
-  redirect("/wrk-admin/clients");
+export default function WrkAdminSubmissionsPage() {
+  return <SubmissionsPage />;
 }
 

@@ -1,6 +1,7 @@
-import { redirect } from "next/navigation";
+import { permanentRedirect } from "next/navigation";
+import { wrkAdminRoutes } from "@/lib/admin/routes";
 
 export default function AdminPage() {
-  redirect("/wrk-admin");
+  permanentRedirect(wrkAdminRoutes.home);
 }
 

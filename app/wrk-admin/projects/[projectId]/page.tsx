@@ -1,6 +1,7 @@
-import { redirect } from "next/navigation";
+import { permanentRedirect } from "next/navigation";
+import { wrkAdminRoutes } from "@/lib/admin/routes";
 
 export default function WrkAdminProjectDetailRedirect({ params }: { params: { projectId: string } }) {
-  redirect(`/wrk-admin/submissions/${params.projectId}`);
+  permanentRedirect(wrkAdminRoutes.submissionDetail(params.projectId));
 }
 

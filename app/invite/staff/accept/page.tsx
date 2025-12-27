@@ -53,7 +53,7 @@ export default function StaffInviteAcceptPage() {
           {state.status === "success" && (
             <>
               <p className="text-sm text-green-700">You’re all set. Your staff access is active.</p>
-              <Button className="w-full" onClick={() => router.push("/wrk-admin/clients")}>
+            <Button className="w-full" onClick={() => router.push("/wrk-admin/workspaces")}>
                 Go to Admin
               </Button>
             </>

@@ -1,8 +1,7 @@
-import { redirect } from "next/navigation";
+import { permanentRedirect } from "next/navigation";
+import { wrkAdminRoutes } from "@/lib/admin/routes";
 
-// Legacy /admin/projects surface now redirects to submissions.
 export default function AdminProjectsPage() {
-  console.warn("[DEPRECATION] /admin/projects is deprecated. Redirecting to /admin/submissions.");
-  redirect("/admin/submissions");
+  permanentRedirect(wrkAdminRoutes.submissions);
 }
 

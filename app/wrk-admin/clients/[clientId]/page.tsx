@@ -14,12 +14,13 @@ import { getClientSpendSummary, mockAdminProjects } from "@/lib/admin-mock";
 import { mockClients } from "@/lib/mock-clients";
 import MemberActions from "../memberActions";
 import WorkspaceActions, { ResendInviteButton, RevokeInviteButton } from "../workspaceActions";
+import { wrkAdminRoutes } from "@/lib/admin/routes";
 
 export default async function WrkAdminWorkspaceDetail({ params }: { params: { clientId: string } }) {
   const session = await requireWrkStaffSession();
 
   if (params.clientId === "new") {
-    redirect("/wrk-admin/clients");
+    redirect(wrkAdminRoutes.workspaces);
   }
 
   const workspace = await db.query.tenants.findFirst({
@@ -99,8 +100,8 @@ export default async function WrkAdminWorkspaceDetail({ params }: { params: { cl
       <div className="border-b bg-white">
         <div className="px-10 py-6 space-y-6">
           <div className="flex items-center gap-2 text-sm text-slate-500">
-            <Link href="/wrk-admin/clients" className="hover:text-slate-800">
-              Clients
+            <Link href={wrkAdminRoutes.workspaces} className="hover:text-slate-800">
+              Workspaces
             </Link>
             <span>/</span>
             <span className="font-semibold text-slate-900">{workspace.name}</span>

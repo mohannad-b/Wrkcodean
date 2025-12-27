@@ -1,6 +1,6 @@
-import { redirect } from "next/navigation";
+import SubmissionDetailPage from "@/components/wrk-admin/SubmissionDetailPage";
 
-export default function WrkAdminSubmissionDetailRedirect({ params }: { params: { submissionId: string } }) {
-  redirect(`/wrk-admin/clients/${params.submissionId}`);
+export default function WrkAdminSubmissionDetail({ params }: { params: { submissionId: string } }) {
+  return <SubmissionDetailPage params={params} />;
 }
 

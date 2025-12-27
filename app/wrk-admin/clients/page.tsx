@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { format } from "date-fns";
 import ClientsTable from "./clientsTable";
+import { wrkAdminRoutes } from "@/lib/admin/routes";
 
 export type WorkspaceRow = {
   id: string;
@@ -58,12 +59,12 @@ export default async function WrkAdminWorkspacesPage() {
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Clients</h1>
+          <h1 className="text-2xl font-semibold">Workspaces</h1>
           <p className="text-sm text-muted-foreground">Managing all workspaces on the platform.</p>
         </div>
         {(session.wrkStaffRole === "wrk_admin" || session.wrkStaffRole === "wrk_master_admin") && (
           <Button asChild>
-            <Link href="/wrk-admin/clients/new">New Client</Link>
+            <Link href={wrkAdminRoutes.workspaceDetail("new")}>New Workspace</Link>
           </Button>
         )}
       </div>

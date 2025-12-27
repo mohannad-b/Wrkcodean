@@ -13,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { wrkAdminRoutes } from "@/lib/admin/routes";
 
 type AdminSidebarProps = {
   staffRole?: WrkStaffRole | null;
@@ -21,16 +22,14 @@ type AdminSidebarProps = {
 };
 
 const baseLinks = [
-  { href: "/wrk-admin/clients", label: "Clients", icon: Users },
-  { href: "/wrk-admin/submissions", label: "Submissions", icon: FolderKanban },
+  { href: wrkAdminRoutes.workspaces, label: "Workspaces", icon: Users },
+  { href: wrkAdminRoutes.submissions, label: "Submissions", icon: FolderKanban },
 ];
 
 export function AdminSidebar({ staffRole, staffName, staffEmail }: AdminSidebarProps) {
   const pathname = usePathname();
   const links =
-    staffRole === "wrk_master_admin"
-      ? [...baseLinks, { href: "/wrk-admin/staff", label: "Staff", icon: LayoutGrid }]
-      : baseLinks;
+    staffRole === "wrk_master_admin" ? [...baseLinks, { href: wrkAdminRoutes.staff, label: "Staff", icon: LayoutGrid }] : baseLinks;
 
   const displayName = staffName || staffEmail || "Staff";
   const initial = displayName.trim().charAt(0).toUpperCase();
