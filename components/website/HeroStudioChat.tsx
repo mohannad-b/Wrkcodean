@@ -1,15 +1,7 @@
 'use client';
 
 import React, { useRef, useEffect } from 'react';
-import { 
-  Sparkles, 
-  Upload,
-  MonitorPlay,
-  AppWindow,
-  Mic,
-  Send,
-  MoveRight
-} from 'lucide-react';
+import { Sparkles, Send, MoveRight } from "lucide-react";
 import { ScrollArea } from "../ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { currentUser } from "@/marketing/data";
@@ -106,7 +98,9 @@ export const HeroStudioChat: React.FC<HeroStudioChatProps> = ({ messages, isThin
         setInputValue('');
         setShowScreenshot(false);
         setIsSimulating(false);
+        return;
     }
+    return;
   }, [messages, step]);
 
   useEffect(() => {
@@ -253,9 +247,4 @@ export const HeroStudioChat: React.FC<HeroStudioChatProps> = ({ messages, isThin
   );
 };
 
-const QuickAction = ({ icon: Icon, label }: { icon: any, label: string }) => (
-  <div className="flex flex-col items-center justify-center gap-1.5 py-2.5 bg-white border border-gray-200 rounded-xl opacity-80">
-    <Icon size={16} className="text-gray-400" />
-    <span className="text-[10px] font-bold text-gray-500">{label}</span>
-  </div>
-);
+// QuickAction removed; quick actions row is commented out

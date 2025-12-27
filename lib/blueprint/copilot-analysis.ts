@@ -1,4 +1,4 @@
-import { BLUEPRINT_PROGRESS_KEY_ORDER, BLUEPRINT_SECTION_KEYS, type BlueprintProgressKey, type BlueprintSectionKey } from "./types";
+import { BLUEPRINT_SECTION_KEYS, type BlueprintProgressKey, type BlueprintSectionKey } from "./types";
 import type { RequirementsState } from "@/lib/requirements/state";
 import type { SuggestedNextStep } from "@/lib/requirements/planner";
 

@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Paperclip, Loader2, CheckCircle2, AlertCircle, X } from "lucide-react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
+import { Send, Paperclip, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";

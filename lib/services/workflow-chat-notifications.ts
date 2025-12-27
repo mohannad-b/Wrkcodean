@@ -5,7 +5,7 @@
 
 import { db } from "@/db";
 import { workflowMessages, workflowReadReceipts, users, memberships, automationVersions, automations } from "@/db/schema";
-import { eq, and, isNull, sql } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { EmailService } from "@/lib/email/service";
 
 type NotificationRecipient = {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef } from "react";
 import type { ChangeEvent } from "react";
 import {
   User,
@@ -35,6 +35,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import { useToast } from "@/components/ui/use-toast";
+import type { UserProfile } from "@/lib/user/profile-shared";
 
 // --- Mock Data ---
 
@@ -302,7 +303,7 @@ const ProfileTab = ({ onSave, isSaving }: { onSave?: () => void; isSaving?: bool
     }
   };
 
-  const getInitials = (profile: typeof profile) => {
+  const getInitials = (profile: UserProfile | null) => {
     if (!profile) return "";
     if (profile.firstName && profile.lastName) {
       return `${profile.firstName.charAt(0)}${profile.lastName.charAt(0)}`.toUpperCase();

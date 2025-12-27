@@ -254,10 +254,6 @@ function fallbackSectionInsight(
   };
 }
 
-function isProgressKey(value: string): value is BlueprintProgressKey {
-  return value === "overview" || (BLUEPRINT_SECTION_TITLES as Record<string, string | undefined>)[value] !== undefined;
-}
-
 function clamp(value: number): number {
   if (Number.isNaN(value)) return 0;
   if (value < 0) return 0;

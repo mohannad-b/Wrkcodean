@@ -7,13 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/use-toast";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import type { UserProfile } from "@/lib/user/profile-shared";
-import { cn } from "@/lib/utils";
 
 const COMMON_TIMEZONES: readonly string[] = [
   "UTC",
@@ -141,7 +140,7 @@ function initialsFromProfile(profile: UserProfile) {
 }
 
 export function ProfileScreen() {
-  const { profile, lastUpdatedAt, setProfile, refreshProfile, isHydrating } = useUserProfile();
+  const { profile, setProfile, refreshProfile, isHydrating } = useUserProfile();
   const [formState, setFormState] = useState<EditableFormState | null>(profile ? createFormState(profile) : null);
   const [errors, setErrors] = useState<Partial<Record<EditableFieldKey, string>>>({});
   const [isSaving, setIsSaving] = useState(false);
@@ -362,14 +361,6 @@ export function ProfileScreen() {
       });
     } finally {
       setIsSaving(false);
-    }
-  };
-
-  const handleReset = () => {
-    if (profile) {
-      setFormState(createFormState(profile));
-      setErrors({});
-      setTempAvatarPreviewUrl(null);
     }
   };
 

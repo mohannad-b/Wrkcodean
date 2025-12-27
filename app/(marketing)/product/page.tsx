@@ -2,16 +2,7 @@
 
 import Link from "next/link";
 import React, { useState } from "react";
-import {
-  AlertCircle,
-  ArrowRight,
-  CheckCircle2,
-  GitBranch,
-  MessageSquare,
-  Shield,
-  Terminal,
-  Users,
-} from "lucide-react";
+import { AlertCircle, ArrowRight, CheckCircle2, GitBranch, MessageSquare, Shield, Terminal, Users, Zap } from "lucide-react";
 
 import { ActivityTab } from "@/components/marketing/ActivityTab";
 import { BuildStatusTab } from "@/components/marketing/BuildStatusTab";

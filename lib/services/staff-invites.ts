@@ -7,7 +7,6 @@ import {
   staffInvites,
   tenants,
   users,
-  wrkStaffMemberships,
   type WrkStaffRole,
 } from "@/db/schema";
 import { ApiError } from "@/lib/api/context";

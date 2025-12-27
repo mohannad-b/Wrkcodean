@@ -43,7 +43,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -80,30 +79,6 @@ const USERS = [
   },
   { id: 2, name: "Mike Ross", email: "mike@company.com", role: "Editor", avatar: "" },
   { id: 3, name: "Jessica Pearson", email: "jessica@company.com", role: "Viewer", avatar: "" },
-];
-
-const VERSIONS = [
-  {
-    id: "v1.1",
-    status: "building",
-    date: "Nov 12, 2023",
-    summary: "Delta: +3 steps, +1 integration",
-    author: "Sarah Chen",
-  },
-  {
-    id: "v1.0",
-    status: "active",
-    date: "Oct 24, 2023",
-    summary: "Initial Release",
-    author: "Sarah Chen",
-  },
-  {
-    id: "v0.9",
-    status: "superseded",
-    date: "Oct 10, 2023",
-    summary: "Beta Release",
-    author: "Mike Ross",
-  },
 ];
 
 const SYSTEMS = [
@@ -160,7 +135,6 @@ interface SettingsTabProps {
   onDeleteVersion?: (versionId: string) => Promise<void> | void;
   archivingVersionId?: string | null;
   deletingVersionId?: string | null;
-  creatingVersion?: boolean;
 }
 
 export function SettingsTab({
@@ -170,7 +144,7 @@ export function SettingsTab({
   onManageCredentials,
   onNavigateToTab,
   onNavigateToSettings,
-  automationId,
+  automationId: _automationId,
   automationName,
   automationDescription,
   tags,
@@ -183,7 +157,6 @@ export function SettingsTab({
   onDeleteVersion,
   archivingVersionId,
   deletingVersionId,
-  creatingVersion,
 }: SettingsTabProps = {}) {
   const [activeTab, setActiveTab] = useState<SettingsTabType>("general");
   const toast = useToast();
@@ -397,8 +370,6 @@ function GeneralSettings({
   name,
   description,
   tags,
-  createdAt,
-  updatedAt,
   saving,
   generatingTags,
   dirty,
@@ -432,15 +403,6 @@ function GeneralSettings({
     if (!tagInput.trim()) return;
     onAddTag(tagInput);
     setTagInput("");
-  };
-
-  const formatDate = (value?: string | null) => {
-    if (!value) return "—";
-    try {
-      return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
-    } catch {
-      return value;
-    }
   };
 
   return (
@@ -815,7 +777,6 @@ function VersionsSettings({
   onNavigateToOverview,
   onNavigateToTab,
   currentVersionId,
-  creatingVersion,
   versions = [],
   onArchiveVersion,
   onDeleteVersion,
@@ -826,7 +787,6 @@ function VersionsSettings({
   onNavigateToOverview?: () => void;
   onNavigateToTab?: (tab: string) => void;
   currentVersionId?: string | null;
-  creatingVersion?: boolean;
   versions?: Array<{
     id: string;
     versionLabel?: string | null;
@@ -917,17 +877,9 @@ function VersionsSettings({
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button className="bg-[#0A0A0A] hover:bg-gray-800 text-white" disabled={creatingVersion}>
-              {creatingVersion ? (
-                <>
-                  <Loader2 size={16} className="mr-2 animate-spin" /> Creating new version...
-                </>
-              ) : (
-                <>
-                  <Plus size={16} className="mr-2" /> Start New Version
-                  <ChevronDown size={16} className="ml-2" />
-                </>
-              )}
+            <Button className="bg-[#0A0A0A] hover:bg-gray-800 text-white">
+              <Plus size={16} className="mr-2" /> Start New Version
+              <ChevronDown size={16} className="ml-2" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-64">

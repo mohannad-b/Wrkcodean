@@ -2,7 +2,7 @@ import React from 'react';
 import { motion } from 'motion/react';
 import { HeroNode } from './HeroNode';
 import { Cursor } from './Cursor';
-import { MessageSquarePlus, Users, Plus } from 'lucide-react';
+import { MessageSquarePlus, Plus } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 
 export const CardCollaboration = () => {

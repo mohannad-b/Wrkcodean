@@ -1,7 +1,6 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, Building2, Check, Clock, Link2, Loader2, Lock, Palette, Phone, ShieldCheck, Sparkles, Upload, Users, Workflow } from "lucide-react";
@@ -22,8 +21,6 @@ type Props = {
   isConsumerDomain: boolean;
   primaryColor: string;
   accentColor: string;
-  logoEmoji: string;
-  brandSource: "domain" | "fallback";
   simulate?: boolean;
 };
 
@@ -46,8 +43,6 @@ export function WorkspaceSetupClient({
   isConsumerDomain,
   primaryColor,
   accentColor,
-  logoEmoji,
-  brandSource,
   simulate = false,
 }: Props) {
   const router = useRouter();
@@ -77,7 +72,6 @@ export function WorkspaceSetupClient({
   const [tosAccepted, setTosAccepted] = useState(false);
   const [tosSubmitting, setTosSubmitting] = useState(false);
   const [tosError, setTosError] = useState<string | null>(null);
-  const [loadingOnboarding, setLoadingOnboarding] = useState(true);
   const [selectedImports, setSelectedImports] = useState<string[]>([]);
   const [industry, setIndustry] = useState("tech");
   const [currency, setCurrency] = useState("usd");
@@ -107,7 +101,6 @@ export function WorkspaceSetupClient({
 
   useEffect(() => {
     if (simulate) {
-      setLoadingOnboarding(false);
       return;
     }
     let cancelled = false;
@@ -133,15 +126,13 @@ export function WorkspaceSetupClient({
         setCurrentStep(next);
       } catch (err) {
         console.error(err);
-      } finally {
-        if (!cancelled) setLoadingOnboarding(false);
       }
     }
     load();
     return () => {
       cancelled = true;
     };
-  }, [isBrandingComplete]);
+  }, [isBrandingComplete, simulate]);
 
   const slugValid = useMemo(() => {
     return isValidSlugValue(slug);
@@ -743,7 +734,7 @@ export function WorkspaceSetupClient({
                     className="inline-flex items-center justify-center gap-2 rounded-full bg-[#0A0A0A] px-6 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {verifyState === "verifying" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                    {verifyState === "verified" ? "Verified" : "Next Step"}
+                    Next Step
                     {verifyState !== "verifying" && <ArrowRight className="h-4 w-4" />}
                   </button>
                 )}

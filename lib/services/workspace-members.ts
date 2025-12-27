@@ -140,6 +140,7 @@ export async function listWorkspaceMembers(tenantId: string): Promise<MemberSumm
 
   return rows.map((row) => ({
     ...row,
+    name: row.name ?? row.email ?? "Unknown",
     automationsCount: Number(row.automationsCount ?? 0),
     lastActiveAt: row.lastActiveAt ? row.lastActiveAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),

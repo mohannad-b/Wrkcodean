@@ -1,5 +1,3 @@
-import { CheckCircle, AlertCircle, Clock, MoreHorizontal, FileText, ClipboardCheck, Zap } from 'lucide-react';
-
 export interface Collaborator {
   id: string;
   name: string;

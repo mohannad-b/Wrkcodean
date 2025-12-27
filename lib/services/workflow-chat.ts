@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, lt, inArray } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   workflowConversations,

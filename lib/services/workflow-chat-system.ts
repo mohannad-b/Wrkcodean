@@ -3,7 +3,6 @@
  */
 
 import { getOrCreateConversation, createMessage } from "./workflow-chat";
-import { emitChatEvent } from "@/lib/realtime/events";
 
 export async function createSystemMessage(params: {
   tenantId: string;

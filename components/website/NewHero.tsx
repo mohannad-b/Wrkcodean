@@ -2,7 +2,6 @@ import Link from "next/link";
 import React from "react";
 import { ArrowRight, PlayCircle } from "lucide-react";
 
-import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
 import { HeroProductFrame } from "./HeroProductFrame";
 

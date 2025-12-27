@@ -142,7 +142,7 @@ export async function recordDailyMetricSnapshot(params: MetricSnapshotInput) {
   const usage = params.usage ?? (await fetchUsageFromWrkPlatform(automationVersionId));
   const latestQuote = await getLatestQuote(automationVersionId, tenantId);
 
-  const manualHoursPerExecution = (config.manualSecondsPerExecution ?? 0) / 3600;
+  const manualHoursPerExecution = Number(config.manualSecondsPerExecution ?? 0) / 3600;
   const hoursSaved = usage.totalExecutions * manualHoursPerExecution;
   const manualCost = hoursSaved * Number(config.hourlyRateUsd ?? 0);
   const unitPrice = latestQuote ? Number(latestQuote.unitPrice ?? 0) : 0;
@@ -202,7 +202,7 @@ async function getLatestPriorMonthMetric(tenantId: string, automationVersionId: 
       and(
         eq(automationVersionMetrics.tenantId, tenantId),
         eq(automationVersionMetrics.automationVersionId, automationVersionId),
-        lt(automationVersionMetrics.asOfDate, monthStart)
+        lt(automationVersionMetrics.asOfDate, toDateOnly(monthStart))
       )
     )
     .orderBy(desc(automationVersionMetrics.asOfDate))

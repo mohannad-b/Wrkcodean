@@ -1886,7 +1886,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 automationUpdatedAt={selectedVersion?.updatedAt ?? automation.updatedAt ?? null}
                 onGeneralSaved={() => fetchAutomation({ preserveSelection: true })}
                 currentVersionId={selectedVersion?.id ?? null}
-                creatingVersion={creatingVersion}
                 versions={automation.versions}
                 onArchiveVersion={handleArchiveVersion}
                 onDeleteVersion={handleDeleteVersion}

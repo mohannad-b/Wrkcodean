@@ -1,21 +1,6 @@
 import Link from "next/link";
 import React from "react";
-import {
-  ArrowRight,
-  BarChart,
-  Check,
-  CheckCircle2,
-  Database,
-  FileText,
-  Globe,
-  MessageSquare,
-  Play,
-  ShieldCheck,
-  Users,
-  Workflow,
-  X,
-  Zap,
-} from "lucide-react";
+import { BarChart, Check, CheckCircle2, Database, FileText, Globe, MessageSquare, ShieldCheck, Users, Workflow, X, Zap } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";

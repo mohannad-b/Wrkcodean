@@ -129,7 +129,8 @@ export function TeamsPanel() {
       const res = await fetch("/api/workspaces/members", { cache: "no-store" });
       const json = (await res.json()) as TeamsResponse;
       if (!res.ok) {
-        throw new Error(json?.error ?? "Failed to load team");
+        const message = (json as any)?.error ?? "Failed to load team";
+        throw new Error(message);
       }
       setData(json);
       setInviteRole(json.availableRoles.includes("viewer") ? "viewer" : json.availableRoles[0] ?? "viewer");
@@ -187,20 +188,6 @@ export function TeamsPanel() {
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Unable to update role");
-    }
-  };
-
-  const onResendInvite = async (inviteId: string) => {
-    try {
-      const res = await fetch(`/api/workspaces/invites/${inviteId}/resend`, { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json?.error ?? "Unable to resend invite");
-      }
-      toast.success("Invitation resent");
-      await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unable to resend invite");
     }
   };
 

@@ -71,8 +71,6 @@ export default async function WorkspaceSetupPage({ searchParams }: Props) {
       isConsumerDomain={isConsumer}
       primaryColor={inferred.primaryColor}
       accentColor={inferred.accentColor}
-      logoEmoji={inferred.logoEmoji}
-      brandSource={inferred.source}
       simulate={allowSimulate}
     />
   );

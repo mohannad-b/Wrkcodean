@@ -90,6 +90,7 @@ export const HeroBlueprint: React.FC<HeroBlueprintProps> = ({ step }) => {
     if (step === 1) {
        setNodes(nodesStart);
        setEdges(edgesStart);
+       return;
     } else if (step === 2) {
        // Staggered build
        setNodes([]); // Start empty
@@ -106,7 +107,7 @@ export const HeroBlueprint: React.FC<HeroBlueprintProps> = ({ step }) => {
                 return [...prev, node];
              });
              
-             setEdges(prev => {
+             setEdges(() => {
                 // Add relevant edges
                 // An edge is relevant if both source and target are visible (or will be visible after this update)
                 // Since we are updating nodes, we can check against (index + 1) slice of nodesFull
@@ -128,7 +129,9 @@ export const HeroBlueprint: React.FC<HeroBlueprintProps> = ({ step }) => {
        // Step 3/4: Show full immediately
        setNodes(nodesFull);
        setEdges(edgesFull);
+       return;
     }
+    return;
   }, [step]);
   
   const messages = useMemo(() => step === 1 ? messagesStart : messagesBuild, [step]);
@@ -147,7 +150,7 @@ export const HeroBlueprint: React.FC<HeroBlueprintProps> = ({ step }) => {
        <div className="h-14 border-b border-gray-100 bg-white flex items-center px-6 justify-between shrink-0 z-20">
           {/* Checklist */}
           <div className="flex items-center gap-6 overflow-hidden">
-             {checklist.map((item, i) => (
+             {checklist.map((item, _index) => (
                 <div key={item.id} className="flex items-center gap-2 shrink-0">
                    <div className={cn(
                       "w-4 h-4 rounded-full border flex items-center justify-center transition-all duration-500",

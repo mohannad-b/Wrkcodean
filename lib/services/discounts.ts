@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { discountOffers, projects } from "@/db/schema";
 import crypto from "crypto";
@@ -42,7 +42,7 @@ export async function ensureDiscountOffersForVersion(tenantId: string, automatio
     tenantId,
     automationVersionId,
     code: generateCode(kind === "first_congrats" || kind === "first_incentive" ? "FIRST" : "DISC"),
-    percent: OFFER_DEFS[kind].percent,
+    percent: OFFER_DEFS[kind].percent.toString(),
     appliesTo: "setup_fee" as const,
     kind,
   }));

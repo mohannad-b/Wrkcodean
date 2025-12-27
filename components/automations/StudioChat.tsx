@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Sparkles, AlertCircle, Paperclip, CheckCircle2, RefreshCw, Lightbulb, Loader2, X, FileText, Image as ImageIcon } from "lucide-react";
+import { Send, Sparkles, AlertCircle, Paperclip, CheckCircle2, Lightbulb, Loader2, X, FileText, Image as ImageIcon } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
@@ -55,7 +55,6 @@ type ApiCopilotMessage = {
   createdAt: string;
 };
 
-const THINKING_STEP_INTERVAL_MS = process.env.NODE_ENV === "test" ? 150 : 800;
 const DEFAULT_USER_FACING_THINKING_STEPS: CopilotThinkingStep[] = [
   { id: "thinking-default-1", label: "Digesting what you're trying to accomplish" },
   { id: "thinking-default-2", label: "Mapping how the systems should connect" },

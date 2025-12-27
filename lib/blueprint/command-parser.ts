@@ -1,5 +1,3 @@
-import type { Blueprint } from "./types";
-
 export type CommandType =
   | "move_step"
   | "delete_step"

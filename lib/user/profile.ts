@@ -1,6 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { memberships, users, type User } from "@/db/schema";
+import { users, type User } from "@/db/schema";
 import type { AppSession } from "@/lib/auth/session";
 import {
   NOTIFICATION_PREFERENCES,

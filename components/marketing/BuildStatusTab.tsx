@@ -38,7 +38,6 @@ export const BuildStatusTab: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(2);
   const [volume, setVolume] = useState([15000]);
   const [showQuoteModal, setShowQuoteModal] = useState(false);
-  const [showLaunchModal, setShowLaunchModal] = useState(false);
   const [showChangesModal, setShowChangesModal] = useState(false);
 
   // Pricing Constants (Delta Logic)
@@ -275,11 +274,11 @@ export const BuildStatusTab: React.FC = () => {
                    
                    <Slider 
                       value={volume} 
-                      onValueChange={(val) => versionStatus === 'Awaiting Client Approval' && setVolume(val)} 
+                      onValueChange={(val) => versionStatus === "AwaitingClientApproval" && setVolume(val)} 
                       max={25000} 
                       step={500} 
                       min={500}
-                      className={cn("mb-8", versionStatus !== 'Awaiting Client Approval' && "opacity-50 pointer-events-none")}
+                      className={cn("mb-8", versionStatus !== "AwaitingClientApproval" && "opacity-50 pointer-events-none")}
                    />
 
                    {/* Pricing Tiers Viz */}
@@ -304,7 +303,7 @@ export const BuildStatusTab: React.FC = () => {
                    </div>
 
                    {/* Action Button inside card for cohesion */}
-                   {versionStatus === 'Awaiting Client Approval' && (
+                   {versionStatus === "AwaitingClientApproval" && (
                      <div className="mt-6 pt-6 border-t border-gray-200">
                        <Button 
                          onClick={() => setShowQuoteModal(true)}
@@ -315,7 +314,7 @@ export const BuildStatusTab: React.FC = () => {
                      </div>
                    )}
                    
-                   {versionStatus !== 'Awaiting Client Approval' && (
+                   {versionStatus !== "AwaitingClientApproval" && (
                      <div className="mt-6 pt-6 border-t border-gray-200">
                         <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-3 text-center">
                            <p className="text-xs font-bold text-emerald-700 flex items-center justify-center gap-2">
@@ -438,7 +437,7 @@ export const BuildStatusTab: React.FC = () => {
         </div>
 
         {/* 7. READY TO LAUNCH CTA */}
-        {versionStatus === 'Build in Progress' && currentStep >= 4 && (
+        {versionStatus === "BuildInProgress" && currentStep >= 4 && (
            <motion.div 
              initial={{ opacity: 0, y: 20 }}
              animate={{ opacity: 1, y: 0 }}
@@ -455,8 +454,7 @@ export const BuildStatusTab: React.FC = () => {
                  <Button 
                    size="lg" 
                    onClick={() => {
-                     setVersionStatus('active');
-                     setShowLaunchModal(true);
+                     setVersionStatus("Live");
                    }}
                    className="h-14 px-10 bg-[#E43632] hover:bg-[#C12E2A] text-white font-bold text-lg rounded-full shadow-[0_0_30px_rgba(228,54,50,0.5)] hover:shadow-[0_0_50px_rgba(228,54,50,0.7)] transition-all hover:-translate-y-1"
                  >
@@ -470,7 +468,7 @@ export const BuildStatusTab: React.FC = () => {
         <QuoteSignatureModal 
            open={showQuoteModal}
            onOpenChange={setShowQuoteModal}
-           onSign={handleQuoteSigned}
+           onSigned={handleQuoteSigned}
            volume={volume[0]}
            unitPrice={newUnitPrice}
            monthlyCost={monthlyCost}

@@ -1,17 +1,7 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import { Cursor } from './Cursor';
-import { 
-  Activity, 
-  CheckCircle, 
-  Play, 
-  Clock, 
-  MoreHorizontal,
-  ArrowUpRight,
-  BarChart3,
-  GitBranch,
-  ShieldCheck
-} from 'lucide-react';
+import { CheckCircle, Play, Clock, MoreHorizontal, ArrowUpRight, GitBranch, ShieldCheck } from "lucide-react";
 
 export const CardLaunchDashboard = () => {
   return (

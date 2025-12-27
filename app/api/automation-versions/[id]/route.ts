@@ -266,6 +266,8 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     }
     // #endregion
 
+    const requirementsTextValue: string | undefined = requirementsText ?? undefined;
+
     const updated = await updateAutomationVersionMetadata({
       tenantId: session.tenantId,
       automationVersionId: params.id,
@@ -274,7 +276,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       businessOwner,
       tags,
       intakeNotes,
-      requirementsText: requirementsText ?? undefined,
+      requirementsText: requirementsTextValue,
       workflowJson: blueprintJson,
       blueprintJson,
     });
@@ -328,7 +330,8 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       version: {
         id: updated.version.id,
         intakeNotes: updated.version.intakeNotes,
-        requirementsText: nextWorkflow.requirementsText ?? undefined,
+        requirementsText:
+          typeof nextWorkflow.requirementsText === "string" ? nextWorkflow.requirementsText : undefined,
         workflowJson: nextWorkflow.workflowSpec,
         blueprintJson: nextWorkflow.blueprintJson,
         businessOwner: updated.version.businessOwner ?? null,

@@ -1,11 +1,10 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Paperclip, MessageSquare, ShieldCheck, Search, Loader2, AlertCircle } from "lucide-react";
+import { Send, Paperclip, MessageSquare, ShieldCheck, Loader2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import type { WorkflowMessage } from "./WorkflowChat";

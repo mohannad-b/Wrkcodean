@@ -7,7 +7,6 @@ import {
   Save,
   Download,
   CheckCircle2,
-  Globe,
   Clock,
   Mail,
   FileText,
@@ -31,9 +30,7 @@ import {
   Bar,
 } from "recharts";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { SecureUploader } from "@/components/files/SecureUploader";
 import {
   Select,
   SelectContent,
@@ -104,10 +101,6 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
     loadMembership().catch(() => null);
   }, []);
 
-  const handleSave = async () => {
-    // Save is handled by ProfileSettings component via onSaveStateChange
-  };
-
   const handleDownloadInvoice = () => {
     // TODO: Download invoice
   };
@@ -174,7 +167,6 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
           >
             {activeTab === "profile" && (
               <ProfileSettings 
-                onSave={handleSave} 
                 isSaving={isSaving}
                 saveError={saveError}
                 saveSuccess={saveSuccess}
@@ -203,14 +195,12 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
 
 // --- 1. Workspace Profile ---
 const ProfileSettings = ({
-  onSave,
   isSaving,
   saveError,
   saveSuccess,
   onSaveStateChange,
   onWorkspaceNameChange,
 }: { 
-  onSave?: () => void; 
   isSaving?: boolean;
   saveError?: string | null;
   saveSuccess?: boolean;
