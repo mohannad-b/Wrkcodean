@@ -7,6 +7,8 @@ import { can } from "@/lib/auth/rbac";
 import { writeKvSecret, loginWithOidc } from "@/lib/vault/client";
 import auth0 from "@/lib/auth/auth0";
 
+export const runtime = "nodejs";
+
 function slugify(input: string) {
   return input
     .toLowerCase()

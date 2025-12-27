@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { discountOffers, projects } from "@/db/schema";
+import { discountOffers, submissions } from "@/db/schema";
 import crypto from "crypto";
 
 export type DiscountKind = "first_congrats" | "first_incentive" | "followup_5" | "followup_10";
@@ -18,8 +18,12 @@ function generateCode(prefix: string) {
 }
 
 async function isFirstWorkflowForTenant(tenantId: string) {
-  const existingProjects = await db.select({ id: projects.id }).from(projects).where(eq(projects.tenantId, tenantId)).limit(1);
-  return existingProjects.length === 0;
+  const existingSubmissions = await db
+    .select({ id: submissions.id })
+    .from(submissions)
+    .where(eq(submissions.tenantId, tenantId))
+    .limit(1);
+  return existingSubmissions.length === 0;
 }
 
 export async function ensureDiscountOffersForVersion(tenantId: string, automationVersionId: string) {

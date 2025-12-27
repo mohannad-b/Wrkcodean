@@ -1,5 +1,4 @@
 import { NextResponse, type NextRequest } from "next/server";
-import auth0 from "@/lib/auth/auth0";
 
 const PUBLIC_PATH_PREFIXES = [
   "/",
@@ -30,33 +29,31 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const authResponse = await auth0.middleware(request);
   const pathname = request.nextUrl.pathname;
+  const response = NextResponse.next();
+  const hasSession = Boolean(request.cookies.get("appSession")?.value);
 
   // Clear active workspace cookie on logout
   if (pathname.startsWith("/auth/logout")) {
-    authResponse.cookies.set("activeWorkspaceId", "", { path: "/", maxAge: 0 });
-    return authResponse;
+    response.cookies.set("activeWorkspaceId", "", { path: "/", maxAge: 0 });
+    return response;
   }
 
   // If a workspaceId is provided in the query, persist it as active.
   const workspaceId = request.nextUrl.searchParams.get("workspaceId");
   if (workspaceId) {
-    authResponse.cookies.set("activeWorkspaceId", workspaceId, { path: "/", httpOnly: false, sameSite: "lax" });
+    response.cookies.set("activeWorkspaceId", workspaceId, { path: "/", httpOnly: false, sameSite: "lax" });
   }
 
   if (isPublicRoute(pathname)) {
-    const session = await auth0.getSession(request);
-    if (session && pathname === "/") {
+    if (hasSession && pathname === "/") {
       const dashboardUrl = new URL("/dashboard", request.url);
       return NextResponse.redirect(dashboardUrl);
     }
-    return authResponse;
+    return response;
   }
 
-  const session = await auth0.getSession(request);
-
-  if (!session) {
+  if (!hasSession) {
     if (pathname.startsWith("/api")) {
       return new NextResponse("Unauthorized", { status: 401 });
     }
@@ -68,7 +65,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  return authResponse;
+  return response;
 }
 
 export const config = {

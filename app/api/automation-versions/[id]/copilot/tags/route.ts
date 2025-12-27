@@ -74,7 +74,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
   }
 }
 
-export function normalizeTags(content: string): string[] {
+function normalizeTags(content: string): string[] {
   let cleaned = content.trim();
 
   // Strip markdown fences and leading language hints (```json)
@@ -108,7 +108,7 @@ export function normalizeTags(content: string): string[] {
   return Array.from(unique).slice(0, 8);
 }
 
-export function coerceToStructuredTags(candidates: string[]): string[] {
+function coerceToStructuredTags(candidates: string[]): string[] {
   const departments = [
     "Sales",
     "Marketing",
@@ -164,7 +164,7 @@ export function coerceToStructuredTags(candidates: string[]): string[] {
   return [department, outcome, complexity];
 }
 
-export function normalizeWord(tag: string): string {
+function normalizeWord(tag: string): string {
   const cleaned = tag.replace(/[^a-z0-9\s]/gi, " ").replace(/\s+/g, " ").trim();
   if (!cleaned) return "";
   return cleaned

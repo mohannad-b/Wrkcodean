@@ -5,6 +5,8 @@ import { NoTenantMembershipError, getSession } from "@/lib/auth/session";
 import { suggestBrandingFromDomain } from "@/lib/branding/suggest";
 import { WorkspaceSetupClient } from "@/components/workspace-setup/WorkspaceSetupClient";
 
+export const runtime = "nodejs";
+
 export const metadata = {
   title: "Workspace setup",
 };
