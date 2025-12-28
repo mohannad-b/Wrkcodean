@@ -175,71 +175,118 @@ export async function POST(request: Request, { params }: { params: { id: string 
         message: responseMessage,
       });
     } else {
-      const {
-        blueprint: aiGeneratedBlueprint,
-        tasks: generatedTasks,
-        chatResponse,
-        followUpQuestion,
-        sanitizationSummary,
-        requirementsText: newRequirementsText,
-      } = await buildBlueprintFromChat({
-        userMessage: userMessageContent,
-        currentBlueprint,
-        conversationHistory: normalizedMessages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-        requirementsText: workflow.requirementsText,
-        memorySummary: analysisState.memory?.summary_compact ?? null,
-        memoryFacts: analysisState.memory?.facts ?? {},
-      });
-      updatedRequirementsText = newRequirementsText;
+      try {
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: "draft-blueprint",
+            hypothesisId: "B1",
+            location: "app/api/automation-versions/[id]/copilot/draft-blueprint/route.ts",
+            message: "Invoking buildBlueprintFromChat",
+            data: {
+              tenantId: session.tenantId,
+              automationVersionId: params.id,
+              messageCount: normalizedMessages.length,
+              hasIntakeNotes: Boolean(payload.intakeNotes ?? detail.version.intakeNotes),
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
 
-      const numberedBlueprint = applyStepNumbers(aiGeneratedBlueprint);
-      aiTasks = generatedTasks;
-      const taskAssignments = await syncAutomationTasks({
-        tenantId: session.tenantId,
-        automationVersionId: params.id,
-        aiTasks,
-        blueprint: numberedBlueprint,
-      });
+        const {
+          blueprint: aiGeneratedBlueprint,
+          tasks: generatedTasks,
+          chatResponse,
+          followUpQuestion,
+          sanitizationSummary,
+          requirementsText: newRequirementsText,
+        } = await buildBlueprintFromChat({
+          userMessage: userMessageContent,
+          currentBlueprint,
+          conversationHistory: normalizedMessages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+          requirementsText: workflow.requirementsText,
+          memorySummary: analysisState.memory?.summary_compact ?? null,
+          memoryFacts: analysisState.memory?.facts ?? {},
+        });
+        updatedRequirementsText = newRequirementsText;
 
-      blueprintWithTasks = {
-        ...numberedBlueprint,
-        steps: numberedBlueprint.steps.map((step) => ({
-          ...step,
-          taskIds: Array.from(new Set(taskAssignments[step.id] ?? step.taskIds ?? [])),
-        })),
-      };
-      const trimmedFollowUp = followUpQuestion?.trim();
-      const nextFollowUp = chooseFollowUpQuestion({
-        candidate: trimmedFollowUp,
-        memory: analysisState.memory ?? createEmptyMemory(),
-        blueprint: blueprintWithTasks,
-        userMessage: userMessageContent,
-      });
+        const numberedBlueprint = applyStepNumbers(aiGeneratedBlueprint);
+        aiTasks = generatedTasks;
 
-      analysisState = {
-        ...analysisState,
-        memory: refreshMemoryState({
-          previous: analysisState.memory ?? createEmptyMemory(),
+        const taskAssignments = await syncAutomationTasks({
+          tenantId: session.tenantId,
+          automationVersionId: params.id,
+          aiTasks,
+          blueprint: numberedBlueprint,
+        });
+
+        blueprintWithTasks = {
+          ...numberedBlueprint,
+          steps: numberedBlueprint.steps.map((step) => ({
+            ...step,
+            taskIds: Array.from(new Set(taskAssignments[step.id] ?? step.taskIds ?? [])),
+          })),
+        };
+        const trimmedFollowUp = followUpQuestion?.trim();
+        const nextFollowUp = chooseFollowUpQuestion({
+          candidate: trimmedFollowUp,
+          memory: analysisState.memory ?? createEmptyMemory(),
           blueprint: blueprintWithTasks,
-          lastUserMessage: userMessageContent,
-          appliedFollowUp: nextFollowUp,
-        }),
-      };
+          userMessage: userMessageContent,
+        });
 
-      responseMessage = nextFollowUp ? `${chatResponse} ${nextFollowUp}`.trim() : chatResponse;
+        analysisState = {
+          ...analysisState,
+          memory: refreshMemoryState({
+            previous: analysisState.memory ?? createEmptyMemory(),
+            blueprint: blueprintWithTasks,
+            lastUserMessage: userMessageContent,
+            appliedFollowUp: nextFollowUp,
+          }),
+        };
 
-      copilotDebug("draft_blueprint.llm_response", {
-        automationVersionId: params.id,
-        chatResponse,
-        followUpQuestion: trimmedFollowUp,
-        stepCount: blueprintWithTasks.steps.length,
-        taskCount: aiTasks.length,
-        sanitizationSummary,
-      });
-      console.log("[copilot:draft-blueprint] raw assistant reply:", chatResponse);
+        responseMessage = nextFollowUp ? `${chatResponse} ${nextFollowUp}`.trim() : chatResponse;
+
+        copilotDebug("draft_blueprint.llm_response", {
+          automationVersionId: params.id,
+          chatResponse,
+          followUpQuestion: trimmedFollowUp,
+          stepCount: blueprintWithTasks.steps.length,
+          taskCount: aiTasks.length,
+          sanitizationSummary,
+        });
+        console.log("[copilot:draft-blueprint] raw assistant reply:", chatResponse);
+      } catch (error: any) {
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: "draft-blueprint",
+            hypothesisId: "B2",
+            location: "app/api/automation-versions/[id]/copilot/draft-blueprint/route.ts",
+            message: "Blueprint generation failed",
+            data: {
+              tenantId: session.tenantId,
+              automationVersionId: params.id,
+              error: error?.message ?? "unknown",
+              name: error?.name ?? "unknown",
+              stack: error?.stack ? String(error.stack).slice(0, 500) : "n/a",
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+        throw error;
+      }
     }
 
     const validatedBlueprint = directCommand

@@ -177,7 +177,9 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
         ? aiResponse.branches
         : [];
     const normalizedSections = aiResponse.blueprint?.sections ?? aiResponse.sections ?? {};
-    const updatedRequirementsText = (aiResponse.requirementsText ?? aiResponse.blueprint?.requirementsText)?.trim() || undefined;
+    const rawRequirements = aiResponse.requirementsText ?? aiResponse.blueprint?.requirementsText;
+    const updatedRequirementsText =
+      typeof rawRequirements === "string" ? rawRequirements.trim() : undefined;
 
     // Build workflow from scratch, preserving IDs and metadata
     const preservedWorkflow = preserveEssentialData(currentBlueprint, normalizedSteps, normalizedBranches, normalizedSections);
@@ -186,7 +188,8 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     const { blueprint: sanitizedBlueprint, summary: sanitizationSummary } = sanitizeBlueprintTopology(numberedBlueprint);
 
     const chatResponse = normalizeChatResponse(aiResponse.chatResponse);
-    const followUpQuestion = aiResponse.followUpQuestion?.trim() || undefined;
+    const followUpQuestion =
+      typeof aiResponse.followUpQuestion === "string" ? aiResponse.followUpQuestion.trim() : undefined;
 
     copilotDebug("draft_blueprint.parsed_response", {
       chatResponse,
@@ -480,10 +483,12 @@ function parseAIResponse(content: string): AIResponse {
   }
 }
 
-function normalizeChatResponse(response?: string): string {
-  const trimmed = response?.trim();
-  if (trimmed && trimmed.length > 0) {
-    return trimmed;
+function normalizeChatResponse(response?: unknown): string {
+  if (typeof response === "string") {
+    const trimmed = response.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
   }
   return "Got it. I've updated the workflow.";
 }

@@ -116,7 +116,8 @@ export async function getOrCreateUserFromAuth0Session(): Promise<{
     throw new Error("Auth0 session is missing a subject identifier.");
   }
 
-  const email = session.user.email ?? `${auth0Id.replace("|", "_")}@placeholder.local`;
+  const emailRaw = session.user.email ?? `${auth0Id.replace("|", "_")}@placeholder.local`;
+  const email = emailRaw.toLowerCase();
   const name = session.user.name ?? email;
   const avatarUrl = session.user.picture ?? null;
   
@@ -240,7 +241,7 @@ export async function getOrCreateUserFromAuth0Session(): Promise<{
     userRecord,
     profile: {
       auth0Id,
-      email,
+            email,
       name,
       avatarUrl,
     },
