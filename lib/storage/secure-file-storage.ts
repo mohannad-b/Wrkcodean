@@ -23,7 +23,10 @@ export type StoredFilePayload = {
 };
 
 const MAX_BYTES = Number(process.env.FILE_UPLOAD_MAX_BYTES ?? 25 * 1024 * 1024); // 25MB default
-const UPLOAD_ROOT = process.env.SECURE_UPLOAD_ROOT ?? path.join(process.cwd(), ".data", "secure-uploads");
+const DEFAULT_UPLOAD_ROOT =
+  process.env.SECURE_UPLOAD_ROOT ??
+  (process.env.VERCEL === "1" ? "/tmp/secure-uploads" : path.join(process.cwd(), ".data", "secure-uploads"));
+const UPLOAD_ROOT = DEFAULT_UPLOAD_ROOT;
 
 function getKeyMaterial(): { key: Buffer; fingerprint: string } {
   const raw = process.env.FILE_ENCRYPTION_KEY ?? process.env.AVATAR_UPLOAD_SECRET ?? "local-dev-file-key";
@@ -95,9 +98,52 @@ async function persistEncryptedBuffer(params: {
 
   const storageKey = path.join(tenantId, `${randomUUID()}.bin`);
   const abs = path.join(UPLOAD_ROOT, storageKey);
-  ensureUnderRoot(abs);
-  await ensureDirectory(path.dirname(abs));
-  await fs.writeFile(abs, ciphertext);
+
+  // #region agent log
+  fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "debug-session",
+      runId: "upload-path",
+      hypothesisId: "U1",
+      location: "lib/storage/secure-file-storage.ts:persistEncryptedBuffer",
+      message: "Preparing to store encrypted buffer",
+      data: { uploadRoot: UPLOAD_ROOT, storageKey, abs },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+
+  try {
+    ensureUnderRoot(abs);
+    await ensureDirectory(path.dirname(abs));
+    await fs.writeFile(abs, ciphertext);
+  } catch (err: any) {
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "upload-path",
+        hypothesisId: "U2",
+        location: "lib/storage/secure-file-storage.ts:persistEncryptedBuffer",
+        message: "Failed to write encrypted buffer",
+        data: {
+          uploadRoot: UPLOAD_ROOT,
+          storageKey,
+          abs,
+          error: err?.message ?? "unknown",
+          code: err?.code ?? "unknown",
+          stack: err?.stack ? String(err.stack).slice(0, 500) : "n/a",
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+    throw err;
+  }
 
   return {
     storageKey,

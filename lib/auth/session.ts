@@ -321,6 +321,22 @@ export function resolveActiveTenantId(
 async function getAuth0BackedTenantSession(): Promise<TenantSession> {
   const { userRecord } = await getOrCreateUserFromAuth0Session();
 
+  // #region agent log
+  fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "debug-session",
+      runId: "tenant-check",
+      hypothesisId: "T1",
+      location: "lib/auth/session.ts:getAuth0BackedTenantSession",
+      message: "Resolved Auth0 session user",
+      data: { userId: userRecord.id, email: userRecord.email },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+
   let membershipRows = await db
     .select({ role: memberships.role, tenantId: memberships.tenantId })
     .from(memberships)
@@ -379,11 +395,45 @@ async function getAuth0BackedTenantSession(): Promise<TenantSession> {
     }
 
     if (!fallbackTenantId || membershipRows.length === 0) {
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "debug-session",
+          runId: "tenant-check",
+          hypothesisId: "T2",
+          location: "lib/auth/session.ts:getAuth0BackedTenantSession",
+          message: "No membership after invites/backfill",
+          data: {
+            allowBackfill,
+            fallbackTenantId,
+            membershipCount: membershipRows.length,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
       throw new NoTenantMembershipError();
     }
   }
 
   if (membershipRows.length === 0) {
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "tenant-check",
+        hypothesisId: "T3",
+        location: "lib/auth/session.ts:getAuth0BackedTenantSession",
+        message: "No membership after reload",
+        data: { membershipCount: membershipRows.length },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
     throw new NoTenantMembershipError();
   }
 
@@ -396,6 +446,22 @@ async function getAuth0BackedTenantSession(): Promise<TenantSession> {
 
   // Check for Wrk staff membership
   const wrkStaffRole = await getWrkStaffRoleForUser(userRecord.id);
+
+  // #region agent log
+  fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "debug-session",
+      runId: "tenant-check",
+      hypothesisId: "T4",
+      location: "lib/auth/session.ts:getAuth0BackedTenantSession",
+      message: "Resolved tenant session",
+      data: { tenantId: candidateTenantId, membershipCount: membershipRows.length, roles },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
 
   return {
     kind: "tenant",

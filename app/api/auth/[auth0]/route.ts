@@ -53,9 +53,32 @@ async function dispatch(action: Auth0Action, request: NextRequest): Promise<Next
         }),
       }).catch(() => {});
       // #endregion
-      return client.startInteractiveLogin({
-        returnTo: request.nextUrl.searchParams.get("returnTo") ?? "/dashboard",
-      });
+      try {
+        return client.startInteractiveLogin({
+          returnTo: request.nextUrl.searchParams.get("returnTo") ?? "/dashboard",
+        });
+      } catch (err: any) {
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: "login-error",
+            hypothesisId: "H7",
+            location: "app/api/auth/[auth0]/route.ts:dispatch",
+            message: "Login handler threw",
+            data: {
+              error: err?.message ?? "unknown",
+              name: err?.name ?? "unknown",
+              stack: err?.stack ? String(err.stack).slice(0, 500) : "n/a",
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+        throw err;
+      }
     case "logout":
       // #region agent log
       fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
