@@ -12,6 +12,7 @@ import {
 } from "@/db/schema";
 import { acceptWorkspaceInvite } from "@/lib/services/workspace-members";
 import { sendDevAgentLog } from "@/lib/dev/agent-log";
+import { logger } from "@/lib/logger";
 
 const ALLOWED_DEFAULT_ROLES: readonly MembershipRole[] = ["viewer", "editor", "admin", "owner", "billing"] as const;
 
@@ -21,7 +22,7 @@ function resolveDefaultTenantRole(): MembershipRole {
     return raw;
   }
   if (raw && !ALLOWED_DEFAULT_ROLES.includes(raw)) {
-    console.warn(
+    logger.warn(
       `[auth] DEFAULT_TENANT_ROLE='${raw}' is not a valid membership role. Falling back to 'client_admin'. Allowed values: ${ALLOWED_DEFAULT_ROLES.join(
         ", "
       )}.`

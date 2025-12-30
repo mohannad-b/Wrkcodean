@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { WorkflowChatView } from "@/components/workflow-chat/WorkflowChatView";
 import { Loader2 } from "lucide-react";
 import { useParams } from "next/navigation";
+import { logger } from "@/lib/logger";
 
 export default function WorkflowChatPage() {
   const params = useParams();
@@ -19,7 +20,7 @@ export default function WorkflowChatPage() {
         // For now, we'll just use the workflowId
         setWorkflowName(null);
       } catch (error) {
-        console.error("Failed to fetch workflow:", error);
+        logger.error("Failed to fetch workflow:", error);
       } finally {
         setIsLoading(false);
       }

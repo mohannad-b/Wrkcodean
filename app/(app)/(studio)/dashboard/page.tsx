@@ -22,6 +22,7 @@ import {
   ChevronDown,
   X,
 } from "lucide-react";
+import { logger } from "@/lib/logger";
 import type { ActivityItem } from "@/lib/mock-dashboard";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import Link from "next/link";
@@ -89,7 +90,7 @@ export default function DashboardPage() {
           setCurrentTenant({ id: workspace.id, name: workspace.name });
         }
       } catch (err) {
-        console.error("[dashboard] failed to load tenant info", err);
+        logger.error("[dashboard] failed to load tenant info", err);
       } finally {
         setLoadingTenants(false);
       }
@@ -133,7 +134,7 @@ export default function DashboardPage() {
         } as ActivityItem & { userAvatarUrl?: string | null; userFirstName?: string | null; userLastName?: string | null }));
         setActivityFeed(formattedActivities);
       } catch (err) {
-        console.error("[dashboard] failed to load activity", err);
+      logger.error("[dashboard] failed to load activity", err);
         setActivityFeed([]);
       } finally {
         setLoadingActivity(false);
@@ -158,7 +159,7 @@ export default function DashboardPage() {
       // Reload the page to update the session
       window.location.reload();
     } catch (err) {
-      console.error("[dashboard] failed to switch tenant", err);
+    logger.error("[dashboard] failed to switch tenant", err);
     }
   };
 

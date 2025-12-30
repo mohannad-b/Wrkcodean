@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type { UploadPurpose } from "@/lib/storage/file-service";
+import { logger } from "@/lib/logger";
 
 type FileVersionDto = {
   id: string;
@@ -85,7 +86,7 @@ export function SecureUploader({
         const data = (await res.json()) as { files: FileDto[] };
         if (!cancelled) setExisting(data.files ?? []);
       } catch (err) {
-        console.error("[uploader] failed to fetch existing uploads", err);
+        logger.error("[uploader] failed to fetch existing uploads", err);
       } finally {
         if (!cancelled) setRefreshing(false);
       }

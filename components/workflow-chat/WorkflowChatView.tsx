@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import type { WorkflowMessage } from "./WorkflowChat";
 import { formatDistanceToNow } from "date-fns";
+import { logger } from "@/lib/logger";
 
 type TypingState = {
   userId: string;
@@ -64,9 +65,9 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
       setMessages(reversedMessages);
       setConversationId(data.conversationId);
       conversationIdRef.current = data.conversationId;
-      console.log("Fetched messages:", reversedMessages.length, reversedMessages);
+    logger.debug("Fetched messages:", reversedMessages.length, reversedMessages);
     } catch (error) {
-      console.error("Failed to fetch messages:", error);
+    logger.error("Failed to fetch messages:", error);
     } finally {
       setIsLoading(false);
     }
@@ -83,7 +84,7 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
         body: JSON.stringify({ lastReadMessageId: messageId }),
       });
     } catch (error) {
-      console.error("Failed to mark as read:", error);
+      logger.error("Failed to mark as read:", error);
     }
   }, [workflowId, conversationId]);
 
@@ -153,7 +154,7 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
       optimisticMessagesRef.current.delete(clientId);
       markAsRead(serverMessage.id);
     } catch (error) {
-      console.error("Failed to send message:", error);
+      logger.error("Failed to send message:", error);
       // Mark as failed
       setMessages((prev) =>
         prev.map((msg) =>
@@ -182,14 +183,14 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
           conversationIdRef.current = newConversationId;
         } else if (data.type === "message.created") {
           const message = data.data as WorkflowMessage;
-          console.log("SSE message.created:", message);
+          logger.debug("SSE message.created:", message);
           setMessages((prev) => {
             // Deduplicate
             const exists = prev.some(
               (m) => m.id === message.id || m.clientGeneratedId === message.clientGeneratedId
             );
             if (exists) {
-              console.log("Message already exists, skipping:", message.id);
+              logger.debug("Message already exists, skipping:", message.id);
               return prev;
             }
 
@@ -220,7 +221,7 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ lastReadMessageId: message.id }),
                 }).catch((error) => {
-                  console.error("Failed to mark as read:", error);
+                  logger.error("Failed to mark as read:", error);
                 });
               }
             }, 100);
@@ -264,12 +265,12 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
           }
         }
       } catch (error) {
-        console.error("Error parsing SSE event:", error);
+        logger.error("Error parsing SSE event:", error);
       }
     };
 
     eventSource.onerror = (error) => {
-      console.error("SSE error:", error);
+      logger.error("SSE error:", error);
       setTimeout(() => {
         if (eventSourceRef.current) {
           eventSourceRef.current.close();

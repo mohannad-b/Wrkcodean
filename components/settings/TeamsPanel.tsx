@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 type Member = {
   membershipId: string;
@@ -135,7 +136,7 @@ export function TeamsPanel() {
       setData(json);
       setInviteRole(json.availableRoles.includes("viewer") ? "viewer" : json.availableRoles[0] ?? "viewer");
     } catch (err) {
-      console.error(err);
+      logger.error(err);
       toast.error("Unable to load team data.");
     } finally {
       setLoading(false);

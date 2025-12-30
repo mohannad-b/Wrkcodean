@@ -13,6 +13,7 @@ import { ApiError } from "@/lib/api/context";
 import { EmailService } from "@/lib/email/service";
 import { logAudit } from "@/lib/audit/log";
 import { setStaffRole } from "@/lib/services/platform-admin";
+import { logger } from "@/lib/logger";
 
 const INVITE_TTL_DAYS = 7;
 const WRK_TECH_TENANT_ID = process.env.WRK_TECH_TENANT_ID;
@@ -148,7 +149,7 @@ export async function acceptStaffInvite(params: { token: string; userId: string;
         .onConflictDoNothing({ target: [memberships.tenantId, memberships.userId] });
     } catch (error) {
       // Non-fatal: platform access should not depend on this membership.
-      console.warn("[staff-invite] Failed to add user to WRK tenant:", error);
+      logger.warn("[staff-invite] Failed to add user to WRK tenant:", error);
     }
   }
 

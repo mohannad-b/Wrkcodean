@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { WorkflowStep } from "@/lib/workflows/types";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 interface StudioInspectorProps {
   step: WorkflowStep | null;
@@ -177,7 +178,7 @@ export function StudioInspector({ step, onClose, onChange, onDelete, clientName,
         
         setReferencedFiles(matchedFiles);
       } catch (error) {
-        console.error("[StudioInspector] Failed to fetch files:", error);
+        logger.error("[StudioInspector] Failed to fetch files:", error);
         if (!cancelled) {
           setReferencedFiles([]);
         }

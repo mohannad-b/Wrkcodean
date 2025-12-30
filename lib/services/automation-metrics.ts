@@ -9,6 +9,7 @@ import {
   type AutomationVersionMetric,
   type Quote,
 } from "@/db/schema";
+import { logger } from "@/lib/logger";
 
 type UsageSnapshot = {
   totalExecutions: number;
@@ -265,7 +266,7 @@ async function fetchUsageFromWrkPlatform(automationVersionId: string): Promise<U
       source: "wrk_platform",
     };
   } catch (error) {
-    console.error("Failed to pull WRK usage metrics", error);
+    logger.error("Failed to pull WRK usage metrics", error);
     return { totalExecutions: 0, successCount: 0, failureCount: 0, spendUsd: 0, source: "placeholder" };
   }
 }

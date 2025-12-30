@@ -29,6 +29,7 @@ import {
   BarChart,
   Bar,
 } from "recharts";
+import { logger } from "@/lib/logger";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -95,7 +96,7 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
           return prev;
         });
       } catch (err) {
-        console.warn("Unable to load membership metadata", err);
+      logger.warn("Unable to load membership metadata", err);
       }
     }
     loadMembership().catch(() => null);
@@ -273,7 +274,7 @@ const ProfileSettings = ({
         }
       } catch (err) {
         if (!cancelled) {
-          console.error("Failed to load workspace:", err);
+          logger.error("Failed to load workspace:", err);
         }
       } finally {
         if (!cancelled) {

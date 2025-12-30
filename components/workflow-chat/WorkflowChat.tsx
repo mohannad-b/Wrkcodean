@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import { formatDistanceToNow } from "date-fns";
+import { logger } from "@/lib/logger";
 
 export type WorkflowMessage = {
   id: string;
@@ -90,7 +91,7 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
       });
       setLastReadMessageId(messageId);
     } catch (error) {
-      console.error("Failed to mark as read:", error);
+      logger.error("Failed to mark as read:", error);
     }
   }, [workflowId, conversationId, lastReadMessageId]);
 
@@ -110,9 +111,9 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
       if (data.lastReadMessageId) {
         setLastReadMessageId(data.lastReadMessageId);
       }
-      console.log("Fetched messages:", reversedMessages.length, reversedMessages);
+      logger.debug("Fetched messages:", reversedMessages.length, reversedMessages);
     } catch (error) {
-      console.error("Failed to fetch messages:", error);
+      logger.error("Failed to fetch messages:", error);
     } finally {
       setIsLoading(false);
     }
@@ -186,7 +187,7 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
       // Mark as read
       markAsRead(serverMessage.id);
     } catch (error) {
-      console.error("Failed to send message:", error);
+      logger.error("Failed to send message:", error);
       // Mark as failed
       setMessages((prev) =>
         prev.map((msg) =>
@@ -233,7 +234,7 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
         );
         markAsRead(serverMessage.id);
       } catch (error) {
-        console.error("Failed to retry message:", error);
+        logger.error("Failed to retry message:", error);
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === message.id ? { ...msg, status: "failed" } : msg
@@ -346,12 +347,12 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
           }
         }
       } catch (error) {
-        console.error("Error parsing SSE event:", error);
+        logger.error("Error parsing SSE event:", error);
       }
     };
 
     eventSource.onerror = (error) => {
-      console.error("SSE error:", error);
+      logger.error("SSE error:", error);
       // Reconnect after delay
       setTimeout(() => {
         if (eventSourceRef.current) {

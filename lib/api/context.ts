@@ -11,6 +11,7 @@ import {
   type UserSession,
   type TenantOrStaffSession,
 } from "@/lib/auth/session";
+import { logger } from "@/lib/logger";
 
 export class ApiError extends Error {
   status: number;
@@ -100,7 +101,7 @@ export function handleApiError(error: unknown) {
     return NextResponse.json({ error: error.message }, { status: error.status });
   }
 
-  console.error(error);
+  logger.error(error);
   return NextResponse.json({ error: "Unexpected error." }, { status: 500 });
 }
 

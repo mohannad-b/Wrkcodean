@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { workflowMessages, workflowReadReceipts, users, memberships, automationVersions, automations } from "@/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { EmailService } from "@/lib/email/service";
+import { logger } from "@/lib/logger";
 
 type NotificationRecipient = {
   userId: string;
@@ -153,13 +154,13 @@ export async function notifyNewMessage(params: {
           },
           idempotencyKey: `chat-notification-${params.messageId}-${recipient.userId}`,
         });
-      } catch (error) {
-        console.error(`Failed to send notification to ${recipient.email}:`, error);
+    } catch (error) {
+      logger.error(`Failed to send notification to ${recipient.email}:`, error);
         // Continue with other recipients
       }
     }
-  } catch (error) {
-    console.error("Failed to queue chat notifications:", error);
+} catch (error) {
+  logger.error("Failed to queue chat notifications:", error);
     // Don't throw - notifications are best-effort
   }
 }

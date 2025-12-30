@@ -13,6 +13,7 @@ import { applyStepNumbers } from "./step-numbering";
 import { WORKFLOW_SYSTEM_PROMPT_COMPACT } from "@/lib/ai/prompts";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { sanitizeBlueprintTopology, type SanitizationSummary } from "./sanitizer";
+import { logger } from "@/lib/logger";
 
 type ConversationMessage = {
   role: "system" | "user" | "assistant";
@@ -148,7 +149,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       content: msg.content,
     })),
   });
-  console.log("[copilot:draft-blueprint] prompt", {
+  logger.debug("[copilot:draft-blueprint] prompt", {
     model: WORKFLOW_MODEL,
     temperature: 0.3,
     messages,
@@ -169,7 +170,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     }
 
     copilotDebug("draft_blueprint.raw_response", content);
-    console.log("[copilot:draft-blueprint] raw_response", content);
+    logger.debug("[copilot:draft-blueprint] raw_response", content);
 
     const aiResponse = parseAIResponse(content);
     const normalizedSteps = Array.isArray(aiResponse.blueprint?.steps)
@@ -220,7 +221,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       requirementsText: updatedRequirementsText,
     };
   } catch (error) {
-    console.error("Error building blueprint from chat:", error);
+    logger.error("Error building blueprint from chat:", error);
     throw new Error("Failed to generate blueprint");
   }
 }
@@ -490,7 +491,7 @@ function parseAIResponse(content: string): AIResponse {
   try {
     return JSON.parse(content) as AIResponse;
   } catch (error) {
-    console.error("Failed to parse AI response:", error);
+    logger.error("Failed to parse AI response:", error);
     return { steps: [], tasks: [] };
   }
 }

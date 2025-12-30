@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Loader2, X, Download, MoreHorizontal, Trash2, FileText, Upload, History, ShieldCheck, Plus, KeyRound } from "lucide-react";
 import { SystemPickerModal } from "@/components/modals/SystemPickerModal";
 import { CredentialsModal } from "@/components/modals/CredentialsModal";
+import { logger } from "@/lib/logger";
 
 type VersionTask = any;
 
@@ -174,8 +175,7 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
         setFileError(null);
         setFileLoading(true);
         const label = `Uploading file ${i + 1} of ${files.length}...`;
-        // eslint-disable-next-line no-console
-        console.info(label);
+        logger.info(label);
         const form = new FormData();
         form.append("purpose", "task_attachment");
         form.append("resourceType", "task");

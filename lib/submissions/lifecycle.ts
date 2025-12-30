@@ -1,4 +1,5 @@
 import { BUILD_STATUS_LABELS, BUILD_STATUS_ORDER, BuildStatus, DEFAULT_BUILD_STATUS } from "@/lib/build-status/types";
+import { logger } from "@/lib/logger";
 
 export type SubmissionLifecycleStatus = BuildStatus | "Archived";
 export type LifecycleStatusInput = SubmissionLifecycleStatus | string | null | undefined;
@@ -240,13 +241,13 @@ export function applyTransition(params: {
 
   if (!canTransition(from, to)) {
     const message = `Invalid lifecycle transition from ${from} to ${to}`;
-    console.warn(`[lifecycle] ${message}${params.reason ? ` (${params.reason})` : ""}`);
+    logger.warn(`[lifecycle] ${message}${params.reason ? ` (${params.reason})` : ""}`);
     throw new LifecycleTransitionError(message, from, to, params.actorRole);
   }
 
   if (!canRoleTransition(params.actorRole, from, to)) {
     const message = `Role ${params.actorRole} cannot transition from ${from} to ${to}`;
-    console.warn(`[lifecycle] ${message}${params.reason ? ` (${params.reason})` : ""}`);
+    logger.warn(`[lifecycle] ${message}${params.reason ? ` (${params.reason})` : ""}`);
     throw new LifecycleTransitionError(message, from, to, params.actorRole);
   }
 

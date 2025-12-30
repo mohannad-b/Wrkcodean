@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
+import { logger } from "@/lib/logger";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -716,7 +717,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       
       // Safeguard: Warn if steps are missing in payload
       if (stepCountInPayload < stepCountBeforeSave) {
-        console.warn(`⚠️ Step count decreased before save: ${stepCountBeforeSave} → ${stepCountInPayload}`);
+        logger.warn(`⚠️ Step count decreased before save: ${stepCountBeforeSave} → ${stepCountInPayload}`);
         sendDevAgentLog({
           location: "page.tsx:644",
           message: "⚠️ STEP COUNT DECREASED BEFORE SAVE",
@@ -733,7 +734,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         });
       }
       
-      console.log("💾 Saving workflow:", {
+      logger.debug("💾 Saving workflow:", {
         versionId: selectedVersion.id,
         stepCount: payload.steps.length,
       });
@@ -771,7 +772,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         
         // Safeguard: Verify steps were preserved
         if (stepCountAfterSave < stepCountBeforeSave) {
-          console.error(`⚠️ Step count decreased after save: ${stepCountBeforeSave} → ${stepCountAfterSave}`);
+          logger.error(`⚠️ Step count decreased after save: ${stepCountBeforeSave} → ${stepCountAfterSave}`);
           sendDevAgentLog({
             location: "page.tsx:660",
             message: "⚠️ STEP COUNT DECREASED AFTER SAVE",

@@ -12,6 +12,7 @@ import { logAudit } from "@/lib/audit/log";
 import { db } from "@/db";
 import { automationVersions, users, workflowReadReceipts } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
+import { logger } from "@/lib/logger";
 
 const CreateMessageSchema = z.object({
   body: z.string().min(1).max(10000),
@@ -49,7 +50,7 @@ export async function GET(
     });
 
     if (!workflow) {
-      console.log(`[GET /api/workflows/${params.workflowId}/chat/messages] Workflow not found`);
+      logger.warn(`[GET /api/workflows/${params.workflowId}/chat/messages] Workflow not found`);
       throw new ApiError(404, "Workflow not found");
     }
 

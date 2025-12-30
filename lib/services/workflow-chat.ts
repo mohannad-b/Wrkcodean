@@ -13,6 +13,7 @@ import type { TenantOrStaffSession } from "@/lib/auth/session";
 import { can } from "@/lib/auth/rbac";
 import { emitChatEvent, type ChatActor } from "@/lib/realtime/events";
 import { notifyNewMessage } from "./workflow-chat-notifications";
+import { logger } from "@/lib/logger";
 
 export type WorkflowMessageWithSender = WorkflowMessage & {
   sender?: {
@@ -91,7 +92,9 @@ export async function listMessages(params: {
     .orderBy(desc(workflowMessages.createdAt))
     .limit(limit);
 
-  console.log(`[listMessages] Found ${messages.length} messages for conversation ${params.conversationId}, tenant ${params.tenantId}`);
+  logger.debug(
+    `[listMessages] Found ${messages.length} messages for conversation ${params.conversationId}, tenant ${params.tenantId}`
+  );
 
   // Fetch sender information for messages with senderUserId
   const senderUserIds = messages
@@ -110,7 +113,9 @@ export async function listMessages(params: {
         .where(inArray(users.id, senderUserIds))
     : [];
 
-  console.log(`[listMessages] Found ${senderUsers.length} sender users for ${senderUserIds.length} message senders`);
+  logger.debug(
+    `[listMessages] Found ${senderUsers.length} sender users for ${senderUserIds.length} message senders`
+  );
 
   const senderMap = new Map(senderUsers.map((u) => [u.id, u]));
 
@@ -216,7 +221,7 @@ export async function createMessage(params: {
     messageId: message.id,
     senderUserId: params.senderUserId,
   }).catch((error) => {
-    console.error("Failed to queue notifications:", error);
+    logger.error("Failed to queue notifications:", error);
   });
 
   return message;

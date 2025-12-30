@@ -16,6 +16,7 @@ import { determineConversationPhase, generateThinkingSteps } from "@/lib/ai/copi
 import { logAudit } from "@/lib/audit/log";
 import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
 import { buildWorkflowViewModel } from "@/lib/workflows/view-model";
+import { logger } from "@/lib/logger";
 
 type ConversationMessage = {
   role: "assistant" | "user";
@@ -176,7 +177,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       stepCount: validatedWorkflow.steps.length,
       sanitizationSummary: result.sanitizationSummary,
     });
-    console.log("[copilot:suggest-next-steps] raw assistant reply:", responseMessage);
+    logger.debug("[copilot:suggest-next-steps] raw assistant reply:", responseMessage);
 
     send({ status: "message", content: responseMessage });
     send({

@@ -1,4 +1,6 @@
-console.warn("[DEPRECATION] lib/services/projects is deprecated; migrate callers to lib/services/submissions.");
+import { logger } from "@/lib/logger";
+
+logger.warn("[DEPRECATION] lib/services/projects is deprecated; migrate callers to lib/services/submissions.");
 
 export {
   listSubmissionsForTenant as listProjectsForTenant,

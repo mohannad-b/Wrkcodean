@@ -1,5 +1,6 @@
 import type { TenantSession, StaffSession, TenantOrStaffSession } from "@/lib/auth/session";
 import type { WrkStaffRole } from "@/db/schema";
+import { logger } from "@/lib/logger";
 
 // --------------------------
 // Action definitions
@@ -364,7 +365,7 @@ function logAuthDenied(params: {
   reason: string;
 }) {
   const subject = sessionToSubject(params.session);
-  console.warn("[authz] denied", {
+  logger.warn("[authz] denied", {
     action: params.action,
     context: params.context,
     reason: params.reason,

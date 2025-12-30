@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { logger } from "@/lib/logger";
 
 type Props = {
   firstName: string;
@@ -125,7 +126,7 @@ export function WorkspaceSetupClient({
         });
         setCurrentStep(next);
       } catch (err) {
-        console.error(err);
+        logger.error(err);
       }
     }
     load();
@@ -251,7 +252,7 @@ export function WorkspaceSetupClient({
       setError(null);
       router.refresh();
     } catch (err) {
-      console.error(err);
+      logger.error(err);
       setError("Unexpected error creating workspace.");
     } finally {
       setCreating(false);

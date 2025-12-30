@@ -6,6 +6,7 @@ import { can } from "@/lib/auth/rbac";
 import { automationVersions } from "@/db/schema";
 import { db } from "@/db";
 import { loadWrkActionCatalog } from "@/lib/pricing/wrkactions-catalog";
+import { logger } from "@/lib/logger";
 
 type RouteParams = {
   params: {
@@ -158,10 +159,10 @@ Return the JSON only.`,
     const parsed = parseOpenAiJson(content, catalog);
 
     // Debug log to help inspect estimation issues
-    console.log("[pricing-estimate] automationVersionId", params.id);
-    console.log("[pricing-estimate] promptLength", workflowText.length, "candidateCount", candidates.length);
-    console.log("[pricing-estimate] openai:response", content);
-    console.log("[pricing-estimate] parsed", parsed);
+    logger.debug("[pricing-estimate] automationVersionId", params.id);
+    logger.debug("[pricing-estimate] promptLength", workflowText.length, "candidateCount", candidates.length);
+    logger.debug("[pricing-estimate] openai:response", content);
+    logger.debug("[pricing-estimate] parsed", parsed);
 
     return NextResponse.json(parsed);
   } catch (error) {

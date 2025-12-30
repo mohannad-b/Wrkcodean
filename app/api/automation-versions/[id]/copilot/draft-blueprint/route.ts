@@ -33,6 +33,7 @@ import {
 import { getCopilotAnalysis, upsertCopilotAnalysis } from "@/lib/services/copilot-analysis";
 import { buildWorkflowViewModel } from "@/lib/workflows/view-model";
 import { sendDevAgentLog } from "@/lib/dev/agent-log";
+import { logger } from "@/lib/logger";
 
 const DraftRequestSchema = z.object({
   messages: z
@@ -62,13 +63,13 @@ const SYSTEM_PROMPT =
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
-    console.log("[copilot:draft-workflow] Request received for version:", params.id);
+    logger.debug("[copilot:draft-workflow] Request received for version:", params.id);
     
     const session = await requireTenantSession();
-    console.log("[copilot:draft-workflow] Session validated, tenantId:", session.tenantId);
+    logger.debug("[copilot:draft-workflow] Session validated, tenantId:", session.tenantId);
 
     if (!can(session, "automation:metadata:update", { type: "automation_version", tenantId: session.tenantId })) {
-      console.error("[copilot:draft-workflow] Permission denied");
+      logger.error("[copilot:draft-workflow] Permission denied");
       throw new ApiError(403, "Forbidden");
     }
 
@@ -76,21 +77,21 @@ export async function POST(request: Request, { params }: { params: { id: string 
     let rawBody: any;
     try {
       rawBody = await request.json();
-      console.log("[copilot:draft-workflow] Request body parsed, keys:", Object.keys(rawBody || {}));
+      logger.debug("[copilot:draft-workflow] Request body parsed, keys:", Object.keys(rawBody || {}));
       payload = DraftRequestSchema.parse(rawBody);
-      console.log("[copilot:draft-workflow] Validation passed, messages count:", payload.messages?.length);
+      logger.debug("[copilot:draft-workflow] Validation passed, messages count:", payload.messages?.length);
     } catch (error) {
       if (error instanceof z.ZodError) {
         const issues = error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join(", ");
-        console.error("[copilot:draft-workflow] Validation error:", issues);
-        console.error("[copilot:draft-workflow] Raw body:", JSON.stringify(rawBody, null, 2));
+        logger.error("[copilot:draft-workflow] Validation error:", issues);
+        logger.error("[copilot:draft-workflow] Raw body:", JSON.stringify(rawBody, null, 2));
         throw new ApiError(400, `Invalid request body: ${issues}`);
       }
       if (error instanceof SyntaxError) {
-        console.error("[copilot:draft-workflow] JSON parse error:", error.message);
+        logger.error("[copilot:draft-workflow] JSON parse error:", error.message);
         throw new ApiError(400, `Invalid JSON: ${error.message}`);
       }
-      console.error("[copilot:draft-workflow] Request parsing error:", error);
+      logger.error("[copilot:draft-workflow] Request parsing error:", error);
       throw new ApiError(400, `Invalid request body: ${error instanceof Error ? error.message : String(error)}`);
     }
 
@@ -262,7 +263,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           taskCount: aiTasks.length,
           sanitizationSummary,
         });
-        console.log("[copilot:draft-workflow] raw assistant reply:", chatResponse);
+        logger.debug("[copilot:draft-workflow] raw assistant reply:", chatResponse);
       } catch (error: any) {
         // #region agent log
         sendDevAgentLog({

@@ -1,3 +1,5 @@
+import { logger } from "@/lib/logger";
+
 const DEBUG_ENABLED = process.env.DEBUG_COPILOT_LOGS === "true";
 
 export function copilotDebug(message: string, payload?: unknown) {
@@ -6,9 +8,9 @@ export function copilotDebug(message: string, payload?: unknown) {
   }
 
   if (payload === undefined) {
-    console.debug(`[copilot] ${message}`);
+    logger.debug(`[copilot] ${message}`);
   } else {
-    console.debug(`[copilot] ${message}`, payload);
+    logger.debug(`[copilot] ${message}`, payload);
   }
 }
 

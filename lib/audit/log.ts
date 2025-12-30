@@ -1,5 +1,6 @@
 import { db } from "@/db";
 import { auditLogs } from "@/db/schema";
+import { logger } from "@/lib/logger";
 
 const PLATFORM_TENANT_FALLBACK =
   process.env.PLATFORM_TENANT_ID ??
@@ -19,7 +20,7 @@ export async function logAudit(params: AuditParams) {
   try {
     const tenantId = params.tenantId ?? PLATFORM_TENANT_FALLBACK;
     if (!tenantId || tenantId === "00000000-0000-0000-0000-000000000000") {
-      console.warn("[audit] skip logging because tenantId is missing and fallback is not configured");
+      logger.warn("[audit] skip logging because tenantId is missing and fallback is not configured");
       return;
     }
     await db.insert(auditLogs).values({
@@ -31,7 +32,7 @@ export async function logAudit(params: AuditParams) {
       metadata: params.metadata ?? null,
     });
   } catch (error) {
-    console.warn("[audit] failed to log audit entry", error);
+    logger.warn("[audit] failed to log audit entry", error);
   }
 }
 

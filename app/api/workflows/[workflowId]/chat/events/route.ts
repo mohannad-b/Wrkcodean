@@ -5,6 +5,7 @@ import { subscribeToChatEvents, type ChatEvent } from "@/lib/realtime/events";
 import { db } from "@/db";
 import { automationVersions, workflowMessages, workflowReadReceipts } from "@/db/schema";
 import { eq, and, desc, isNull } from "drizzle-orm";
+import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -88,7 +89,7 @@ export async function GET(request: Request, { params }: { params: { workflowId: 
           try {
             send("ping", {});
           } catch (error) {
-            console.error("Failed to send SSE heartbeat", error);
+            logger.error("Failed to send SSE heartbeat", error);
           }
         }, HEARTBEAT_INTERVAL_MS);
 
@@ -96,7 +97,7 @@ export async function GET(request: Request, { params }: { params: { workflowId: 
         request.signal.addEventListener("abort", () => {
           clearInterval(heartbeatInterval);
           unsubscribe()
-            .catch((error) => console.error("SSE cleanup error", error))
+            .catch((error) => logger.error("SSE cleanup error", error))
             .finally(() => controller.close());
         });
       },

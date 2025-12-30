@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
+import { logger } from "@/lib/logger";
 
 type ConversationItem = {
   conversationId: string;
@@ -49,7 +50,7 @@ export function WrkInboxView() {
       const data = await response.json();
       setConversations(data.conversations || []);
     } catch (error) {
-      console.error("Failed to fetch conversations:", error);
+      logger.error("Failed to fetch conversations:", error);
     } finally {
       setIsLoading(false);
     }

@@ -17,6 +17,7 @@ import { normalizeWorkflowInput, withLegacyWorkflowAlias } from "@/lib/workflows
 import type { Task } from "@/db/schema";
 import { buildWorkflowViewModel } from "@/lib/workflows/view-model";
 import { sendDevAgentLog } from "@/lib/dev/agent-log";
+import { logger } from "@/lib/logger";
 
 type RouteParams = {
   params: {
@@ -271,7 +272,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       // Safeguard: Warn if significant step loss detected (more than 1 step lost)
       if (previousStepCount > 0 && newStepCount < previousStepCount - 1) {
         const stepsLost = previousStepCount - newStepCount;
-        console.error(`⚠️ Step loss detected: ${previousStepCount} → ${newStepCount} steps (lost ${stepsLost} steps)`);
+        logger.error(`⚠️ Step loss detected: ${previousStepCount} → ${newStepCount} steps (lost ${stepsLost} steps)`);
         sendDevAgentLog({
           location: "route.ts:243",
           message: "⚠️ STEP LOSS DETECTED",
@@ -374,7 +375,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       
       // Safeguard: Verify steps were saved correctly
       if (savedStepCount !== newStepCount) {
-        console.error(`⚠️ Step count mismatch after save: expected ${newStepCount}, got ${savedStepCount}`);
+        logger.error(`⚠️ Step count mismatch after save: expected ${newStepCount}, got ${savedStepCount}`);
         sendDevAgentLog({
           location: "route.ts:272",
           message: "⚠️ STEP COUNT MISMATCH AFTER SAVE",

@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
+import { logger } from "@/lib/logger";
 
 export class AvatarStorageError extends Error {
   constructor(message: string, public cause?: unknown) {
@@ -33,7 +34,7 @@ export async function storeAvatarFile(params: StoreAvatarFileParams): Promise<St
       const key = buildObjectKey(params);
       // TODO: Implement upload to storage provider using provided credentials.
       // For now we intentionally fall through to the data URL fallback below.
-      console.warn(`[avatar] Persistent storage not configured. Falling back to data URL for key ${key}.`);
+      logger.warn(`[avatar] Persistent storage not configured. Falling back to data URL for key ${key}.`);
     }
 
     const dataUrl = `data:${params.file.type};base64,${buffer.toString("base64")}`;

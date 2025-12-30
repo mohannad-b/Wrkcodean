@@ -1,3 +1,5 @@
+import { logger } from "@/lib/logger";
+
 const DEV_AGENT_LOG_URL = process.env.NEXT_PUBLIC_DEV_AGENT_LOG_URL ?? process.env.DEV_AGENT_LOG_URL;
 const DEV_AGENT_LOG_ENABLED = (() => {
   const flag = process.env.DEV_AGENT_LOG;
@@ -82,7 +84,7 @@ export function sendDevAgentLog(payload: Record<string, unknown>, options?: Send
     return;
   }
 
-  console.debug(JSON.stringify(record));
+  logger.debug(JSON.stringify(record));
 }
 
 

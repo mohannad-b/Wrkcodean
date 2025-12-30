@@ -11,6 +11,7 @@ import { getAttentionTasks, type AutomationTask } from "@/lib/automations/tasks"
 import { ACTIVE_LIFECYCLE_ORDER, getStatusLabel, resolveStatus } from "@/lib/submissions/lifecycle";
 import { AlertTriangle, Check, CheckCircle2, FileSignature, Hammer, Sparkles, Rocket } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { logger } from "@/lib/logger";
 
 interface BuildStatusTabProps {
   status?: AutomationLifecycleStatus | null;
@@ -138,7 +139,7 @@ export function BuildStatusTab({
       });
       // Consumer should refetch automation data; here we rely on parent refresh side-effects.
     } catch (err) {
-      console.error("Failed to apply discount code", err);
+      logger.error("Failed to apply discount code", err);
     } finally {
       setApplyingDiscount(false);
     }
@@ -153,7 +154,7 @@ export function BuildStatusTab({
         body: JSON.stringify({ status: "BuildInProgress" }),
       });
     } catch (err) {
-      console.error("Failed to advance automation status", err);
+      logger.error("Failed to advance automation status", err);
     }
   };
 

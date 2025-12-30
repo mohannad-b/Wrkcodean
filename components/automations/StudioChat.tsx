@@ -11,6 +11,7 @@ import type { WorkflowUpdates } from "@/lib/workflows/ai-updates";
 import type { Workflow } from "@/lib/workflows/types";
 import type { CopilotThinkingStep } from "@/types/copilot-thinking";
 import type { WorkflowProgressSnapshot } from "@/lib/workflows/copilot-analysis";
+import { logger } from "@/lib/logger";
 
 type ChatRole = "user" | "assistant" | "system";
 
@@ -589,7 +590,7 @@ useEffect(() => {
       setIsAwaitingReply(false);
       setAssistantError(null);
     } catch (error) {
-      console.error("[STUDIO-CHAT] Failed to process message:", error);
+      logger.error("[STUDIO-CHAT] Failed to process message:", error);
       if (!conversationAfterUser) {
         setMessages((prev) => prev.filter((msg) => msg.id !== optimisticMessage.id));
         setLocalError("Failed to send message. Try again.");

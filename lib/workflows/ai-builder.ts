@@ -5,6 +5,7 @@ import { applyStepNumbers } from "./step-numbering";
 import { WORKFLOW_SYSTEM_PROMPT, formatWorkflowPrompt } from "@/lib/ai/prompts";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { sanitizeBlueprintTopology, type SanitizationSummary } from "@/lib/workflows/sanitizer";
+import { logger } from "@/lib/logger";
 
 const WORKFLOW_MODEL = process.env.WORKFLOW_MODEL ?? process.env.BLUEPRINT_MODEL ?? "gpt-4-turbo-preview";
 
@@ -195,7 +196,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       requirementsText: updatedRequirementsText,
     };
   } catch (error) {
-    console.error("Error building blueprint from chat:", error);
+    logger.error("Error building blueprint from chat:", error);
     throw new Error("Failed to generate blueprint");
   }
 }
@@ -204,7 +205,7 @@ function parseAIResponse(content: string): AIResponse {
   try {
     return JSON.parse(content) as AIResponse;
   } catch (error) {
-    console.error("Failed to parse AI response:", error);
+    logger.error("Failed to parse AI response:", error);
     return { steps: [], tasks: [] };
   }
 }

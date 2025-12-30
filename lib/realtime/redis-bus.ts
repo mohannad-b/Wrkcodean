@@ -1,4 +1,5 @@
 import Redis from "ioredis";
+import { logger } from "@/lib/logger";
 
 type Handler<TPayload = unknown> = (payload: TPayload) => void;
 
@@ -48,7 +49,7 @@ function getPublisher(): Redis {
   if (publisher) return publisher;
   publisher = createRedisClient();
   publisher.on("error", (error) => {
-    console.error("[redis-bus] Publisher error", error);
+    logger.error("[redis-bus] Publisher error", error);
   });
   return publisher;
 }
@@ -57,7 +58,7 @@ function getSubscriber(): Redis {
   if (subscriber) return subscriber;
   subscriber = createRedisClient();
   subscriber.on("error", (error) => {
-    console.error("[redis-bus] Subscriber error", error);
+    logger.error("[redis-bus] Subscriber error", error);
   });
   return subscriber;
 }
@@ -73,7 +74,7 @@ function bindSubscriber() {
     try {
       parsed = JSON.parse(message);
     } catch (error) {
-      console.error("[redis-bus] Failed to parse message from Redis channel", channel, error);
+      logger.error("[redis-bus] Failed to parse message from Redis channel", channel, error);
       return;
     }
 
@@ -81,7 +82,7 @@ function bindSubscriber() {
       try {
         handler(parsed);
       } catch (error) {
-        console.error("[redis-bus] Handler error", error);
+        logger.error("[redis-bus] Handler error", error);
       }
     });
   });
@@ -120,7 +121,7 @@ export async function redisSubscribe<TPayload = unknown>(
       try {
         await client.unsubscribe(channel);
       } catch (error) {
-        console.error("[redis-bus] Failed to unsubscribe from channel", channel, error);
+        logger.error("[redis-bus] Failed to unsubscribe from channel", channel, error);
       }
     }
   };

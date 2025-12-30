@@ -1,11 +1,12 @@
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { isDevAgentLogEnabled, sendDevAgentLog } from "@/lib/dev/agent-log";
+import { logger } from "@/lib/logger";
 import * as schema from "./schema";
 
 const devLog = (payload: Record<string, unknown>) => {
   if (process.env.NODE_ENV !== "development") return;
-  console.debug(
+  logger.debug(
     JSON.stringify({
       channel: "agent-log",
       ...payload,
@@ -24,7 +25,7 @@ const globalForDb = globalThis as GlobalDbCache;
 const connectionString = process.env.DATABASE_URL;
 
 if (!connectionString) {
-  console.warn("[db] DATABASE_URL is not set. Database operations will fail until configured.");
+  logger.warn("[db] DATABASE_URL is not set. Database operations will fail until configured.");
 }
 
 function createPool(): Pool {
@@ -38,7 +39,7 @@ function createPool(): Pool {
   });
 
   pool.on("error", (err) => {
-    console.error("[db] Unexpected error on idle client", err);
+    logger.error("[db] Unexpected error on idle client", err);
     devLog({
       location: "db/index.ts:28",
       message: "pool error",
@@ -51,7 +52,7 @@ function createPool(): Pool {
 
   pool.on("connect", () => {
     if (isDevAgentLogEnabled()) {
-      console.log("[db] New client connected");
+      logger.debug("[db] New client connected");
     }
     sendDevAgentLog(
       {
@@ -72,7 +73,7 @@ function createPool(): Pool {
 
   pool.on("remove", () => {
     if (isDevAgentLogEnabled()) {
-      console.log("[db] Client removed from pool");
+      logger.debug("[db] Client removed from pool");
     }
     sendDevAgentLog(
       {

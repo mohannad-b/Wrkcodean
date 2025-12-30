@@ -1,8 +1,9 @@
 import "dotenv/config";
 import type { Config } from "drizzle-kit";
+import { logger } from "./lib/logger";
 
 if (!process.env.DATABASE_URL) {
-  console.warn("DATABASE_URL is not defined. Drizzle commands will fail until it is set.");
+  logger.warn("DATABASE_URL is not defined. Drizzle commands will fail until it is set.");
 }
 
 const config = {

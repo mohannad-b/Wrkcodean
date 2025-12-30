@@ -2,6 +2,7 @@ import { ReactNode } from "react";
 import { AppShellClient } from "./AppShellClient";
 import { getSession } from "@/lib/auth/session";
 import { getTenantScopedProfile } from "@/lib/user/profile";
+import { logger } from "@/lib/logger";
 
 interface AppShellProps {
   children: ReactNode;
@@ -19,7 +20,7 @@ export async function AppShell({ children }: AppShellProps) {
       initialLastUpdatedAt = profileResult.lastUpdatedAt;
     }
   } catch (error) {
-    console.warn("[AppShell] Unable to load initial profile", error);
+    logger.warn("[AppShell] Unable to load initial profile", error);
   }
 
   return <AppShellClient initialProfile={initialProfile} initialLastUpdatedAt={initialLastUpdatedAt}>{children}</AppShellClient>;

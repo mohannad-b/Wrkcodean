@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { WorkflowChatView } from "@/components/workflow-chat/WorkflowChatView";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { logger } from "@/lib/logger";
 
 interface ChatTabProps {
   automationVersionId: string;
@@ -28,7 +29,7 @@ export function ChatTab({ automationVersionId, automationName }: ChatTabProps) {
           setHasAccess(false);
         }
       } catch (error) {
-        console.error("Failed to check chat access:", error);
+        logger.error("Failed to check chat access:", error);
         setHasAccess(false);
       } finally {
         setIsChecking(false);

@@ -2,10 +2,11 @@ import { randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes }
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { access } from "node:fs/promises";
+import { logger } from "@/lib/logger";
 
 const devLog = (payload: Record<string, unknown>) => {
   if (process.env.NODE_ENV !== "development") return;
-  console.debug(
+  logger.debug(
     JSON.stringify({
       channel: "agent-log",
       ...payload,

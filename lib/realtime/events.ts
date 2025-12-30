@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { redisPublish, redisSubscribe } from "./redis-bus";
 import type { ChatActor, ChatEvent, ChatEventType } from "./chat-contract";
+import { logger } from "@/lib/logger";
 
 export const CHAT_CHANNEL_PREFIX = "chat:workflow:";
 
@@ -43,7 +44,7 @@ export async function publishChatEvent<TPayload = unknown>(params: {
     await redisPublish(workflowChannel(params.workflowId), envelope);
     return envelope;
   } catch (error) {
-    console.error("Failed to publish chat event", error);
+    logger.error("Failed to publish chat event", error);
     return undefined;
   }
 }

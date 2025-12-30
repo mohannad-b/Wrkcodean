@@ -36,6 +36,7 @@ import { cn } from "@/lib/utils";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import { useToast } from "@/components/ui/use-toast";
 import type { UserProfile } from "@/lib/user/profile-shared";
+import { logger } from "@/lib/logger";
 
 // --- Mock Data ---
 
@@ -286,7 +287,7 @@ const ProfileTab = ({ onSave, isSaving }: { onSave?: () => void; isSaving?: bool
         variant: "success",
       });
     } catch (error) {
-      console.error("[profile] avatar upload failed", error);
+    logger.error("[profile] avatar upload failed", error);
       setTempAvatarPreviewUrl(null);
       setAvatarUploadError("Unexpected error uploading avatar. Please try again.");
       toast({

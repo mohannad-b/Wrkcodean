@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/use-toast";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import type { UserProfile } from "@/lib/user/profile-shared";
+import { logger } from "@/lib/logger";
 
 const COMMON_TIMEZONES: readonly string[] = [
   "UTC",
@@ -289,7 +290,7 @@ export function ProfileScreen() {
         variant: "success",
       });
     } catch (error) {
-      console.error("[profile] avatar upload failed", error);
+    logger.error("[profile] avatar upload failed", error);
       setTempAvatarPreviewUrl(null);
       setAvatarUploadError("Unexpected error uploading avatar. Please try again.");
       toast({
@@ -353,7 +354,7 @@ export function ProfileScreen() {
         variant: "success",
       });
     } catch (error) {
-      console.error("[profile] failed to save", error);
+    logger.error("[profile] failed to save", error);
       toast({
         title: "Something went wrong",
         description: "We could not save your changes. Please try again.",

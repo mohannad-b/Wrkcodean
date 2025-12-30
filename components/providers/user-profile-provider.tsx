@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import type { UserProfile } from "@/lib/user/profile";
+import { logger } from "@/lib/logger";
 
 type UserProfileContextValue = {
   profile: UserProfile | null;
@@ -42,7 +43,7 @@ export function UserProfileProvider({ initialProfile, initialLastUpdatedAt = nul
       setProfile(data.profile, data.lastUpdatedAt);
       return data.profile;
     } catch (error) {
-      console.error("[profile] failed to refresh profile", error);
+      logger.error("[profile] failed to refresh profile", error);
       return null;
     } finally {
       setIsHydrating(false);
