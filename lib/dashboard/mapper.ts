@@ -43,6 +43,8 @@ export function toDashboardAutomation(api: ApiAutomationSummary): DashboardAutom
     name: api.name,
     description: api.description,
     version: version?.versionLabel ?? "v1.0",
+    latestVersionId: version?.id ?? null,
+    latestVersionLabel: version?.versionLabel ?? null,
     status,
     statusEnum: statusEnum || "IntakeInProgress", // Store original enum for filtering
     runs: metrics?.totalExecutions ?? 0,

@@ -20,6 +20,8 @@ export interface DashboardAutomation {
   name: string;
   description?: string | null;
   version: string;
+  latestVersionId?: string | null;
+  latestVersionLabel?: string | null;
   status: string; // Display status (e.g., "Build in Progress")
   statusEnum?: string; // Original enum status (e.g., "BuildInProgress") for filtering
   runs: number;

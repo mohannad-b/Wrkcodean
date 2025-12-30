@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Badge } from "./badge";
 import { Button } from "./button";
 import { Progress } from "./progress";
@@ -8,12 +9,22 @@ import { MoreHorizontal, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DashboardAutomation } from "@/lib/mock-dashboard";
 import { cardClasses } from "@/components/ui/card-shell";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useToast } from "@/components/ui/use-toast";
 
 interface DashboardAutomationCardProps {
   automation: DashboardAutomation;
 }
 
 export function DashboardAutomationCard({ automation }: DashboardAutomationCardProps) {
+  const router = useRouter();
+  const toast = useToast();
   const pendingLabel = "Pending";
   const runsDisplay = automation.runs ? automation.runs.toLocaleString() : pendingLabel;
   const successDisplay =
@@ -88,14 +99,130 @@ export function DashboardAutomationCard({ automation }: DashboardAutomationCardP
               </div>
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-gray-400"
-            onClick={(e) => e.preventDefault()}
-          >
-            <MoreHorizontal size={16} />
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              asChild
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+            >
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400" aria-label="Automation actions">
+                <MoreHorizontal size={16} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                className="hover:bg-gray-50 focus:bg-gray-50 active:bg-gray-100"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  router.push(`/automations/${automation.id}?tab=Workflow`);
+                }}
+              >
+                Edit Workflow
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="hover:bg-gray-50 focus:bg-gray-50 active:bg-gray-100"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  router.push(`/automations/${automation.id}?tab=Activity`);
+                }}
+              >
+                View Activity
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="hover:bg-gray-50 focus:bg-gray-50 active:bg-gray-100"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (!automation.latestVersionId) {
+                    toast({
+                      variant: "warning",
+                      title: "No version to duplicate",
+                      description: "We could not find a source version on this automation.",
+                    });
+                    return;
+                  }
+
+                  void (async () => {
+                    try {
+                      const response = await fetch(`/api/automations/${automation.id}/versions`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ copyFromVersionId: automation.latestVersionId }),
+                      });
+
+                      const payload = (await response.json().catch(() => ({}))) as
+                        | { version?: { id: string; versionLabel: string }; error?: string }
+                        | undefined;
+
+                      if (!response.ok || !payload?.version?.id) {
+                        throw new Error(payload?.error ?? "Unable to duplicate automation");
+                      }
+
+                      const { version } = payload;
+                      toast({
+                        variant: "success",
+                        title: "Version duplicated",
+                        description: `Created ${version.versionLabel}. Redirecting...`,
+                      });
+                      router.push(`/automations/${automation.id}?version=${version.id}&tab=Workflow`);
+                    } catch (error) {
+                      const message = error instanceof Error ? error.message : "Failed to duplicate automation";
+                      toast({ variant: "error", title: "Duplicate failed", description: message });
+                    }
+                  })();
+                }}
+              >
+                Duplicate
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-red-600 hover:bg-red-50 focus:bg-red-50 active:bg-red-100"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (!automation.latestVersionId) {
+                    toast({
+                      variant: "warning",
+                      title: "No version to archive",
+                      description: "We could not find a version on this automation to archive.",
+                    });
+                    return;
+                  }
+
+                  void (async () => {
+                    try {
+                      const response = await fetch(`/api/automation-versions/${automation.latestVersionId}/status`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ status: "Archived" }),
+                      });
+
+                      const payload = (await response.json().catch(() => ({}))) as { error?: string } | undefined;
+                      if (!response.ok) {
+                        throw new Error(payload?.error ?? "Unable to archive automation");
+                      }
+
+                      toast({
+                        variant: "success",
+                        title: "Automation archived",
+                        description: `${automation.name} was archived.`,
+                      });
+                      router.refresh();
+                    } catch (error) {
+                      const message = error instanceof Error ? error.message : "Failed to archive automation";
+                      toast({ variant: "error", title: "Archive failed", description: message });
+                    }
+                  })();
+                }}
+              >
+                Archive
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         {automation.status === "Build in Progress" && automation.progress !== undefined ? (

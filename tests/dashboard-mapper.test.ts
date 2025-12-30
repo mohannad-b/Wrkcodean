@@ -27,6 +27,8 @@ describe("dashboard mapper", () => {
     expect(mapped).toMatchObject({
       id: "a1",
       name: "Invoice Processing",
+      latestVersionId: "v1",
+      latestVersionLabel: "v1.0",
       version: "v1.0",
       status: "Live",
       runs: 1200,
