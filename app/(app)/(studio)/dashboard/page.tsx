@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DashboardAutomationCard } from "@/components/ui/DashboardAutomationCard";
 import { ActivityFeedItem } from "@/components/ui/ActivityFeedItem";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,8 @@ export default function DashboardPage() {
   const [automations, setAutomations] = useState<DashboardAutomation[]>([]);
   const [automationSummaries, setAutomationSummaries] = useState<ApiAutomationSummary[]>([]);
   const [loadingAutomations, setLoadingAutomations] = useState(true);
+  const [isRefreshingAutomations, setIsRefreshingAutomations] = useState(false);
+  const [automationsLastUpdated, setAutomationsLastUpdated] = useState<Date | null>(null);
   const [automationsError, setAutomationsError] = useState<string | null>(null);
   const [tenantMemberships, setTenantMemberships] = useState<TenantMembership[]>([]);
   const [currentTenant, setCurrentTenant] = useState<{ id: string; name: string } | null>(null);
@@ -57,28 +59,51 @@ export default function DashboardPage() {
   const [showSearch, setShowSearch] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
 
+  const loadAutomations = useCallback(async () => {
+    setLoadingAutomations(true);
+    setIsRefreshingAutomations(true);
+    setAutomationsError(null);
+    try {
+      const response = await fetch("/api/automations", { cache: "no-store" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? "Failed to load automations");
+      }
+      const payload = (await response.json()) as { automations: ApiAutomationSummary[] };
+      setAutomationSummaries(payload.automations);
+      setAutomations(payload.automations.map(toDashboardAutomation));
+      setAutomationsLastUpdated(new Date());
+    } catch (err) {
+      setAutomationsError(err instanceof Error ? err.message : "Unable to load automations");
+    } finally {
+      setLoadingAutomations(false);
+      setIsRefreshingAutomations(false);
+    }
+  }, []);
+
   useEffect(() => {
-    const loadAutomations = async () => {
-      setLoadingAutomations(true);
-      setAutomationsError(null);
-      try {
-        const response = await fetch("/api/automations", { cache: "no-store" });
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.error ?? "Failed to load automations");
-        }
-        const payload = (await response.json()) as { automations: ApiAutomationSummary[] };
-        setAutomationSummaries(payload.automations);
-        setAutomations(payload.automations.map(toDashboardAutomation));
-      } catch (err) {
-        setAutomationsError(err instanceof Error ? err.message : "Unable to load automations");
-      } finally {
-        setLoadingAutomations(false);
+    void loadAutomations();
+  }, [loadAutomations]);
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void loadAutomations();
       }
     };
 
-    void loadAutomations();
-  }, []);
+    const handleFocus = () => {
+      void loadAutomations();
+    };
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [loadAutomations]);
 
   useEffect(() => {
     const loadTenants = async () => {
@@ -205,6 +230,20 @@ export default function DashboardPage() {
   const aggregatedMetric = useMemo(() => aggregateMetrics(automationSummaries), [automationSummaries]);
   const kpiStats = useMemo(() => buildKpiStats(aggregatedMetric, null), [aggregatedMetric]);
 
+  const formatLastUpdated = (date: Date) => {
+    const diffMs = Date.now() - date.getTime();
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 45) return "just now";
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHour = Math.floor(diffMin / 60);
+    if (diffHour < 24) return `${diffHour}h ago`;
+    const diffDay = Math.floor(diffHour / 24);
+    if (diffDay < 7) return `${diffDay}d ago`;
+    const diffWeek = Math.floor(diffDay / 7);
+    return `${diffWeek}w ago`;
+  };
+
   // Filter automations based on search and status filter
   const filteredAutomations = useMemo(() => {
     return automations.filter((auto) => {
@@ -318,7 +357,24 @@ export default function DashboardPage() {
                 >
                   Active Automations
                 </h2>
-                <div className="flex items-center gap-1 bg-white rounded-lg border border-gray-200 shadow-sm p-1.5">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 text-[11px] text-gray-500">
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "h-2 w-2 rounded-full",
+                        isRefreshingAutomations ? "bg-emerald-500 animate-pulse" : "bg-gray-300"
+                      )}
+                    />
+                    <span>
+                      {isRefreshingAutomations
+                        ? "Refreshing..."
+                        : automationsLastUpdated
+                          ? `Updated ${formatLastUpdated(automationsLastUpdated)}`
+                          : "Loading..."}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 bg-white rounded-lg border border-gray-200 shadow-sm p-1.5">
                   <Popover open={showFilter} onOpenChange={setShowFilter}>
                     <PopoverTrigger asChild>
                       <Button
