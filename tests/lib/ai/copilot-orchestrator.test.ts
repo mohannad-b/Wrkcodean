@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createEmptyBlueprint } from "@/lib/blueprint/factory";
-import type { BlueprintSectionKey } from "@/lib/blueprint/types";
+import { createEmptyBlueprint } from "@/lib/workflows/factory";
+import type { BlueprintSectionKey } from "@/lib/workflows/types";
 import { determineConversationPhase, generateThinkingSteps } from "@/lib/ai/copilot-orchestrator";
 
 describe("determineConversationPhase", () => {

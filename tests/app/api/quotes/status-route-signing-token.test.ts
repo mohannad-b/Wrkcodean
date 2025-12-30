@@ -21,9 +21,13 @@ vi.mock("@/lib/api/context", () => ({
   },
 }));
 
-vi.mock("@/lib/auth/rbac", () => ({
-  can: canMock,
-}));
+vi.mock("@/lib/auth/rbac", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/auth/rbac")>("@/lib/auth/rbac");
+  return {
+    ...actual,
+    can: canMock,
+  };
+});
 
 vi.mock("@/lib/services/submissions", () => ({
   signQuoteAndPromote: signQuoteAndPromoteMock,

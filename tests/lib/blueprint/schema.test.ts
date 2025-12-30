@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { BlueprintSchema } from "@/lib/blueprint/schema";
+import { BlueprintSchema } from "@/lib/workflows/schema";
 
 const sections = [
   { id: "sec-1", key: "business_requirements", title: "Business Requirements", content: "Process overview" },

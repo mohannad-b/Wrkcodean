@@ -138,7 +138,7 @@ export const ActivityTab: React.FC = () => {
 
                <div className="flex items-center gap-4">
                  <button className="text-xs text-gray-400 hover:text-[#E43632] font-medium flex items-center gap-1 transition-colors">
-                   View on Blueprint <ArrowRight size={10} />
+                   View on Workflow <ArrowRight size={10} />
                  </button>
                  {item.type === 'comment' && (
                    <button className="text-xs text-gray-400 hover:text-gray-600 font-medium">

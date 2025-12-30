@@ -28,7 +28,7 @@ interface ActivityTimelineProps {
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  blueprint: "bg-pink-500",
+  workflow: "bg-pink-500",
   quote: "bg-amber-500",
   task: "bg-blue-500",
   build: "bg-green-500",

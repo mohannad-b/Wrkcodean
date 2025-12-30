@@ -405,7 +405,7 @@ export function TasksView() {
                   }}
                 >
                   <span className="flex items-center gap-2 text-sm font-semibold">
-                    <Zap size={16} /> View in Blueprint
+                    <Zap size={16} /> View in Workflow
                   </span>
                   <ArrowRight size={16} className="text-gray-400" />
                 </Button>

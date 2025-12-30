@@ -1,5 +1,11 @@
 import { redirect } from "next/navigation";
 import { getSession, NoActiveWorkspaceError, NoTenantMembershipError } from "@/lib/auth/session";
+import { sendDevAgentLog } from "@/lib/dev/agent-log";
+
+const devLog = (payload: Record<string, unknown>) => {
+  if (process.env.NODE_ENV !== "development") return;
+  sendDevAgentLog(payload, { dedupeKey: payload.location as string });
+};
 
 export async function ensureUserProvisioned() {
   try {
@@ -10,22 +16,14 @@ export async function ensureUserProvisioned() {
       return;
     }
     if (error instanceof NoTenantMembershipError || (error as any)?.name === "NoTenantMembershipError") {
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: "debug-session",
-          runId: "tenant-check",
-          hypothesisId: "T5",
-          location: "app/(app)/ensureUserProvisioned.ts",
-          message: "No tenant membership; redirecting to workspace setup",
-          data: {},
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
-      redirect("/workspace-setup");
+      devLog({
+        sessionId: "debug-session",
+        runId: "tenant-check",
+        hypothesisId: "T5",
+        location: "app/(app)/ensureUserProvisioned.ts",
+        message: "No tenant membership; skipping redirect",
+        data: {},
+      });
       return;
     }
     if (error instanceof NoActiveWorkspaceError || (error as any)?.name === "NoActiveWorkspaceError") {

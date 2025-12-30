@@ -4,11 +4,11 @@ import { can } from "@/lib/auth/rbac";
 import { ApiError, requireTenantSession } from "@/lib/api/context";
 import { getAutomationVersionDetail } from "@/lib/services/automations";
 import { listCopilotMessages, createCopilotMessage } from "@/lib/services/copilot-messages";
-import { createEmptyBlueprint } from "@/lib/blueprint/factory";
-import { buildBlueprintFromChat } from "@/lib/blueprint/ai-builder-simple";
-import { applyStepNumbers } from "@/lib/blueprint/step-numbering";
-import { syncAutomationTasks } from "@/lib/blueprint/task-sync";
-import { BlueprintSchema } from "@/lib/blueprint/schema";
+import { createEmptyWorkflowSpec } from "@/lib/workflows/factory";
+import { buildWorkflowFromChat } from "@/lib/workflows/ai-builder-simple";
+import { applyStepNumbers } from "@/lib/workflows/step-numbering";
+import { syncAutomationTasks } from "@/lib/workflows/task-sync";
+import { WorkflowSchema } from "@/lib/workflows/schema";
 import { automationVersions } from "@/db/schema";
 import { db } from "@/db";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
@@ -37,7 +37,7 @@ type StreamEvent =
         thinkingSteps: ReturnType<typeof generateThinkingSteps>;
         conversationPhase: ReturnType<typeof determineConversationPhase>;
         telemetry: {
-          sanitizationSummary: Awaited<ReturnType<typeof buildBlueprintFromChat>>["sanitizationSummary"];
+          sanitizationSummary: Awaited<ReturnType<typeof buildWorkflowFromChat>>["sanitizationSummary"];
         };
       };
     }
@@ -65,7 +65,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
     const workflow = detail.workflowView ?? buildWorkflowViewModel(detail.version.workflowJson);
 
-    const currentBlueprint = workflow.workflowSpec ?? createEmptyBlueprint();
+    const currentWorkflow = workflow.workflowSpec ?? createEmptyWorkflowSpec();
     const body = (await request.json().catch(() => ({}))) as SuggestPayload;
     let conversationHistory: ConversationMessage[];
     if (Array.isArray(body.messages)) {
@@ -86,31 +86,33 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
     send({ status: "thinking" });
 
-    const result = await buildBlueprintFromChat({
+    const result = await buildWorkflowFromChat({
       userMessage:
-        "Review the current blueprint and add the most obvious next steps, exceptions, or clarifications needed to make it production ready. If everything is already complete, tighten any descriptions and confirm readiness.",
-      currentBlueprint,
+        "Review the current workflow and add the most obvious next steps, exceptions, or clarifications needed to make it production ready. If everything is already complete, tighten any descriptions and confirm readiness.",
+      currentWorkflow,
+      currentBlueprint: currentWorkflow,
       conversationHistory,
     });
 
-    const numberedBlueprint = applyStepNumbers(result.blueprint);
+    const numberedWorkflow = applyStepNumbers(result.workflow);
     const taskAssignments = await syncAutomationTasks({
       tenantId: session.tenantId,
       automationVersionId: params.id,
       aiTasks: result.tasks,
-      blueprint: numberedBlueprint,
+      blueprint: numberedWorkflow,
+      workflow: numberedWorkflow,
     });
 
-    const blueprintWithTasks = {
-      ...numberedBlueprint,
-      steps: numberedBlueprint.steps.map((step) => ({
+    const workflowWithTasks = {
+      ...numberedWorkflow,
+      steps: numberedWorkflow.steps.map((step) => ({
         ...step,
         taskIds: Array.from(new Set(taskAssignments[step.id] ?? step.taskIds ?? [])),
       })),
     };
 
-    const validatedBlueprint = BlueprintSchema.parse({
-      ...blueprintWithTasks,
+    const validatedWorkflow = WorkflowSchema.parse({
+      ...workflowWithTasks,
       status: "Draft",
       updatedAt: new Date().toISOString(),
     });
@@ -118,14 +120,14 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const [savedVersion] = await db
       .update(automationVersions)
       .set({
-        workflowJson: validatedBlueprint,
+        workflowJson: validatedWorkflow,
         updatedAt: new Date(),
       })
       .where(eq(automationVersions.id, params.id))
       .returning({ automationId: automationVersions.automationId });
 
     if (!savedVersion) {
-      throw new ApiError(500, "Failed to save blueprint.");
+      throw new ApiError(500, "Failed to save workflow.");
     }
 
     revalidatePath(`/automations/${detail.automation?.id ?? savedVersion.automationId}`);
@@ -147,31 +149,31 @@ export async function POST(request: Request, { params }: { params: { id: string 
       ...conversationHistory,
       { role: "assistant", content: responseMessage },
     ];
-    const conversationPhase = determineConversationPhase(validatedBlueprint, augmentedHistory);
+    const conversationPhase = determineConversationPhase(validatedWorkflow, augmentedHistory);
     const thinkingSteps = generateThinkingSteps(
       conversationPhase,
       conversationHistory.find((message) => message.role === "user")?.content,
-      validatedBlueprint
+      validatedWorkflow
     );
 
     await logAudit({
       tenantId: session.tenantId,
       userId: session.userId,
-      action: "automation.blueprint.suggested",
+      action: "automation.workflow.suggested",
       resourceType: "automation_version",
       resourceId: params.id,
       metadata: {
         source: "suggest_next_steps",
         versionLabel: detail.version.versionLabel,
         sanitizationSummary: result.sanitizationSummary,
-        stepCount: result.blueprint.steps.length,
+        stepCount: result.workflow.steps.length,
       },
     });
 
-    copilotDebug("draft_blueprint.suggestions", {
+    copilotDebug("draft_workflow.suggestions", {
       automationVersionId: params.id,
       chatResponse: responseMessage,
-      stepCount: validatedBlueprint.steps.length,
+      stepCount: validatedWorkflow.steps.length,
       sanitizationSummary: result.sanitizationSummary,
     });
     console.log("[copilot:suggest-next-steps] raw assistant reply:", responseMessage);

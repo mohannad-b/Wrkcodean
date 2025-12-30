@@ -91,6 +91,14 @@ export type AuthorizationContext = {
   workflowId?: string;
 };
 
+export type RbacSubject = {
+  userId: string;
+  tenantId: string | null;
+  roles: string[];
+  wrkStaffRole?: WrkStaffRole | null;
+  kind?: "tenant" | "staff";
+};
+
 // --------------------------
 // Errors
 // --------------------------
@@ -163,6 +171,7 @@ const tenantRolePermissions: Record<string, Set<WorkspaceAction | WorkflowAction
     "workflow:version:read",
     "workflow:version:write",
     "workspace:billing:view",
+    "workspace:billing:manage",
   ]),
   owner: new Set<WorkspaceAction | WorkflowAction>([
     "workspace:read",
@@ -261,7 +270,8 @@ const LEGACY_ACTION_MAP: Partial<Record<LegacyAction, WorkspaceAction | Workflow
   "automation:delete": "workflow:write",
   "automation:run": "workflow:write",
   "automation:run:production": "workflow:status:update",
-  "automation:deploy": "workflow:status:update",
+  // Deploy is restricted to admins/owners (maps to billing manage to exclude editors)
+  "automation:deploy": "workspace:billing:manage",
   "automation:pause": "workflow:status:update",
   "copilot:read": "workflow:read",
   "copilot:write": "workflow:write",
@@ -321,6 +331,32 @@ function sessionToSubject(session: TenantOrStaffSession | null | undefined) {
   };
 }
 
+function normalizeToSession(subject: RbacSubject | TenantOrStaffSession): TenantOrStaffSession {
+  if ("kind" in subject && subject.kind) {
+    return subject as TenantOrStaffSession;
+  }
+
+  if (subject.tenantId) {
+    return {
+      kind: "tenant",
+      userId: subject.userId,
+      tenantId: subject.tenantId,
+      roles: subject.roles ?? [],
+      wrkStaffRole: subject.wrkStaffRole ?? null,
+    };
+  }
+
+  return {
+    kind: "staff",
+    userId: subject.userId,
+    email: "placeholder@wrk.local",
+    name: null,
+    wrkStaffRole: (subject.wrkStaffRole as WrkStaffRole | undefined) ?? "wrk_viewer",
+    tenantId: null,
+    roles: [],
+  };
+}
+
 function logAuthDenied(params: {
   action: AuthorizationAction;
   context?: AuthorizationContext;
@@ -359,91 +395,99 @@ function staffHasPermission(session: StaffSession, action: PlatformAction) {
 export function authorize(
   action: AuthorizationAction,
   context: AuthorizationContext | undefined,
-  session: TenantOrStaffSession | null | undefined
+  session: TenantOrStaffSession | RbacSubject | null | undefined
 ): true {
+  // Normalize raw subjects (used in tests) into structured sessions
+  const normalizedSession = session && (session as TenantOrStaffSession).kind ? (session as TenantOrStaffSession) : session ? normalizeToSession(session as RbacSubject) : null;
+
   const canonicalAction = canonicalizeAction(action);
 
-  if (!session) {
+  if (!normalizedSession) {
     throw new AuthorizationError({
       message: "Unauthorized",
       status: 401,
       code: "UNAUTHORIZED",
       action,
       context,
-      subject: sessionToSubject(session),
+      subject: sessionToSubject(normalizedSession),
     });
   }
 
+  // If context is missing but we have a tenant session, default to their workspace
+  const effectiveContext = context ?? (normalizedSession.kind === "tenant"
+    ? { type: "workspace", tenantId: normalizedSession.tenantId }
+    : undefined);
+
   if (canonicalAction.startsWith("platform:")) {
-    if (session.kind !== "staff" || !staffHasPermission(session, canonicalAction as PlatformAction)) {
-      logAuthDenied({ action, context, session, reason: "platform action not allowed for subject" });
+    if (normalizedSession.kind !== "staff" || !staffHasPermission(normalizedSession, canonicalAction as PlatformAction)) {
+      logAuthDenied({ action, context: effectiveContext, session: normalizedSession, reason: "platform action not allowed for subject" });
       throw new AuthorizationError({
         message: "Forbidden",
         status: 403,
         action,
-        context,
-        subject: sessionToSubject(session),
+        context: effectiveContext,
+        subject: sessionToSubject(normalizedSession),
       });
     }
     return true;
   }
 
   // Workspace/workflow actions require tenant context
-  if (!context || context.type === "platform") {
+  if (!effectiveContext || effectiveContext.type === "platform") {
     throw new AuthorizationError({
       message: "Context with tenantId is required",
       status: 400,
       code: "CONTEXT_REQUIRED",
       action,
-      context,
-      subject: sessionToSubject(session),
+      context: effectiveContext,
+      subject: sessionToSubject(normalizedSession),
     });
   }
 
-  const tenantId = context.tenantId;
+  const tenantId = effectiveContext.tenantId;
   if (!tenantId) {
     throw new AuthorizationError({
       message: "Context with tenantId is required",
       status: 400,
       code: "CONTEXT_REQUIRED",
       action,
-      context,
-      subject: sessionToSubject(session),
+      context: effectiveContext,
+      subject: sessionToSubject(normalizedSession),
     });
   }
 
   const isWorkflowAction = canonicalAction.startsWith("workflow:");
-  if (isWorkflowAction && context.type === "workflow" && (!("workflowId" in context) || !context.workflowId)) {
+  if (isWorkflowAction && effectiveContext.type === "workflow" && (!("workflowId" in effectiveContext) || !effectiveContext.workflowId)) {
     throw new AuthorizationError({
       message: "workflowId is required for workflow actions",
       status: 400,
       code: "CONTEXT_REQUIRED",
       action,
-      context,
-      subject: sessionToSubject(session),
+      context: effectiveContext,
+      subject: sessionToSubject(normalizedSession),
     });
   }
 
-  if (session.kind === "tenant") {
-    if (session.tenantId !== tenantId) {
-      logAuthDenied({ action, context, session, reason: "tenant mismatch" });
+  if (normalizedSession.kind === "tenant") {
+    if (normalizedSession.tenantId !== tenantId) {
+      logAuthDenied({ action, context: effectiveContext, session: normalizedSession, reason: "tenant mismatch" });
       throw new AuthorizationError({
         message: "Forbidden",
         status: 403,
         action,
-        context,
-        subject: sessionToSubject(session),
+        context: effectiveContext,
+        subject: sessionToSubject(normalizedSession),
       });
     }
 
-    if (!tenantHasPermission(session, canonicalAction as WorkspaceAction | WorkflowAction)) {
-      logAuthDenied({ action, context, session, reason: "insufficient tenant role" });
+    if (!tenantHasPermission(normalizedSession, canonicalAction as WorkspaceAction | WorkflowAction)) {
+      logAuthDenied({ action, context: effectiveContext, session: normalizedSession, reason: "insufficient tenant role" });
       throw new AuthorizationError({
         message: "Forbidden",
         status: 403,
         action,
-        context,
-        subject: sessionToSubject(session),
+        context: effectiveContext,
+        subject: sessionToSubject(normalizedSession),
       });
     }
 
@@ -452,22 +496,22 @@ export function authorize(
 
   // Staff bridge for tenant actions
   const platformEquivalent = STAFF_TENANT_ACTION_BRIDGE[canonicalAction as WorkspaceAction | WorkflowAction];
-  if (session.kind === "staff" && platformEquivalent && staffHasPermission(session, platformEquivalent)) {
+  if (normalizedSession.kind === "staff" && platformEquivalent && staffHasPermission(normalizedSession, platformEquivalent)) {
     return true;
   }
 
-  logAuthDenied({ action, context, session, reason: "staff lacks mapped permission" });
+  logAuthDenied({ action, context: effectiveContext, session: normalizedSession, reason: "staff lacks mapped permission" });
   throw new AuthorizationError({
     message: "Forbidden",
     status: 403,
     action,
-    context,
-    subject: sessionToSubject(session),
+    context: effectiveContext,
+    subject: sessionToSubject(normalizedSession),
   });
 }
 
 export function can(
-  session: TenantOrStaffSession | null | undefined,
+  session: TenantOrStaffSession | RbacSubject | null | undefined,
   action: AuthorizationAction,
   context?: AuthorizationContext
 ): boolean {

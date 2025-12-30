@@ -1,19 +1,19 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
-import { getBlueprintCompletionState, type BlueprintCompletionState } from "@/lib/blueprint/completion";
-import type { Blueprint } from "@/lib/blueprint/types";
+import { getBlueprintCompletionState, type BlueprintCompletionState } from "@/lib/workflows/completion";
+import type { Blueprint } from "@/lib/workflows/types";
 import {
   BLUEPRINT_PROGRESS_KEY_ORDER,
   BLUEPRINT_SECTION_TITLES,
   type BlueprintProgressKey,
   type BlueprintSectionKey,
-} from "@/lib/blueprint/types";
+} from "@/lib/workflows/types";
 import type {
   BlueprintProgressSnapshot,
   BlueprintSectionProgressInsight,
   BlueprintSectionProgressStatus,
-} from "@/lib/blueprint/copilot-analysis";
+} from "@/lib/workflows/copilot-analysis";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -28,7 +28,8 @@ const PROGRESS_RESPONSE_SCHEMA = z.object({
 type ParsedProgressResponse = z.infer<typeof PROGRESS_RESPONSE_SCHEMA>;
 
 export interface EvaluateBlueprintProgressArgs {
-  blueprint: Blueprint;
+  blueprint?: Blueprint;
+  workflow?: Blueprint;
   completionState?: BlueprintCompletionState;
   latestUserMessage?: string | null;
   maxStepSamples?: number;
@@ -58,7 +59,11 @@ const SECTION_NAME_LOOKUP = (() => {
 export async function evaluateBlueprintProgress(
   args: EvaluateBlueprintProgressArgs
 ): Promise<BlueprintProgressSnapshot | null> {
-  const { blueprint, latestUserMessage, maxStepSamples = STEP_SAMPLE_DEFAULT } = args;
+  const blueprint = args.workflow ?? args.blueprint;
+  const { latestUserMessage, maxStepSamples = STEP_SAMPLE_DEFAULT } = args;
+  if (!blueprint) {
+    return null;
+  }
   if (!process.env.OPENAI_API_KEY) {
     copilotDebug("progress.eval.skipped", "OPENAI_API_KEY missing");
     return null;

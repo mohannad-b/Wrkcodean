@@ -1,92 +1,59 @@
-/**
- * Simple in-memory event emitter for realtime chat events.
- * In production, this should use Redis pub/sub or similar.
- */
+import { randomUUID } from "crypto";
+import { redisPublish, redisSubscribe } from "./redis-bus";
+import type { ChatActor, ChatEvent, ChatEventType } from "./chat-contract";
 
-export type ChatEventType =
-  | "message.created"
-  | "message.updated"
-  | "message.deleted"
-  | "typing.started"
-  | "typing.stopped"
-  | "presence.updated"
-  | "readreceipt.updated";
+export const CHAT_CHANNEL_PREFIX = "chat:workflow:";
 
-export type ChatEvent = {
-  type: ChatEventType;
+export type { ChatEvent, ChatEventType, ChatActor } from "./chat-contract";
+
+const workflowChannel = (workflowId: string) => `${CHAT_CHANNEL_PREFIX}${workflowId}`;
+
+export async function subscribeToChatEvents(
+  workflowId: string,
+  handler: (event: ChatEvent) => void
+): Promise<() => Promise<void>> {
+  return redisSubscribe(workflowChannel(workflowId), handler);
+}
+
+export async function publishChatEvent<TPayload = unknown>(params: {
+  type: ChatEventType | string;
   conversationId: string;
   workflowId: string;
   tenantId: string;
-  data: unknown;
-  timestamp: string;
-};
+  workspaceId?: string;
+  messageId?: string;
+  actor?: ChatActor;
+  data: TPayload;
+}): Promise<ChatEvent<TPayload> | undefined> {
+  const envelope: ChatEvent<TPayload> = {
+    eventId: randomUUID(),
+    type: params.type,
+    conversationId: params.conversationId,
+    workflowId: params.workflowId,
+    tenantId: params.tenantId,
+    workspaceId: params.workspaceId,
+    messageId: params.messageId,
+    actor: params.actor,
+    createdAt: new Date().toISOString(),
+    payload: params.data,
+    data: params.data,
+  };
 
-type EventListener = (event: ChatEvent) => void;
-
-class ChatEventEmitter {
-  private listeners: Map<string, Set<EventListener>> = new Map();
-
-  /**
-   * Subscribe to events for a conversation
-   */
-  subscribe(conversationId: string, listener: EventListener): () => void {
-    if (!this.listeners.has(conversationId)) {
-      this.listeners.set(conversationId, new Set());
-    }
-    this.listeners.get(conversationId)!.add(listener);
-
-    // Return unsubscribe function
-    return () => {
-      const listeners = this.listeners.get(conversationId);
-      if (listeners) {
-        listeners.delete(listener);
-        if (listeners.size === 0) {
-          this.listeners.delete(conversationId);
-        }
-      }
-    };
-  }
-
-  /**
-   * Emit an event to all subscribers of a conversation
-   */
-  emit(event: ChatEvent): void {
-    const listeners = this.listeners.get(event.conversationId);
-    if (listeners) {
-      listeners.forEach((listener) => {
-        try {
-          listener(event);
-        } catch (error) {
-          console.error("Error in event listener:", error);
-        }
-      });
-    }
-  }
-
-  /**
-   * Get subscriber count for a conversation (for debugging)
-   */
-  getSubscriberCount(conversationId: string): number {
-    return this.listeners.get(conversationId)?.size ?? 0;
+  try {
+    await redisPublish(workflowChannel(params.workflowId), envelope);
+    return envelope;
+  } catch (error) {
+    console.error("Failed to publish chat event", error);
+    return undefined;
   }
 }
 
-// Singleton instance
-export const chatEventEmitter = new ChatEventEmitter();
-
 /**
- * Helper to emit chat events
+ * Backwards-compatible helper for existing call sites.
  */
-export function emitChatEvent(params: {
-  type: ChatEventType;
-  conversationId: string;
-  workflowId: string;
-  tenantId: string;
-  data: unknown;
-}): void {
-  chatEventEmitter.emit({
-    ...params,
-    timestamp: new Date().toISOString(),
-  });
+export async function emitChatEvent<TPayload = unknown>(
+  params: Parameters<typeof publishChatEvent<TPayload>>[0]
+): Promise<ChatEvent<TPayload> | undefined> {
+  return publishChatEvent(params);
 }
 

@@ -43,7 +43,7 @@ export const Footer: React.FC = () => {
               </li>
               <li>
                 <Link href="/product" className="transition-colors hover:text-[#E43632]">
-                  Blueprint Engine
+                  Workflow Engine
                 </Link>
               </li>
               <li>

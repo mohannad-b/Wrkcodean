@@ -86,7 +86,7 @@ export const HeroStudioChat: React.FC<HeroStudioChatProps> = ({ messages, isThin
         };
     } else {
         // For other steps, ensure we have the full conversation history
-        // Step 1's "final state" is effectively "messagesStart" from HeroBlueprint.
+        // Step 1's "final state" is effectively "messagesStart" from HeroWorkflow.
         // If messages here are from "messagesBuild", they ALREADY contain the user message.
         // We just need to make sure we don't accidentally "hide" the user message.
         

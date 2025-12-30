@@ -21,7 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 interface ActivityTabProps {
   automationVersionId: string;
-  onNavigateToBlueprint?: () => void;
+  onNavigateToWorkflow?: () => void;
 }
 
 type ActivityItem = {
@@ -44,7 +44,7 @@ type ActivityCard = ActivityItem & {
 
 const FILTERS = ["all", "comment", "change", "tests", "error"] as const;
 
-export function ActivityTab({ automationVersionId, onNavigateToBlueprint }: ActivityTabProps) {
+export function ActivityTab({ automationVersionId, onNavigateToWorkflow }: ActivityTabProps) {
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -279,9 +279,9 @@ export function ActivityTab({ automationVersionId, onNavigateToBlueprint }: Acti
                   <div className="flex items-center gap-4">
                     <button
                       className="text-xs text-gray-400 hover:text-[#E43632] font-medium flex items-center gap-1 transition-colors"
-                      onClick={() => onNavigateToBlueprint?.()}
+                      onClick={() => onNavigateToWorkflow?.()}
                     >
-                      View on Blueprint <ArrowRight size={10} />
+                      View on Workflow <ArrowRight size={10} />
                     </button>
                     {item.type === "comment" && (
                       <button className="text-xs text-gray-400 hover:text-gray-600 font-medium">Reply</button>

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-const blueprintCards = [
+const workflowCards = [
   {
     title: "Lead to Cash",
     desc: "Qualify leads, create deals, send contracts, and issue invoices automatically.",
@@ -94,7 +94,7 @@ export default function WorkflowsPage() {
           </div>
 
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {blueprintCards.map((bp) => (
+            {workflowCards.map((bp) => (
               <Card key={bp.title} className="border-gray-200 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg">
                 <CardHeader>
                   <CardTitle className="text-xl text-[#0A0A0A]">{bp.title}</CardTitle>

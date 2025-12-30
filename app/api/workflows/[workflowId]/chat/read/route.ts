@@ -54,6 +54,7 @@ export async function POST(
       conversationId: conversation.id,
       userId: session.userId,
       lastReadMessageId: payload.lastReadMessageId,
+      actorKind: session.kind === "staff" ? "staff" : "tenant",
     });
 
     return NextResponse.json({ receipt });

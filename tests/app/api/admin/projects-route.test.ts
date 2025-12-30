@@ -19,9 +19,13 @@ vi.mock("@/lib/api/context", () => ({
     new Response(JSON.stringify({ error: error.message }), { status: error.status ?? 500 }),
 }));
 
-vi.mock("@/lib/auth/rbac", () => ({
-  can: canMock,
-}));
+vi.mock("@/lib/auth/rbac", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/auth/rbac")>("@/lib/auth/rbac");
+  return {
+    ...actual,
+    can: canMock,
+  };
+});
 
 vi.mock("@/lib/services/submissions", () => ({
   listSubmissionsForTenant: listSubmissionsForTenantMock,

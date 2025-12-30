@@ -4,7 +4,7 @@ import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/contex
 import { getAutomationDetail } from "@/lib/services/automations";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
-import { parseBlueprint } from "@/lib/blueprint/schema";
+import { parseWorkflowSpec } from "@/lib/workflows/schema";
 import { presentMetric, presentTask } from "@/lib/presenters/automation";
 
 type RouteParams = {
@@ -41,7 +41,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
           intakeNotes: version.intakeNotes,
           // Ensure the field is always present in the response
           requirementsText: version.requirementsText ?? null,
-          workflowJson: parseBlueprint(version.workflowJson),
+          workflowJson: parseWorkflowSpec(version.workflowJson),
           summary: version.summary,
           businessOwner: (version as any).businessOwner ?? null,
           tags: Array.isArray((version as any).tags) ? (version as any).tags : [],

@@ -1,4 +1,4 @@
-import type { Blueprint, BlueprintSectionKey } from "@/lib/blueprint/types";
+import type { Blueprint, BlueprintSectionKey } from "@/lib/workflows/types";
 import type { CopilotThinkingStep } from "@/types/copilot-thinking";
 import type { ConversationPhase } from "./prompts";
 

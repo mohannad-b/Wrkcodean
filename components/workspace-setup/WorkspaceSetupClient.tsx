@@ -381,7 +381,7 @@ export function WorkspaceSetupClient({
   > = {
     branding: {
       title: "Set up your workspace",
-      description: "This is where your team will collaborate on blueprints.",
+      description: "This is where your team will collaborate on workflows.",
       icon: <Sparkles className="h-5 w-5 text-amber-600" />,
       isComplete: isBrandingComplete,
       isLocked: false,
@@ -895,7 +895,7 @@ export function WorkspaceSetupClient({
           </div>
           <div className="space-y-3">
             {[
-              { name: "Zapier", description: "Import Zaps as blueprints", key: "zapier" },
+              { name: "Zapier", description: "Import Zaps as workflows", key: "zapier" },
               { name: "Make (Integromat)", description: "Import Scenarios", key: "make" },
               { name: "n8n", description: "Import workflows JSON", key: "n8n" },
             ].map((item) => {

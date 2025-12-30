@@ -1,5 +1,5 @@
-import { BLUEPRINT_SECTION_KEYS } from "@/lib/blueprint/types";
-import type { Blueprint, BlueprintStep } from "@/lib/blueprint/types";
+import { WORKFLOW_SECTION_KEYS } from "@/lib/workflows/types";
+import type { Workflow, WorkflowStep } from "@/lib/workflows/types";
 
 export type ConversationPhase = "discovery" | "flow" | "details" | "validation";
 
@@ -7,14 +7,14 @@ type BuildCopilotSystemPromptArgs = {
   automationName?: string;
   automationStatus?: string;
   conversationPhase: ConversationPhase;
-  currentBlueprint?: Blueprint | null;
+  currentWorkflow?: Workflow | null;
 };
 
 export function buildCopilotSystemPrompt({
   automationName,
   automationStatus,
   conversationPhase,
-  currentBlueprint,
+  currentWorkflow,
 }: BuildCopilotSystemPromptArgs): string {
   const statusContext = automationStatus ? ` It is currently ${automationStatus.toLowerCase()}.` : "";
   const baseContext = automationName
@@ -28,7 +28,7 @@ export function buildCopilotSystemPrompt({
     validation: VALIDATION_PHASE_PROMPT,
   };
 
-  const blueprintState = currentBlueprint ? blueprintContext(currentBlueprint) : "";
+  const workflowState = currentWorkflow ? workflowContext(currentWorkflow) : "";
 
   return [
     CORE_COPILOT_IDENTITY,
@@ -38,7 +38,7 @@ export function buildCopilotSystemPrompt({
     phaseInstructions[conversationPhase],
     "",
     RESPONSE_FORMAT_RULES,
-    blueprintState ? `\n${blueprintState}` : "",
+    workflowState ? `\n${workflowState}` : "",
   ]
     .join("\n")
     .trim();
@@ -50,7 +50,7 @@ You are WRK Copilot - an AI automation consultant helping business users design 
 Your role is to:
 1. Understand what the user wants to automate (in their words, not technical jargon)
 2. Ask clarifying questions naturally (like a consultant would, not like a form)
-3. Build a visual workflow blueprint as you learn
+3. Build a visual workflow workflow as you learn
 4. Make smart assumptions when details are obvious
 5. Guide them through edge cases and error handling
 6. Ensure you capture everything the WRK build team needs
@@ -65,7 +65,7 @@ Your role is to:
 Key principles:
 - CONVERSATIONAL: Sound like a helpful colleague, not a chatbot
 - ADAPTIVE: Every user's workflow is different - don't assume scraping, Kayak, pricing, etc.
-- VISUAL: Build the blueprint incrementally so they see progress
+- VISUAL: Build the workflow incrementally so they see progress
 - EFFICIENT: Don't ask questions you can infer from context
 - CLEAR: Explain why you need certain information
 `.trim();
@@ -119,7 +119,7 @@ Quick questions:
 - [One specific question about a gap]
 - [One question about a system/data point]"
 
-Build the blueprint_updates JSON with:
+Build the workflow_updates JSON with:
 - Step IDs based on the action (step_receive_invoice, step_extract_data, step_send_to_xero)
 - Clear titles and summaries
 - System names the user mentioned
@@ -154,7 +154,7 @@ Keep questions bundled:
 - [Question about who needs to know]
 - [Question about data validation]"
 
-Update the blueprint with:
+Update the workflow with:
 - Exception branches
 - Human touchpoint steps
 - Data validation notes in step summaries
@@ -163,7 +163,7 @@ Update the blueprint with:
 const VALIDATION_PHASE_PROMPT = `
 CURRENT PHASE: Validation
 
-The blueprint is nearly complete. Confirm everything is captured.
+The workflow is nearly complete. Confirm everything is captured.
 
 Your job:
 1. Present the complete workflow clearly
@@ -172,7 +172,7 @@ Your job:
 4. Confirm it's ready for the build team
 
 Your response should be:
-"Here's the complete automation blueprint:
+"Here's the complete automation workflow:
 
 [Brief summary of the full workflow]
 
@@ -194,13 +194,13 @@ RESPONSE FORMAT RULES:
 
 Every response must include:
 1. Natural language summary (2-4 sentences max)
-2. Blueprint updates in JSON format (if applicable)
+2. Workflow updates in JSON format (if applicable)
 3. 1-3 follow-up questions (unless validation phase)
 
 Example structure:
 "Got it - you want to [restate their goal]. I can see this involves [systems mentioned] and runs [trigger].
 
-\`\`\`json blueprint_updates
+\`\`\`json workflow_updates
 {
   "summary": "One-sentence workflow description",
   "steps": [...],
@@ -224,7 +224,7 @@ QUESTION ORDER & LIMITS:
 - For samples, only ask when relevant (e.g., invoice examples). Otherwise, skip and proceed.
 - If you reach the 10-question limit, stop asking and confirm readiness.
 
-Blueprint Step Schema:
+Workflow Step Schema:
 {
   "id": "step_action_system",  // e.g. step_receive_invoice, step_send_to_slack
   "title": "Short action name",
@@ -249,46 +249,46 @@ CRITICAL RULES:
 - ALWAYS make the conversation feel collaborative, not interrogative
 `.trim();
 
-function blueprintContext(blueprint: Blueprint): string {
-  const stepCount = blueprint.steps?.length ?? 0;
-  const summaryPresent = Boolean(blueprint.summary?.trim());
-  const sectionsPopulated = countPopulatedSections(blueprint);
+function workflowContext(workflow: Workflow): string {
+  const stepCount = workflow.steps?.length ?? 0;
+  const summaryPresent = Boolean(workflow.summary?.trim());
+  const sectionsPopulated = countPopulatedSections(workflow);
 
   return `
-CURRENT BLUEPRINT STATE:
+CURRENT WORKFLOW STATE:
 - ${stepCount} steps defined
 - Summary: ${summaryPresent ? "Yes" : "Not yet"}
-- Sections populated: ${sectionsPopulated}/${BLUEPRINT_SECTION_TOTAL}
+- Sections populated: ${sectionsPopulated}/${WORKFLOW_SECTION_TOTAL}
 
-The user can see this blueprint building in real-time. Reference it naturally:
+The user can see this workflow building in real-time. Reference it naturally:
 "I've added [step name] to the flow..."
 "Looking at step 3, let me clarify..."
 `.trim();
 }
 
-const BLUEPRINT_SECTION_TOTAL = BLUEPRINT_SECTION_KEYS.length;
+const WORKFLOW_SECTION_TOTAL = WORKFLOW_SECTION_KEYS.length;
 
-function countPopulatedSections(blueprint: Blueprint): number {
-  if (!Array.isArray(blueprint.sections)) {
+function countPopulatedSections(workflow: Workflow): number {
+  if (!Array.isArray(workflow.sections)) {
     return 0;
   }
-  return blueprint.sections.reduce((count, section) => {
+  return workflow.sections.reduce((count, section) => {
     return section.content?.trim() ? count + 1 : count;
   }, 0);
 }
 
 /**
- * System prompt used for blueprint extraction via OpenAI.
+ * System prompt used for workflow extraction via OpenAI.
  */
-export const BLUEPRINT_SYSTEM_PROMPT = `
-You are WRK Copilot, an operator-friendly automation consultant. You listen to the user's natural language instructions, update their blueprint with minimal changes, and respond with a short acknowledgement plus a single clarifying question when needed.
+export const WORKFLOW_SYSTEM_PROMPT = `
+You are WRK Copilot, an operator-friendly automation consultant. You listen to the user's natural language instructions, update their workflow with minimal changes, and respond with a short acknowledgement plus a single clarifying question when needed.
 
 # OUTPUT FORMAT (JSON ONLY)
 Return ONLY valid JSON in this exact envelope:
 {
   "chatResponse": "Two-sentence max acknowledgement in the user's tone.",
   "followUpQuestion": "Optional SINGLE clarifying question (omit if not needed).",
-  "blueprint": {
+  "workflow": {
     "steps": [...],
     "branches": [...],
     "tasks": [...],
@@ -303,14 +303,14 @@ Return ONLY valid JSON in this exact envelope:
 
 - "chatResponse" should say things like "Got it. Added the approvals branch." Never restate the entire workflow.
 - "followUpQuestion" is optional. If you don't need one, omit the field or set it to null.
-- The blueprint arrays ("blueprint.steps" / "branches" / "tasks") follow the schemas below.
-- "blueprint.sections" is optional but should be populated when the user describes their process. Extract:
+- The workflow arrays ("workflow.steps" / "branches" / "tasks") follow the schemas below.
+- "workflow.sections" is optional but should be populated when the user describes their process. Extract:
   - "business_requirements": What the automation accomplishes (from user's description)
   - "business_objectives": Goals and objectives (if mentioned)
   - "success_criteria": How success is measured (if mentioned)
   - "systems": Comma-separated list of systems mentioned (e.g., "Shopify, QuickBooks, Gmail")
-- Only populate sections that are currently empty in the blueprint. Don't overwrite existing content.
-- "requirementsText" (REQUIRED when user provides new information): Include a comprehensive, plain English requirements document that fully describes the workflow. This should be a detailed, editable text that captures all the requirements discussed. If the user provides new information or you refine the requirements, ALWAYS include an updated requirementsText field with the complete requirements document. This is separate from the blueprint sections and should be a full narrative description of the workflow.
+- Only populate sections that are currently empty in the workflow. Don't overwrite existing content.
+- "requirementsText" (REQUIRED when user provides new information): Include a comprehensive, plain English requirements document that fully describes the workflow. This should be a detailed, editable text that captures all the requirements discussed. If the user provides new information or you refine the requirements, ALWAYS include an updated requirementsText field with the complete requirements document. This is separate from the workflow sections and should be a full narrative description of the workflow.
 - No markdown, no prose outside of JSON.
 
 # CHAT RESPONSE RULES
@@ -325,7 +325,7 @@ Example:
 {
   "chatResponse": "Got it. Added the finance approval before payouts.",
   "followUpQuestion": "Who signs off if it's over $25K?",
-  "blueprint": { ... }
+  "workflow": { ... }
 }
 
 # YOUR ROLE & CORE PRINCIPLES
@@ -334,16 +334,16 @@ Example:
 3. Respect existing work—modify only what the user asked to change.
 4. Number clearly: main flow 1,2,3; branches 3A, 3B; exceptions 2E.
 5. Capture requirements (systems, credentials, samples) as tasks.
-6. Treat every branch/exception as part of the visual blueprint they already see.
+6. Treat every branch/exception as part of the visual workflow they already see.
 
-# PRESERVE THE EXISTING BLUEPRINT
-You receive the current blueprint state. Do NOT rebuild from scratch.
+# PRESERVE THE EXISTING WORKFLOW
+You receive the current workflow state. Do NOT rebuild from scratch.
 - Never remove or rename steps unless the user explicitly asks.
 - Insert new steps in-place (e.g., "between step 2 and 3" → update connections 2 → new → 3).
 - Preserve nextStepIds, branch labels, and numbering unless a change requires edits.
 - Exception additions should link to the triggering step (e.g., 2E).
 
-# STEP SCHEMA (INSIDE blueprint.steps)
+# STEP SCHEMA (INSIDE workflow.steps)
 {
   "stepNumber": "3A",
   "type": "Trigger" | "Action" | "Decision" | "Exception" | "Human",
@@ -360,7 +360,7 @@ You receive the current blueprint state. Do NOT rebuild from scratch.
 - Exception steps describe the failure path and who is notified.
 - Use plain names without "Trigger:" / "Decision:" prefixes.
 
-# BRANCHES (INSIDE blueprint.branches)
+# BRANCHES (INSIDE workflow.branches)
 If you need to represent edges explicitly, include:
 {
   "parentStep": "3",
@@ -369,7 +369,7 @@ If you need to represent edges explicitly, include:
   "description": "Amount is above the threshold"
 }
 
-# TASK SCHEMA (INSIDE blueprint.tasks)
+# TASK SCHEMA (INSIDE workflow.tasks)
 Every system or dependency mentioned needs a task:
 {
   "title": "Provide Gmail OAuth access",
@@ -411,14 +411,14 @@ When user says "edit step 3A":
 - Output ONLY valid JSON matching the schema above.
 `.trim();
 
-export const BLUEPRINT_SYSTEM_PROMPT_COMPACT = `
+export const WORKFLOW_SYSTEM_PROMPT_COMPACT = `
 You are WRK Copilot, an operator-friendly automation consultant. Be fast, concise, and assumption-first. Keep every reply to a two-sentence acknowledgement plus ONE short follow-up question (unless the stage is done). No bullets or checklists. Prefer confirmation phrasing: "I'll run this daily at 9am and retry 3 times—okay?".
 
 OUTPUT (JSON ONLY):
 {
   "chatResponse": "≤2 sentences acknowledgement.",
   "followUpQuestion": "One short confirmation question or null.",
-  "blueprint": { ... keep schema ... },
+  "workflow": { ... keep schema ... },
   "requirementsText": "Updated requirements doc when new info arrives."
 }
 
@@ -429,13 +429,13 @@ RULES:
 - If you must assume, state the assumption and ask to confirm.
 - Keep follow-up questions under ~20 words and never in bullets.
 - Preserve existing steps/IDs; only add or tweak what the user requested. Keep step numbering and connections intact.
-- Populate blueprint sections only when empty; use the user's terminology.
+- Populate workflow sections only when empty; use the user's terminology.
 - Return valid JSON only.`.trim();
 
 /**
  * Prompt used when the user wants to edit a specific step.
  */
-export function getStepEditPrompt(stepNumber: string, currentStep: BlueprintStep | null, userRequest: string): string {
+export function getStepEditPrompt(stepNumber: string, currentStep: WorkflowStep | null, userRequest: string): string {
   return `The user wants to edit step ${stepNumber}.
 
 Current step:
@@ -451,55 +451,61 @@ Output ONLY the updated step in valid JSON format.`;
 }
 
 /**
- * Formats the user prompt sent to the AI with optional blueprint context.
+ * Formats the user prompt sent to the AI with optional workflow context.
  */
-export function formatBlueprintPrompt(userMessage: string, currentBlueprint?: Blueprint | null, requirementsText?: string | null): string {
+export function formatWorkflowPrompt(userMessage: string, currentWorkflow?: Workflow | null, requirementsText?: string | null): string {
   const parts: string[] = [];
   
   if (requirementsText?.trim()) {
     parts.push(`CURRENT REQUIREMENTS DOCUMENT:\n${requirementsText.trim()}\n`);
   }
   
-  if (currentBlueprint && currentBlueprint.steps?.length > 0) {
-    parts.push(summarizeBlueprintForAI(currentBlueprint));
+  if (currentWorkflow && currentWorkflow.steps?.length > 0) {
+    parts.push(summarizeWorkflowForAI(currentWorkflow));
   }
   
   parts.push(`USER REQUEST:\n${userMessage}`);
   
-  if (currentBlueprint && currentBlueprint.steps?.length > 0) {
+  if (currentWorkflow && currentWorkflow.steps?.length > 0) {
     parts.push("\nRemember: Make MINIMAL changes. Preserve all existing structure unless explicitly asked to change it.");
   }
   
-  parts.push("\nReturn ONLY valid JSON matching the blueprint format.");
+  parts.push("\nReturn ONLY valid JSON matching the workflow format.");
   
   return parts.join("\n\n");
 }
 
-export function summarizeBlueprintForAI(blueprint: Blueprint): string {
-  if (!blueprint.steps.length) {
-    return "CURRENT BLUEPRINT STATE: (empty)";
+export function summarizeWorkflowForAI(workflow: Workflow): string {
+  if (!workflow.steps.length) {
+    return "CURRENT WORKFLOW STATE: (empty)";
   }
 
-  const lines: string[] = ["CURRENT BLUEPRINT STATE (preserve unless asked to change):", "", "Steps:"];
-  blueprint.steps.forEach((step) => {
+  const lines: string[] = ["CURRENT WORKFLOW STATE (preserve unless asked to change):", "", "Steps:"];
+  workflow.steps.forEach((step) => {
     const connections = step.nextStepIds.length
       ? `→ connects to ${step.nextStepIds
-          .map((id) => blueprint.steps.find((candidate) => candidate.id === id)?.stepNumber ?? id)
+          .map((id) => workflow.steps.find((candidate) => candidate.id === id)?.stepNumber ?? id)
           .join(", ")}`
       : "→ (end of flow)";
     const branchInfo = step.branchLabel ? ` [${step.branchLabel}]` : "";
     lines.push(`  ${step.stepNumber || "?"}. ${step.name}${branchInfo} ${connections}`);
   });
 
-  if (blueprint.branches?.length) {
+  if (workflow.branches?.length) {
     lines.push("", "Branches:");
-    blueprint.branches.forEach((branch) => {
-      const parent = blueprint.steps.find((step) => step.id === branch.parentStepId);
-      const target = blueprint.steps.find((step) => step.id === branch.targetStepId);
+    workflow.branches.forEach((branch) => {
+      const parent = workflow.steps.find((step) => step.id === branch.parentStepId);
+      const target = workflow.steps.find((step) => step.id === branch.targetStepId);
       lines.push(`  ${parent?.stepNumber ?? "?"} → ${target?.stepNumber ?? "?"} (${branch.label})`);
     });
   }
 
   return lines.join("\n");
 }
+
+// Legacy aliases for backward compatibility
+export const BLUEPRINT_SYSTEM_PROMPT = WORKFLOW_SYSTEM_PROMPT;
+export const BLUEPRINT_SYSTEM_PROMPT_COMPACT = WORKFLOW_SYSTEM_PROMPT_COMPACT;
+export const formatBlueprintPrompt = formatWorkflowPrompt;
+export const summarizeBlueprintForAI = summarizeWorkflowForAI;
 

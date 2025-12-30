@@ -113,7 +113,7 @@ export function CredentialsModal({ isOpen, onClose, systemName, onConnected, onC
                   </motion.div>
                   <h4 className="text-lg font-bold text-[#0A0A0A]">Successfully Connected!</h4>
                   <p className="text-sm text-gray-500 mt-1">
-                    Redirecting you back to the blueprint...
+                    Redirecting you back to the workflow...
                   </p>
                 </div>
               ) : (

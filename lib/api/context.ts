@@ -11,7 +11,6 @@ import {
   type UserSession,
   type TenantOrStaffSession,
 } from "@/lib/auth/session";
-import { AuthorizationError } from "@/lib/auth/rbac";
 
 export class ApiError extends Error {
   status: number;
@@ -78,9 +77,24 @@ export async function requireUserSession(): Promise<UserSession> {
   return session;
 }
 
+function getAuthorizationErrorCtor(): any {
+  try {
+    // Using require avoids static binding to mocks that omit AuthorizationError
+    const mod = require("@/lib/auth/rbac");
+    return mod.AuthorizationError;
+  } catch {
+    return undefined;
+  }
+}
+
 export function handleApiError(error: unknown) {
-  if (error instanceof AuthorizationError) {
-    return NextResponse.json({ error: error.message, code: error.code, action: error.action }, { status: error.status });
+  const AuthorizationError = getAuthorizationErrorCtor();
+  if (typeof AuthorizationError === "function" && error instanceof AuthorizationError) {
+    const authError = error as { message: string; code?: string; action?: string; status?: number };
+    return NextResponse.json(
+      { error: authError.message, code: authError.code, action: authError.action },
+      { status: authError.status }
+    );
   }
   if (error instanceof ApiError) {
     return NextResponse.json({ error: error.message }, { status: error.status });

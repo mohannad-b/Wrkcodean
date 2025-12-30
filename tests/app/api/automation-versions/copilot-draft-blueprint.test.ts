@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { createEmptyBlueprint } from "@/lib/blueprint/factory";
+import { createEmptyBlueprint } from "@/lib/workflows/factory";
 
 const canMock = vi.fn();
 const logAuditMock = vi.fn();
@@ -41,11 +41,11 @@ vi.mock("@/lib/audit/log", () => ({
   logAudit: logAuditMock,
 }));
 
-vi.mock("@/lib/blueprint/ai-builder-simple", () => ({
+vi.mock("@/lib/workflows/ai-builder-simple", () => ({
   buildBlueprintFromChat: buildBlueprintFromChatMock,
 }));
 
-vi.mock("@/lib/blueprint/step-numbering", () => ({
+vi.mock("@/lib/workflows/step-numbering", () => ({
   applyStepNumbers: applyStepNumbersMock,
 }));
 
@@ -68,7 +68,7 @@ vi.mock("@/lib/services/copilot-messages", () => ({
   createCopilotMessage: createCopilotMessageMock,
 }));
 
-vi.mock("@/lib/blueprint/task-sync", () => ({
+vi.mock("@/lib/workflows/task-sync", () => ({
   syncAutomationTasks: syncAutomationTasksMock,
 }));
 

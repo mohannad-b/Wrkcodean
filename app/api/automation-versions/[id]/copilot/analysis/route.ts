@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { getCopilotAnalysis } from "@/lib/services/copilot-analysis";
-import { createEmptyCopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
+import { createEmptyCopilotAnalysisState } from "@/lib/workflows/copilot-analysis";
 
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
   try {

@@ -4,14 +4,15 @@ import { eq } from "drizzle-orm";
 import { can } from "@/lib/auth/rbac";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { getAutomationVersionDetail } from "@/lib/services/automations";
-import { sanitizeBlueprintTopology } from "@/lib/blueprint/sanitizer";
-import { applyStepNumbers } from "@/lib/blueprint/step-numbering";
-import { BlueprintSchema } from "@/lib/blueprint/schema";
-import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
+import { sanitizeWorkflowTopology } from "@/lib/workflows/sanitizer";
+import { applyStepNumbers } from "@/lib/workflows/step-numbering";
+import { WorkflowSchema } from "@/lib/workflows/schema";
+import { getWorkflowCompletionState } from "@/lib/workflows/completion";
 import { automationVersions } from "@/db/schema";
 import { db } from "@/db";
 import { logAudit } from "@/lib/audit/log";
 import { buildWorkflowViewModel } from "@/lib/workflows/view-model";
+import { normalizeWorkflowInput, withLegacyWorkflowAlias } from "@/lib/workflows/legacy";
 
 export async function POST(_request: Request, { params }: { params: { id: string } }) {
   try {
@@ -26,15 +27,16 @@ export async function POST(_request: Request, { params }: { params: { id: string
       throw new ApiError(404, "Automation version not found.");
     }
 
-    const currentBlueprint = buildWorkflowViewModel(detail.version.workflowJson).workflowSpec;
-    if (!currentBlueprint) {
+    const workflowSource = normalizeWorkflowInput(detail.version as any).workflowJson ?? null;
+    const currentWorkflow = buildWorkflowViewModel(workflowSource).workflowSpec;
+    if (!currentWorkflow) {
       throw new ApiError(400, "Workflow is empty.");
     }
 
-    const { blueprint: sanitizedBlueprint, summary } = sanitizeBlueprintTopology(currentBlueprint);
-    const numbered = applyStepNumbers(sanitizedBlueprint);
+    const { workflow: sanitizedWorkflow, summary } = sanitizeWorkflowTopology(currentWorkflow);
+    const numbered = applyStepNumbers(sanitizedWorkflow);
 
-    const validatedBlueprint = BlueprintSchema.parse({
+    const validatedWorkflow = WorkflowSchema.parse({
       ...numbered,
       updatedAt: new Date().toISOString(),
     });
@@ -42,7 +44,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
     const [savedVersion] = await db
       .update(automationVersions)
       .set({
-        workflowJson: validatedBlueprint,
+        workflowJson: validatedWorkflow,
         updatedAt: new Date(),
       })
       .where(eq(automationVersions.id, params.id))
@@ -57,7 +59,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
     await logAudit({
       tenantId: session.tenantId,
       userId: session.userId,
-      action: "automation.blueprint.optimized",
+      action: "automation.workflow.optimized",
       resourceType: "automation_version",
       resourceId: params.id,
       metadata: {
@@ -68,11 +70,11 @@ export async function POST(_request: Request, { params }: { params: { id: string
     });
 
     return NextResponse.json({
-      blueprint: validatedBlueprint,
+      ...withLegacyWorkflowAlias(validatedWorkflow),
       telemetry: {
         sanitizationSummary: summary,
       },
-      completion: getBlueprintCompletionState(validatedBlueprint),
+      completion: getWorkflowCompletionState(validatedWorkflow),
     });
   } catch (error) {
     return handleApiError(error);

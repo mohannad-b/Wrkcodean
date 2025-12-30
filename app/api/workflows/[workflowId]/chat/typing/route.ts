@@ -61,11 +61,13 @@ export async function POST(
     });
 
     // Emit typing event
-    emitChatEvent({
+    await emitChatEvent({
       type: payload.isTyping ? "typing.started" : "typing.stopped",
       conversationId: conversation.id,
       workflowId: params.workflowId,
       tenantId: workflow.tenantId,
+      workspaceId: workflow.tenantId,
+      actor: { kind: session.kind, userId: session.userId },
       data: {
         userId: session.userId,
         userName: user.name || user.email,

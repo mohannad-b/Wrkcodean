@@ -10,11 +10,13 @@ import {
 import { logAudit } from "@/lib/audit/log";
 import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
-import { BlueprintSchema } from "@/lib/blueprint/schema";
-import type { Blueprint } from "@/lib/blueprint/types";
-import { diffBlueprint } from "@/lib/blueprint/diff";
+import { WorkflowSchema } from "@/lib/workflows/schema";
+import type { Workflow } from "@/lib/workflows/types";
+import { diffWorkflow } from "@/lib/workflows/diff";
+import { normalizeWorkflowInput, withLegacyWorkflowAlias } from "@/lib/workflows/legacy";
 import type { Task } from "@/db/schema";
 import { buildWorkflowViewModel } from "@/lib/workflows/view-model";
+import { sendDevAgentLog } from "@/lib/dev/agent-log";
 
 type RouteParams = {
   params: {
@@ -58,16 +60,16 @@ function validateRequirementsText(value: unknown): string | undefined {
   return value;
 }
 
-function validateBlueprint(value: unknown): Blueprint | null | undefined {
+function validateWorkflow(value: unknown): Workflow | null | undefined {
   if (value === undefined) {
     return undefined;
   }
   if (value === null) {
     return null;
   }
-  const result = BlueprintSchema.safeParse(value);
+  const result = WorkflowSchema.safeParse(value);
   if (!result.success) {
-    const message = result.error.issues[0]?.message ?? "Invalid blueprint_json payload.";
+    const message = result.error.issues[0]?.message ?? "Invalid workflow_json payload.";
     throw new ApiError(400, message);
   }
   return result.data;
@@ -164,7 +166,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
         intakeNotes: detail.version.intakeNotes,
         requirementsText: workflow.requirementsText ?? undefined,
         workflowJson: workflow.workflowSpec,
-        blueprintJson: workflow.blueprintJson,
+        blueprintJson: workflow.workflowSpec,
         summary: detail.version.summary,
         businessOwner: detail.version.businessOwner ?? null,
         tags: Array.isArray((detail.version as any).tags) ? (detail.version as any).tags : [],
@@ -212,6 +214,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     }
 
     const payload = await parsePayload(request);
+    const { workflowJson: normalizedWorkflowJson } = normalizeWorkflowInput(payload as any);
     const automationName = validateAutomationName((payload as any).automationName ?? (payload as any).name);
     const automationDescription = validateAutomationDescription(
       (payload as any).automationDescription ?? (payload as any).description
@@ -220,10 +223,10 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     const tags = validateTags((payload as any).tags);
     const intakeNotes = validateIntakeNotes(payload.intakeNotes);
     const requirementsText = validateRequirementsText(payload.requirementsText);
-    // Accept both `workflowJson` (current) and `blueprintJson` (legacy/tests)
-    const blueprintInput = (payload as any).workflowJson ?? (payload as any).blueprintJson;
-    const blueprintJson =
-      blueprintInput === undefined ? undefined : validateBlueprint(blueprintInput) ?? (blueprintInput as any);
+    const workflowJson =
+      normalizedWorkflowJson === undefined
+        ? undefined
+        : validateWorkflow(normalizedWorkflowJson) ?? (normalizedWorkflowJson as any);
 
     if (
       automationName === undefined &&
@@ -232,7 +235,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       tags === undefined &&
       intakeNotes === undefined &&
       requirementsText === undefined &&
-      blueprintJson === undefined
+      workflowJson === undefined
     ) {
       throw new ApiError(400, "No valid fields provided.");
     }
@@ -242,19 +245,61 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       throw new ApiError(404, "Automation version not found");
     }
     const existingWorkflow = existingDetail.workflowView ?? buildWorkflowViewModel(existingDetail.version.workflowJson);
-    const previousBlueprint = existingWorkflow.workflowSpec;
+    const previousWorkflow = existingWorkflow.workflowSpec;
     
     // #region agent log - Track step counts before save
-    const previousStepCount = previousBlueprint?.steps?.length ?? 0;
-    const newStepCount = blueprintJson?.steps?.length ?? 0;
-    if (blueprintJson !== undefined) {
-      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:237',message:'Blueprint save - step count check',data:{versionId:params.id,previousStepCount,newStepCount,stepLoss:previousStepCount>newStepCount?previousStepCount-newStepCount:0,previousStepIds:previousBlueprint?.steps?.map((step: { id: string })=>step.id)??[],newStepIds:blueprintJson?.steps?.map((step: { id: string })=>step.id)??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+    const previousStepCount = previousWorkflow?.steps?.length ?? 0;
+    const newStepCount = workflowJson?.steps?.length ?? 0;
+    if (workflowJson !== undefined) {
+      sendDevAgentLog({
+        location: "route.ts:237",
+        message: "Workflow save - step count check",
+        data: {
+          versionId: params.id,
+          previousStepCount,
+          newStepCount,
+          stepLoss: previousStepCount > newStepCount ? previousStepCount - newStepCount : 0,
+          previousStepIds: previousWorkflow?.steps?.map((step: { id: string }) => step.id) ?? [],
+          newStepIds: workflowJson?.steps?.map((step: { id: string }) => step.id) ?? [],
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "save-tracking",
+        hypothesisId: "G",
+      });
       
       // Safeguard: Warn if significant step loss detected (more than 1 step lost)
       if (previousStepCount > 0 && newStepCount < previousStepCount - 1) {
         const stepsLost = previousStepCount - newStepCount;
         console.error(`⚠️ Step loss detected: ${previousStepCount} → ${newStepCount} steps (lost ${stepsLost} steps)`);
-        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:243',message:'⚠️ STEP LOSS DETECTED',data:{versionId:params.id,previousStepCount,newStepCount,stepsLost,previousStepIds:previousBlueprint?.steps?.map((step: { id: string; name?: string; stepNumber?: number | string })=>({id:step.id,name:step.name,stepNumber:typeof step.stepNumber === 'number' ? step.stepNumber : Number(step.stepNumber)}))??[],newStepIds:blueprintJson?.steps?.map((step: { id: string; name?: string; stepNumber?: number | string })=>({id:step.id,name:step.name,stepNumber:typeof step.stepNumber === 'number' ? step.stepNumber : Number(step.stepNumber)}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+        sendDevAgentLog({
+          location: "route.ts:243",
+          message: "⚠️ STEP LOSS DETECTED",
+          data: {
+            versionId: params.id,
+            previousStepCount,
+            newStepCount,
+            stepsLost,
+            previousStepIds:
+              previousWorkflow?.steps?.map(
+                (step: { id: string; name?: string; stepNumber?: number | string }) => ({
+                  id: step.id,
+                  name: step.name,
+                  stepNumber: typeof step.stepNumber === "number" ? step.stepNumber : Number(step.stepNumber),
+                })
+              ) ?? [],
+            newStepIds:
+              workflowJson?.steps?.map((step: { id: string; name?: string; stepNumber?: number | string }) => ({
+                id: step.id,
+                name: step.name,
+                stepNumber: typeof step.stepNumber === "number" ? step.stepNumber : Number(step.stepNumber),
+              })) ?? [],
+          },
+          timestamp: Date.now(),
+          sessionId: "debug-session",
+          runId: "save-tracking",
+          hypothesisId: "G",
+        });
         
         // Prevent save if more than 50% of steps are lost (safety threshold)
         const lossPercentage = (stepsLost / previousStepCount) * 100;
@@ -277,43 +322,68 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       tags,
       intakeNotes,
       requirementsText: requirementsTextValue,
-      workflowJson: blueprintJson,
+      workflowJson,
+      blueprintJson: workflowJson,
     } as unknown as UpdateMetadataParams;
 
     const updated = await updateAutomationVersionMetadata(updateParams);
 
-    const nextWorkflow = buildWorkflowViewModel(updated.version.workflowJson);
+    const nextWorkflowView = buildWorkflowViewModel(updated.version.workflowJson);
+    const nextWorkflowSpec = nextWorkflowView.workflowSpec;
 
     const metadata: Record<string, unknown> = {
       updatedFields: {
         intakeNotes: intakeNotes !== undefined,
         requirementsText: requirementsText !== undefined,
-        workflowJson: blueprintJson !== undefined,
+        workflowJson: workflowJson !== undefined,
       },
       versionLabel: existingDetail.version.versionLabel,
     };
 
-    if (blueprintJson !== undefined) {
-      const nextBlueprint = nextWorkflow.workflowSpec;
-      const blueprintDiff = diffBlueprint(previousBlueprint, nextBlueprint);
-      metadata.blueprintSummary = blueprintDiff.summary;
-      metadata.blueprintDiff = blueprintDiff;
-      metadata.blueprintChanges = {
-        stepsAdded: blueprintDiff.stepsAdded?.length ?? 0,
-        stepsRemoved: blueprintDiff.stepsRemoved?.length ?? 0,
-        stepsRenamed: blueprintDiff.stepsRenamed?.length ?? 0,
-        branchesAdded: blueprintDiff.branchesAdded?.length ?? 0,
-        branchesRemoved: blueprintDiff.branchesRemoved?.length ?? 0,
+    if (workflowJson !== undefined) {
+      const workflowDiff = diffWorkflow(previousWorkflow, nextWorkflowSpec);
+      metadata.workflowSummary = workflowDiff.summary;
+      metadata.workflowDiff = workflowDiff;
+      metadata.workflowChanges = {
+        stepsAdded: workflowDiff.stepsAdded?.length ?? 0,
+        stepsRemoved: workflowDiff.stepsRemoved?.length ?? 0,
+        stepsRenamed: workflowDiff.stepsRenamed?.length ?? 0,
+        branchesAdded: workflowDiff.branchesAdded?.length ?? 0,
+        branchesRemoved: workflowDiff.branchesRemoved?.length ?? 0,
       };
       
       // #region agent log - Track step counts after save
-      const savedStepCount = nextBlueprint?.steps?.length ?? 0;
-      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:265',message:'Blueprint save - after save verification',data:{versionId:params.id,previousStepCount,newStepCount,savedStepCount,stepsLost:previousStepCount>savedStepCount?previousStepCount-savedStepCount:0,stepsAdded:blueprintDiff.stepsAdded?.length??0,stepsRemoved:blueprintDiff.stepsRemoved?.length??0},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+      const savedStepCount = nextWorkflowSpec?.steps?.length ?? 0;
+      sendDevAgentLog({
+        location: "route.ts:265",
+        message: "Workflow save - after save verification",
+        data: {
+          versionId: params.id,
+          previousStepCount,
+          newStepCount,
+          savedStepCount,
+          stepsLost: previousStepCount > savedStepCount ? previousStepCount - savedStepCount : 0,
+          stepsAdded: workflowDiff.stepsAdded?.length ?? 0,
+          stepsRemoved: workflowDiff.stepsRemoved?.length ?? 0,
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "save-tracking",
+        hypothesisId: "G",
+      });
       
       // Safeguard: Verify steps were saved correctly
       if (savedStepCount !== newStepCount) {
         console.error(`⚠️ Step count mismatch after save: expected ${newStepCount}, got ${savedStepCount}`);
-        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:272',message:'⚠️ STEP COUNT MISMATCH AFTER SAVE',data:{versionId:params.id,expectedStepCount:newStepCount,actualStepCount:savedStepCount},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+        sendDevAgentLog({
+          location: "route.ts:272",
+          message: "⚠️ STEP COUNT MISMATCH AFTER SAVE",
+          data: { versionId: params.id, expectedStepCount: newStepCount, actualStepCount: savedStepCount },
+          timestamp: Date.now(),
+          sessionId: "debug-session",
+          runId: "save-tracking",
+          hypothesisId: "G",
+        });
       }
       // #endregion
     }
@@ -332,9 +402,8 @@ export async function PATCH(request: Request, { params }: RouteParams) {
         id: updated.version.id,
         intakeNotes: updated.version.intakeNotes,
         requirementsText:
-          typeof nextWorkflow.requirementsText === "string" ? nextWorkflow.requirementsText : undefined,
-        workflowJson: nextWorkflow.workflowSpec,
-        blueprintJson: nextWorkflow.blueprintJson,
+          typeof nextWorkflowView.requirementsText === "string" ? nextWorkflowView.requirementsText : undefined,
+        ...withLegacyWorkflowAlias(nextWorkflowSpec),
         businessOwner: updated.version.businessOwner ?? null,
         tags: Array.isArray((updated.version as any).tags) ? (updated.version as any).tags : [],
         updatedAt: updated.version.updatedAt,

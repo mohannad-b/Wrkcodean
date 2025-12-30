@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { handleApiError, requireTenantSession, ApiError } from "@/lib/api/context";
-import { uploadFile } from "@/lib/storage/file-service";
+import { storeAvatarFile, AvatarStorageError } from "@/lib/storage/avatar-upload";
 import { updateUserProfile } from "@/lib/user/profile";
 import { logAudit } from "@/lib/audit/log";
 
@@ -31,19 +31,14 @@ export async function POST(request: Request) {
       throw new ApiError(400, "Avatar must be smaller than 4MB.");
     }
 
-    // Upload file using the standard file upload system
-    const uploadResult = await uploadFile({
+    // Upload file using avatar storage helper (mock-friendly for tests)
+    const uploadResult = await storeAvatarFile({
       tenantId: session.tenantId,
       userId: session.userId,
-      purpose: "generic",
-      resourceType: "user_avatar",
-      resourceId: session.userId,
-      title: "Profile Avatar",
       file,
     });
 
-    // Use the download URL from the file version
-    const avatarUrl = `/api/uploads/${uploadResult.version.id}`;
+    const avatarUrl = uploadResult.url;
 
     const result = await updateUserProfile(session, { avatarUrl });
 
@@ -59,13 +54,15 @@ export async function POST(request: Request) {
       resourceId: result.profile.id,
       metadata: {
         via: "self-service",
-        fileId: uploadResult.file.id,
-        versionId: uploadResult.version.id,
+        fileUrl: uploadResult.url,
       },
     });
 
     return NextResponse.json(result);
   } catch (error) {
+    if (error instanceof AvatarStorageError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
+    }
     return handleApiError(error);
   }
 }

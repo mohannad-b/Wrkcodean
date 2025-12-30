@@ -11,7 +11,7 @@ import {
 } from "@/db/schema";
 import type { TenantOrStaffSession } from "@/lib/auth/session";
 import { can } from "@/lib/auth/rbac";
-import { emitChatEvent } from "@/lib/realtime/events";
+import { emitChatEvent, type ChatActor } from "@/lib/realtime/events";
 import { notifyNewMessage } from "./workflow-chat-notifications";
 
 export type WorkflowMessageWithSender = WorkflowMessage & {
@@ -30,6 +30,8 @@ export type WorkflowConversationWithMetadata = WorkflowConversation & {
 
 /**
  * Get or create a conversation for a workflow
+ *
+ * Invariant: one conversation per workflow (workflowId = automationVersionId) and tenant.
  */
 export async function getOrCreateConversation(params: {
   tenantId: string;
@@ -69,13 +71,13 @@ export async function listMessages(params: {
   tenantId: string;
   limit?: number;
   before?: string; // message ID to paginate before
+  includeDeleted?: boolean;
 }): Promise<WorkflowMessageWithSender[]> {
   const limit = params.limit ?? 50;
 
   const whereConditions = [
     eq(workflowMessages.conversationId, params.conversationId),
     eq(workflowMessages.tenantId, params.tenantId),
-    isNull(workflowMessages.deletedAt),
   ];
 
   if (params.before) {
@@ -85,7 +87,7 @@ export async function listMessages(params: {
   const messages = await db
     .select()
     .from(workflowMessages)
-    .where(and(...whereConditions))
+    .where(params.includeDeleted ? and(...whereConditions) : and(...whereConditions, isNull(workflowMessages.deletedAt)))
     .orderBy(desc(workflowMessages.createdAt))
     .limit(limit);
 
@@ -114,6 +116,8 @@ export async function listMessages(params: {
 
   return messages.map((message) => ({
     ...message,
+    // Mask deleted bodies to avoid leaking content while keeping position.
+    body: message.deletedAt ? "" : message.body,
     sender: message.senderUserId ? senderMap.get(message.senderUserId) : undefined,
   }));
 }
@@ -186,11 +190,18 @@ export async function createMessage(params: {
   }
 
   // Emit realtime event with sender information
-  emitChatEvent({
+  const actor: ChatActor | undefined = params.senderUserId
+    ? { kind: params.senderType === "wrk" ? "staff" : "tenant", userId: params.senderUserId }
+    : undefined;
+
+  await emitChatEvent({
     type: "message.created",
     conversationId: params.conversationId,
     workflowId: params.automationVersionId,
     tenantId: params.tenantId,
+    workspaceId: params.tenantId,
+    messageId: message.id,
+    actor,
     data: {
       ...message,
       sender: senderInfo,
@@ -278,11 +289,14 @@ export async function updateMessage(params: {
   });
 
   if (conversation) {
-    emitChatEvent({
+    await emitChatEvent({
       type: "message.updated",
       conversationId: message.conversationId,
       workflowId: message.automationVersionId,
       tenantId: message.tenantId,
+      workspaceId: message.tenantId,
+      messageId: updated.id,
+      actor: { kind: params.session.kind, userId: params.session.userId },
       data: {
         ...updated,
         sender: senderInfo,
@@ -328,9 +342,11 @@ export async function deleteMessage(params: {
     throw new Error("Forbidden: Cannot delete this message");
   }
 
+  const deletedAt = new Date();
+
   await db
     .update(workflowMessages)
-    .set({ deletedAt: new Date() })
+    .set({ deletedAt })
     .where(eq(workflowMessages.id, params.messageId));
 
   // Emit realtime event
@@ -339,12 +355,15 @@ export async function deleteMessage(params: {
   });
 
   if (conversation) {
-    emitChatEvent({
+    await emitChatEvent({
       type: "message.deleted",
       conversationId: message.conversationId,
       workflowId: message.automationVersionId,
       tenantId: message.tenantId,
-      data: { messageId: params.messageId },
+      workspaceId: message.tenantId,
+      messageId: params.messageId,
+      actor: { kind: params.session.kind, userId: params.session.userId },
+      data: { messageId: params.messageId, deletedAt: deletedAt.toISOString() },
     });
   }
 }
@@ -356,6 +375,7 @@ export async function markConversationRead(params: {
   conversationId: string;
   userId: string;
   lastReadMessageId: string;
+  actorKind: "tenant" | "staff";
 }): Promise<WorkflowReadReceipt> {
   const [receipt] = await db
     .insert(workflowReadReceipts)
@@ -388,11 +408,14 @@ export async function markConversationRead(params: {
     });
 
     if (message) {
-      emitChatEvent({
-        type: "readreceipt.updated",
+      await emitChatEvent({
+        type: "read.updated",
         conversationId: params.conversationId,
         workflowId: message.automationVersionId,
         tenantId: message.tenantId,
+        workspaceId: message.tenantId,
+        messageId: message.id,
+        actor: { kind: params.actorKind, userId: params.userId },
         data: receipt,
       });
     }

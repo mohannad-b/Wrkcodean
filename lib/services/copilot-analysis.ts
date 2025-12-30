@@ -5,7 +5,7 @@ import {
   COPILOT_ANALYSIS_VERSION,
   type CopilotAnalysisState,
   cloneCopilotAnalysisState,
-} from "@/lib/blueprint/copilot-analysis";
+} from "@/lib/workflows/copilot-analysis";
 
 type AccessParams = {
   tenantId: string;

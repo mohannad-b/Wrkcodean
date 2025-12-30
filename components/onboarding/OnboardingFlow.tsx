@@ -30,7 +30,7 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
 
           {step > 1 && step < 4 && (
             <div className="flex items-center gap-2 text-xs font-medium text-gray-500">
-              <span className={step === 2 ? "text-[#E43632] font-bold" : ""}>Blueprint</span>
+              <span className={step === 2 ? "text-[#E43632] font-bold" : ""}>Workflow</span>
               <span className="text-gray-300">/</span>
               <span className={step === 3 ? "text-[#E43632] font-bold" : ""}>Review</span>
             </div>

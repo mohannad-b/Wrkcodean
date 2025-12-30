@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { date, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uuid, uniqueIndex, index } from "drizzle-orm/pg-core";
-import type { Workflow } from "@/lib/blueprint/types";
-import type { CopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
+import type { Workflow } from "@/lib/workflows/types";
+import type { CopilotAnalysisState } from "@/lib/workflows/copilot-analysis";
 
 const membershipRoleEnum = pgEnum("membership_role", ["owner", "admin", "editor", "viewer", "billing"]);
 const membershipStatusEnum = pgEnum("membership_status", ["active", "invited", "removed"]);

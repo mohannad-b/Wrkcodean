@@ -7,6 +7,7 @@ import { fromDbAutomationStatus } from "@/lib/automations/status";
 import { fromDbQuoteStatus } from "@/lib/quotes/status";
 import { logAudit } from "@/lib/audit/log";
 import { createCopilotMessage } from "@/lib/services/copilot-messages";
+import { sendDevAgentLog } from "@/lib/dev/agent-log";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY ?? "",
@@ -115,10 +116,18 @@ async function parsePayload(request: Request): Promise<CreateAutomationPayload> 
 }
 
 export async function GET() {
-  // #region agent log
   const requestStart = Date.now();
-  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/automations/route.ts:117',message:'GET /api/automations entry',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-  // #endregion
+    sendDevAgentLog(
+      {
+        location: "app/api/automations/route.ts:117",
+        message: "GET /api/automations entry",
+        data: {},
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "C",
+      },
+      { dedupeKey: "api-automations-entry", throttleMs: 2000, sampleRate: 0.2 }
+    );
   try {
     const session = await requireTenantSession();
 
@@ -127,9 +136,17 @@ export async function GET() {
     }
 
     const rows = await listAutomationsForTenant(session.tenantId);
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/automations/route.ts:125',message:'listAutomationsForTenant completed in route',data:{rowsCount:rows.length,totalTimeMs:Date.now()-requestStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
+    sendDevAgentLog(
+      {
+        location: "app/api/automations/route.ts:125",
+        message: "listAutomationsForTenant completed in route",
+        data: { rowsCount: rows.length, totalTimeMs: Date.now() - requestStart },
+        sessionId: "debug-session",
+        runId: "run1",
+        hypothesisId: "C",
+      },
+      { dedupeKey: "api-automations-complete", throttleMs: 2000, sampleRate: 0.2 }
+    );
 
     return NextResponse.json({
       automations: rows.map((automation) => ({

@@ -76,8 +76,8 @@ export const HowItWorks = () => {
 };
 
 // --- SECTION 3: WORKFLOW GALLERY ---
-export const BlueprintGallery = () => {
-   const blueprints = [
+export const WorkflowGallery = () => {
+   const workflows = [
      { 
         title: "Lead to Cash", 
         desc: "Qualify leads, create deals, send contracts, and issue invoices automatically.", 
@@ -128,7 +128,7 @@ export const BlueprintGallery = () => {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-             {blueprints.map((bp, i) => (
+             {workflows.map((bp, i) => (
                <div key={i} className="bg-white rounded-2xl p-2 border border-gray-200 shadow-sm hover:shadow-md transition-all group cursor-pointer">
                   {/* Real Image Preview */}
                   <div className="bg-gray-900 rounded-xl aspect-video w-full mb-4 relative overflow-hidden border border-gray-100">

@@ -238,7 +238,7 @@ export function OnboardingIntake({ onNext }: { onNext: () => void }) {
         </div>
       </div>
 
-      {/* BLUEPRINT CONFIRMATION BANNER */}
+      {/* WORKFLOW CONFIRMATION BANNER */}
       {status === "complete" && (
         <div className="bg-[#0A0A0A] text-white shrink-0 overflow-hidden z-50 animate-in slide-in-from-top-10 fade-in duration-500">
           <div className="px-6 py-3 flex items-center justify-between">
@@ -247,7 +247,7 @@ export function OnboardingIntake({ onNext }: { onNext: () => void }) {
                 <CheckCircle2 size={18} />
               </div>
               <div>
-                <p className="font-bold text-sm">Blueprint Complete</p>
+                <p className="font-bold text-sm">Workflow Complete</p>
                 <p className="text-xs text-gray-400">
                   Review the flow below and proceed when ready.
                 </p>
@@ -357,7 +357,7 @@ export function OnboardingIntake({ onNext }: { onNext: () => void }) {
                 <div>
                   <h2 className="text-xl font-bold text-[#0A0A0A]">Waiting for requirements...</h2>
                   <p className="text-gray-500 mt-2">
-                    Describe your process in the chat to generate your automation blueprint.
+                    Describe your process in the chat to generate your automation workflow.
                   </p>
                 </div>
 

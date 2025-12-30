@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { fetchTenantMembershipsOnce } from "@/lib/workspaces/client-cache";
 
 type Membership = {
   tenantId: string;
@@ -31,11 +32,9 @@ export function useActiveWorkspace(): ActiveWorkspaceState {
       setLoading(true);
       setError(null);
       try {
-        const [membersRes] = await Promise.all([fetch("/api/me/tenants", { cache: "no-store" })]);
-        if (!membersRes.ok) throw new Error("Failed to load memberships");
-        const membersJson = await membersRes.json();
+        const membersJson = await fetchTenantMembershipsOnce();
         if (cancelled) return;
-        setMemberships(membersJson.tenants ?? []);
+        setMemberships(membersJson ?? []);
         const cookieMatch = document.cookie
           .split(";")
           .map((c) => c.trim())

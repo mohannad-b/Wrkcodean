@@ -30,11 +30,12 @@ import { toDashboardAutomation, type ApiAutomationSummary } from "@/lib/dashboar
 import type { DashboardAutomation } from "@/lib/mock-dashboard";
 import { buildKpiStats, type KpiStat, type VersionMetric } from "@/lib/metrics/kpi";
 import { getStatusLabel, KANBAN_COLUMNS, resolveStatus } from "@/lib/submissions/lifecycle";
+import { fetchCurrentWorkspaceOnce, fetchTenantMembershipsOnce } from "@/lib/workspaces/client-cache";
 
 type TenantMembership = {
   tenantId: string;
   tenantName: string;
-  tenantSlug: string;
+  tenantSlug?: string;
   role: string;
 };
 
@@ -82,19 +83,10 @@ export default function DashboardPage() {
     const loadTenants = async () => {
       setLoadingTenants(true);
       try {
-        const [tenantsResponse, currentTenantResponse] = await Promise.all([
-          fetch("/api/me/tenants", { cache: "no-store" }),
-          fetch("/api/workspaces", { cache: "no-store" }),
-        ]);
-
-        if (tenantsResponse.ok) {
-          const tenantsData = (await tenantsResponse.json()) as { tenants: TenantMembership[] };
-          setTenantMemberships(tenantsData.tenants);
-        }
-
-        if (currentTenantResponse.ok) {
-          const tenantData = (await currentTenantResponse.json()) as { tenant: { id: string; name: string } };
-          setCurrentTenant({ id: tenantData.tenant.id, name: tenantData.tenant.name });
+        const [tenants, workspace] = await Promise.all([fetchTenantMembershipsOnce(), fetchCurrentWorkspaceOnce()]);
+        setTenantMemberships(tenants);
+        if (workspace) {
+          setCurrentTenant({ id: workspace.id, name: workspace.name });
         }
       } catch (err) {
         console.error("[dashboard] failed to load tenant info", err);

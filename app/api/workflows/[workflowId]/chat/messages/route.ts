@@ -6,10 +6,11 @@ import {
   getOrCreateConversation,
   listMessages,
   createMessage,
+  getUnreadCount,
 } from "@/lib/services/workflow-chat";
 import { logAudit } from "@/lib/audit/log";
 import { db } from "@/db";
-import { automationVersions, users } from "@/db/schema";
+import { automationVersions, users, workflowReadReceipts } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 
 const CreateMessageSchema = z.object({
@@ -67,14 +68,29 @@ export async function GET(
     const before = url.searchParams.get("before") ?? undefined;
 
     // Use workflow's tenantId for message queries
-    const messages = await listMessages({
-      conversationId: conversation.id,
-      tenantId: workflow.tenantId,
-      limit,
-      before,
-    });
+    const [messages, receipt, unreadCount] = await Promise.all([
+      listMessages({
+        conversationId: conversation.id,
+        tenantId: workflow.tenantId,
+        limit,
+        before,
+        includeDeleted: true,
+      }),
+      db.query.workflowReadReceipts.findFirst({
+        where: and(
+          eq(workflowReadReceipts.conversationId, conversation.id),
+          eq(workflowReadReceipts.userId, session.userId)
+        ),
+      }),
+      getUnreadCount({ conversationId: conversation.id, userId: session.userId }),
+    ]);
 
-    return NextResponse.json({ messages, conversationId: conversation.id });
+    return NextResponse.json({
+      messages,
+      conversationId: conversation.id,
+      unreadCount,
+      lastReadMessageId: receipt?.lastReadMessageId ?? null,
+    });
   } catch (error) {
     return handleApiError(error);
   }

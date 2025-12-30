@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 import { ActivityTimeline } from "@/components/automations/ActivityTimeline";
 
 interface OverviewTabProps {
-  onEditBlueprint?: () => void;
+  onEditWorkflow?: () => void;
   onInvite?: () => void;
   onRunTest?: () => void;
   automationName?: string;
@@ -34,7 +34,7 @@ interface OverviewTabProps {
 }
 
 export function OverviewTab({
-  onEditBlueprint,
+  onEditWorkflow,
   onInvite,
   onRunTest,
   automationName = "Finance Reconciliation",
@@ -94,7 +94,7 @@ export function OverviewTab({
             Run Test
           </Button>
           <Button
-            onClick={onEditBlueprint}
+            onClick={onEditWorkflow}
             className="h-9 text-xs font-bold bg-[#0A0A0A] hover:bg-gray-900 text-white shadow-lg shadow-gray-900/10 transition-all hover:-translate-y-0.5"
           >
             <Edit3 size={14} className="mr-2" />

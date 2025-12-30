@@ -9,9 +9,13 @@ vi.mock("@/lib/api/context", () => ({
   requireTenantSession: requireTenantSessionMock,
 }));
 
-vi.mock("@/lib/auth/rbac", () => ({
-  authorize: authorizeMock,
-}));
+vi.mock("@/lib/auth/rbac", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/auth/rbac")>("@/lib/auth/rbac");
+  return {
+    ...actual,
+    authorize: authorizeMock,
+  };
+});
 
 describe("wrк-admin layout auth", () => {
   beforeEach(() => {

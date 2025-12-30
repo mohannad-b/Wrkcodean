@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { createEmptyCopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
+import { createEmptyCopilotAnalysisState } from "@/lib/workflows/copilot-analysis";
 
 const canMock = vi.fn();
 const requireTenantSessionMock = vi.fn();

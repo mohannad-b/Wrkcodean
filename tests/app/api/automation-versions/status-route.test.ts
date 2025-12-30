@@ -10,9 +10,13 @@ vi.mock("@/lib/auth/session", () => ({
   getTenantSession: requireTenantSessionMock,
 }));
 
-vi.mock("@/lib/auth/rbac", () => ({
-  can: canMock,
-}));
+vi.mock("@/lib/auth/rbac", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/auth/rbac")>("@/lib/auth/rbac");
+  return {
+    ...actual,
+    can: canMock,
+  };
+});
 
 vi.mock("@/lib/services/automations", () => ({
   updateAutomationVersionStatus: updateStatusMock,

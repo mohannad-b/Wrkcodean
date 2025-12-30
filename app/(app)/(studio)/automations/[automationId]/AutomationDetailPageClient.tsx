@@ -42,13 +42,13 @@ import { ActivityTab } from "@/components/automations/ActivityTab";
 import { BuildStatusTab } from "@/components/automations/BuildStatusTab";
 import { SettingsTab } from "@/components/automations/SettingsTab";
 import { ChatTab } from "@/components/automations/ChatTab";
-import { createEmptyBlueprint } from "@/lib/blueprint/factory";
-import type { Blueprint, BlueprintSectionKey, BlueprintStep } from "@/lib/blueprint/types";
-import { BLUEPRINT_SECTION_TITLES } from "@/lib/blueprint/types";
-import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
-import { isBlueprintEffectivelyEmpty } from "@/lib/blueprint/utils";
-import { blueprintToNodes, blueprintToEdges, addConnection, removeConnection, reconnectEdge } from "@/lib/blueprint/canvas-utils";
-import { applyBlueprintUpdates, type BlueprintUpdates as CopilotBlueprintUpdates } from "@/lib/blueprint/ai-updates";
+import { createEmptyWorkflowSpec } from "@/lib/workflows/factory";
+import type { Workflow, WorkflowSectionKey, WorkflowStep } from "@/lib/workflows/types";
+import { WORKFLOW_SECTION_TITLES } from "@/lib/workflows/types";
+import { getWorkflowCompletionState } from "@/lib/workflows/completion";
+import { isWorkflowEffectivelyEmpty } from "@/lib/workflows/utils";
+import { workflowToNodes, workflowToEdges, addConnection, removeConnection, reconnectEdge } from "@/lib/workflows/canvas-utils";
+import { applyWorkflowUpdates, type WorkflowUpdates as CopilotWorkflowUpdates } from "@/lib/workflows/ai-updates";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
@@ -62,6 +62,7 @@ import { ACTIVE_LIFECYCLE_ORDER, resolveStatus } from "@/lib/submissions/lifecyc
 import { TaskDrawer } from "@/components/automations/TaskDrawer";
 import { NeedsAttentionCard } from "@/components/automations/NeedsAttentionCard";
 import { getAttentionTasks, type AutomationTask } from "@/lib/automations/tasks";
+import { sendDevAgentLog } from "@/lib/dev/agent-log";
 import {
   Dialog,
   DialogContent,
@@ -113,7 +114,7 @@ type SuggestionStreamEvent =
 
 function formatSanitizationSummary(summary?: SanitizationSummaryPayload | null): string {
   if (!summary) {
-    return "Blueprint updated.";
+    return "Workflow updated.";
   }
   const parts: string[] = [];
   if (summary.reparentedBranches) {
@@ -131,7 +132,7 @@ function formatSanitizationSummary(summary?: SanitizationSummaryPayload | null):
   if (parts.length === 0 && summary.removedDuplicateEdges) {
     parts.push(`${summary.removedDuplicateEdges} duplicate edge${summary.removedDuplicateEdges === 1 ? "" : "s"} removed`);
   }
-  return parts.length > 0 ? `Blueprint updated (${parts.join(", ")}).` : "Blueprint updated.";
+  return parts.length > 0 ? `Workflow updated (${parts.join(", ")}).` : "Workflow updated.";
 }
 
 type AutomationVersion = {
@@ -140,7 +141,7 @@ type AutomationVersion = {
   status: AutomationLifecycleStatus;
   intakeNotes: string | null;
   requirementsText: string | null;
-  workflowJson: Blueprint | null;
+  workflowJson: Workflow | null;
   summary: string | null;
   businessOwner?: string | null;
   tags?: string[];
@@ -190,14 +191,14 @@ const formatDateTime = (value?: string | null) => {
 
 type LifecycleStage = (typeof ACTIVE_LIFECYCLE_ORDER)[number];
 
-type BlueprintChecklistItem = {
+type WorkflowChecklistItem = {
   id: string;
   label: string;
-  sectionKey: BlueprintSectionKey | null;
+  sectionKey: WorkflowSectionKey | null;
   completed: boolean;
 };
 
-const cloneBlueprint = (blueprint: Blueprint | null) => (blueprint ? (JSON.parse(JSON.stringify(blueprint)) as Blueprint) : null);
+const cloneWorkflow = (workflow: Workflow | null) => (workflow ? (JSON.parse(JSON.stringify(workflow)) as Workflow) : null);
 
 const isAtOrBeyondBuild = (status: AutomationLifecycleStatus | null, target: LifecycleStage): boolean => {
   const resolved = resolveStatus(status ?? "");
@@ -229,7 +230,7 @@ type ActivityApiItem = {
 };
 
 const RECENT_ACTIVITY_ICON_MAP: Record<string, { icon: typeof Edit3; bg: string; color: string }> = {
-  blueprint: { icon: FileText, bg: "bg-pink-50", color: "text-pink-600" },
+  workflow: { icon: FileText, bg: "bg-pink-50", color: "text-pink-600" },
   quote: { icon: DollarSign, bg: "bg-amber-50", color: "text-amber-600" },
   task: { icon: CheckSquare, bg: "bg-blue-50", color: "text-blue-600" },
   build: { icon: Play, bg: "bg-emerald-50", color: "text-emerald-600" },
@@ -263,15 +264,15 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [automation, setAutomation] = useState<AutomationDetail | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
-  const [blueprint, setBlueprint] = useState<Blueprint | null>(null);
+  const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [versionTasks, setVersionTasks] = useState<VersionTask[]>([]);
   const [recentActivityEntries, setRecentActivityEntries] = useState<ActivityEntry[]>([]);
   const [recentActivityLoading, setRecentActivityLoading] = useState(false);
   const [recentActivityError, setRecentActivityError] = useState<string | null>(null);
   const [showProceedCelebration, setShowProceedCelebration] = useState(false);
   const [showPricingModal, setShowPricingModal] = useState(false);
-  const [blueprintError, setBlueprintError] = useState<string | null>(null);
-  const [isBlueprintDirty, setBlueprintDirty] = useState(false);
+  const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [isWorkflowDirty, setWorkflowDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [creatingVersion, setCreatingVersion] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -311,24 +312,24 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [hasSelectedStep, setHasSelectedStep] = useState(false);
   const [showStepHelper, setShowStepHelper] = useState(false);
   const [proceedingToBuild, setProceedingToBuild] = useState(false);
-  const [isSynthesizingBlueprint, setIsSynthesizingBlueprint] = useState(false);
+  const [isSynthesizingWorkflow, setIsSynthesizingWorkflow] = useState(false);
   const [isOptimizingFlow, setIsOptimizingFlow] = useState(false);
   const [isRequestingSuggestions, setIsRequestingSuggestions] = useState(false);
   const [suggestionStatus, setSuggestionStatus] = useState<string | null>(null);
   const [isSwitchingVersion, setIsSwitchingVersion] = useState(false);
-  const completionRef = useRef<ReturnType<typeof getBlueprintCompletionState> | null>(null);
+  const completionRef = useRef<ReturnType<typeof getWorkflowCompletionState> | null>(null);
   const preserveSelectionRef = useRef(false);
   const synthesisTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const confirmDiscardBlueprintChanges = useCallback(() => {
-    if (!isBlueprintDirty) {
+  const confirmDiscardWorkflowChanges = useCallback(() => {
+    if (!isWorkflowDirty) {
       return true;
     }
-    return window.confirm("You have unsaved blueprint changes. Discard them?");
-  }, [isBlueprintDirty]);
+    return window.confirm("You have unsaved workflow changes. Discard them?");
+  }, [isWorkflowDirty]);
 
   useEffect(() => {
-    if (!isBlueprintDirty) {
+    if (!isWorkflowDirty) {
       return undefined;
     }
     const handler = (event: BeforeUnloadEvent) => {
@@ -337,7 +338,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
-  }, [isBlueprintDirty]);
+  }, [isWorkflowDirty]);
 
   const fetchAutomation = useCallback(
     async (options?: { preserveSelection?: boolean }) => {
@@ -382,15 +383,51 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         const version = data.automation.versions.find((v) => v.id === nextSelected);
         setNotes(version?.intakeNotes ?? "");
         // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:398',message:'Blueprint loaded from API',data:{versionId:version?.id,hasWorkflowJson:!!version?.workflowJson,stepCount:version?.workflowJson?.steps?.length??0,steps:version?.workflowJson?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber,parentStepId:s.parentStepId,nextStepIds:s.nextStepIds}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'F'})}).catch(()=>{});
+        sendDevAgentLog({
+          location: "page.tsx:398",
+          message: "Workflow loaded from API",
+          data: {
+            versionId: version?.id,
+            hasWorkflowJson: !!version?.workflowJson,
+            stepCount: version?.workflowJson?.steps?.length ?? 0,
+            steps:
+              version?.workflowJson?.steps?.map((s) => ({
+                id: s.id,
+                name: s.name,
+                stepNumber: s.stepNumber,
+                parentStepId: s.parentStepId,
+                nextStepIds: s.nextStepIds,
+              })) ?? [],
+          },
+          timestamp: Date.now(),
+          sessionId: "debug-session",
+          runId: "run2",
+          hypothesisId: "F",
+        });
         // #endregion
-        const blueprint = version?.workflowJson ? cloneBlueprint(version.workflowJson) : createEmptyBlueprint();
+        const workflow = version?.workflowJson ? cloneWorkflow(version.workflowJson) : createEmptyWorkflowSpec();
         // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:400',message:'Blueprint after clone',data:{stepCount:blueprint?.steps?.length??0,steps:blueprint?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'F'})}).catch(()=>{});
+        sendDevAgentLog({
+          location: "page.tsx:400",
+          message: "Workflow after clone",
+          data: {
+            stepCount: workflow?.steps?.length ?? 0,
+            steps:
+              workflow?.steps?.map((s) => ({
+                id: s.id,
+                name: s.name,
+                stepNumber: s.stepNumber,
+              })) ?? [],
+          },
+          timestamp: Date.now(),
+          sessionId: "debug-session",
+          runId: "run2",
+          hypothesisId: "F",
+        });
         // #endregion
-        setBlueprint(blueprint);
-        setBlueprintError(null);
-        setBlueprintDirty(false);
+        setWorkflow(workflow);
+        setWorkflowError(null);
+        setWorkflowDirty(false);
         if (!shouldPreserveSelection) {
           setSelectedStepId(null);
           setHasSelectedStep(false);
@@ -501,22 +538,58 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     if (selectedVersion) {
       setNotes(selectedVersion.intakeNotes ?? "");
       // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:510',message:'Selected version workflowJson',data:{versionId:selectedVersion.id,hasWorkflowJson:!!selectedVersion.workflowJson,stepCount:selectedVersion.workflowJson?.steps?.length??0,steps:selectedVersion.workflowJson?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber,parentStepId:s.parentStepId,nextStepIds:s.nextStepIds}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'F'})}).catch(()=>{});
+      sendDevAgentLog({
+        location: "page.tsx:510",
+        message: "Selected version workflowJson",
+        data: {
+          versionId: selectedVersion.id,
+          hasWorkflowJson: !!selectedVersion.workflowJson,
+          stepCount: selectedVersion.workflowJson?.steps?.length ?? 0,
+          steps:
+            selectedVersion.workflowJson?.steps?.map((s) => ({
+              id: s.id,
+              name: s.name,
+              stepNumber: s.stepNumber,
+              parentStepId: s.parentStepId,
+              nextStepIds: s.nextStepIds,
+            })) ?? [],
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run2",
+        hypothesisId: "F",
+      });
       // #endregion
-      const nextBlueprint = selectedVersion.workflowJson ? cloneBlueprint(selectedVersion.workflowJson) : createEmptyBlueprint();
-      const safeBlueprint = nextBlueprint ?? createEmptyBlueprint();
+      const nextWorkflow = selectedVersion.workflowJson ? cloneWorkflow(selectedVersion.workflowJson) : createEmptyWorkflowSpec();
+      const safeWorkflow = nextWorkflow ?? createEmptyWorkflowSpec();
       // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:514',message:'Blueprint after clone in useEffect',data:{stepCount:safeBlueprint?.steps?.length??0,steps:safeBlueprint?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'F'})}).catch(()=>{});
+      sendDevAgentLog({
+        location: "page.tsx:514",
+        message: "Workflow after clone in useEffect",
+        data: {
+          stepCount: safeWorkflow?.steps?.length ?? 0,
+          steps:
+            safeWorkflow?.steps?.map((s) => ({
+              id: s.id,
+              name: s.name,
+              stepNumber: s.stepNumber,
+            })) ?? [],
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "run2",
+        hypothesisId: "F",
+      });
       // #endregion
-      setBlueprint(safeBlueprint);
-      setBlueprintError(null);
-      setBlueprintDirty(false);
+      setWorkflow(safeWorkflow);
+      setWorkflowError(null);
+      setWorkflowDirty(false);
 
       const shouldPreserveSelection = preserveSelectionRef.current;
       if (shouldPreserveSelection) {
         preserveSelectionRef.current = false;
         if (selectedStepId) {
-          const exists = safeBlueprint.steps.some((step) => step.id === selectedStepId);
+          const exists = safeWorkflow.steps.some((step) => step.id === selectedStepId);
           if (!exists) {
             setSelectedStepId(null);
             setHasSelectedStep(false);
@@ -559,17 +632,17 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
 
 
   const handleVersionChange = (versionId: string) => {
-    if (!confirmDiscardBlueprintChanges()) {
+    if (!confirmDiscardWorkflowChanges()) {
       return;
     }
     setIsSwitchingVersion(true);
     setSelectedVersionId(versionId);
     const version = automation?.versions.find((v) => v.id === versionId);
     setNotes(version?.intakeNotes ?? "");
-    const nextBlueprint = version?.workflowJson ? cloneBlueprint(version.workflowJson) : createEmptyBlueprint();
-    setBlueprint(nextBlueprint ?? createEmptyBlueprint());
-    setBlueprintDirty(false);
-    setBlueprintError(null);
+    const nextWorkflow = version?.workflowJson ? cloneWorkflow(version.workflowJson) : createEmptyWorkflowSpec();
+    setWorkflow(nextWorkflow ?? createEmptyWorkflowSpec());
+    setWorkflowDirty(false);
+    setWorkflowError(null);
     setSelectedStepId(null);
     setHasSelectedStep(false);
     setShowStepHelper(false);
@@ -614,31 +687,57 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     }
   };
 
-  const handleSaveBlueprint = useCallback(
-    async (overrides?: Partial<Blueprint>, options?: { preserveSelection?: boolean }) => {
-      if (!selectedVersion || !blueprint) {
-        setBlueprintError("Blueprint is not available yet.");
+  const handleSaveWorkflow = useCallback(
+    async (overrides?: Partial<Workflow>, options?: { preserveSelection?: boolean }) => {
+      if (!selectedVersion || !workflow) {
+        setWorkflowError("Workflow is not available yet.");
         return;
       }
-      const payload = { ...blueprint, ...overrides, updatedAt: new Date().toISOString() };
-      const stepCountBeforeSave = blueprint.steps.length;
+      const payload = { ...workflow, ...overrides, updatedAt: new Date().toISOString() };
+      const stepCountBeforeSave = workflow.steps.length;
       const stepCountInPayload = payload.steps.length;
       
       // #region agent log - Track step counts before save
-      fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:639',message:'Frontend blueprint save - before request',data:{versionId:selectedVersion.id,stepCountBeforeSave,stepCountInPayload,stepIds:payload.steps.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+      sendDevAgentLog({
+        location: "page.tsx:639",
+        message: "Frontend workflow save - before request",
+        data: {
+          versionId: selectedVersion.id,
+          stepCountBeforeSave,
+          stepCountInPayload,
+          stepIds: payload.steps.map((s) => ({ id: s.id, name: s.name, stepNumber: s.stepNumber })),
+        },
+        timestamp: Date.now(),
+        sessionId: "debug-session",
+        runId: "save-tracking",
+        hypothesisId: "G",
+      });
       // #endregion
       
       // Safeguard: Warn if steps are missing in payload
       if (stepCountInPayload < stepCountBeforeSave) {
         console.warn(`⚠️ Step count decreased before save: ${stepCountBeforeSave} → ${stepCountInPayload}`);
-        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:644',message:'⚠️ STEP COUNT DECREASED BEFORE SAVE',data:{versionId:selectedVersion.id,stepCountBeforeSave,stepCountInPayload,stepsLost:stepCountBeforeSave-stepCountInPayload},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+        sendDevAgentLog({
+          location: "page.tsx:644",
+          message: "⚠️ STEP COUNT DECREASED BEFORE SAVE",
+          data: {
+            versionId: selectedVersion.id,
+            stepCountBeforeSave,
+            stepCountInPayload,
+            stepsLost: stepCountBeforeSave - stepCountInPayload,
+          },
+          timestamp: Date.now(),
+          sessionId: "debug-session",
+          runId: "save-tracking",
+          hypothesisId: "G",
+        });
       }
       
-      console.log("💾 Saving blueprint:", {
+      console.log("💾 Saving workflow:", {
         versionId: selectedVersion.id,
         stepCount: payload.steps.length,
       });
-      setBlueprintError(null);
+      setWorkflowError(null);
       try {
         const response = await fetch(`/api/automation-versions/${selectedVersion.id}`, {
           method: "PATCH",
@@ -647,39 +746,66 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         });
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
-          throw new Error(data.error ?? "Failed to save blueprint");
+          throw new Error(data.error ?? "Failed to save workflow");
         }
-        const cloned = cloneBlueprint(payload);
+        const cloned = cloneWorkflow(payload);
         const stepCountAfterSave = cloned?.steps?.length ?? 0;
         
         // #region agent log - Track step counts after save
-        fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:655',message:'Frontend blueprint save - after response',data:{versionId:selectedVersion.id,stepCountBeforeSave,stepCountInPayload,stepCountAfterSave,stepIds:cloned?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+        sendDevAgentLog({
+          location: "page.tsx:655",
+          message: "Frontend workflow save - after response",
+          data: {
+            versionId: selectedVersion.id,
+            stepCountBeforeSave,
+            stepCountInPayload,
+            stepCountAfterSave,
+            stepIds: cloned?.steps?.map((s) => ({ id: s.id, name: s.name, stepNumber: s.stepNumber })) ?? [],
+          },
+          timestamp: Date.now(),
+          sessionId: "debug-session",
+          runId: "save-tracking",
+          hypothesisId: "G",
+        });
         // #endregion
         
         // Safeguard: Verify steps were preserved
         if (stepCountAfterSave < stepCountBeforeSave) {
           console.error(`⚠️ Step count decreased after save: ${stepCountBeforeSave} → ${stepCountAfterSave}`);
-          fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:660',message:'⚠️ STEP COUNT DECREASED AFTER SAVE',data:{versionId:selectedVersion.id,stepCountBeforeSave,stepCountAfterSave,stepsLost:stepCountBeforeSave-stepCountAfterSave},timestamp:Date.now(),sessionId:'debug-session',runId:'save-tracking',hypothesisId:'G'})}).catch(()=>{});
+          sendDevAgentLog({
+            location: "page.tsx:660",
+            message: "⚠️ STEP COUNT DECREASED AFTER SAVE",
+            data: {
+              versionId: selectedVersion.id,
+              stepCountBeforeSave,
+              stepCountAfterSave,
+              stepsLost: stepCountBeforeSave - stepCountAfterSave,
+            },
+            timestamp: Date.now(),
+            sessionId: "debug-session",
+            runId: "save-tracking",
+            hypothesisId: "G",
+          });
           toast({ 
             title: "Warning: Steps may have been lost", 
             description: `Step count changed from ${stepCountBeforeSave} to ${stepCountAfterSave}. Please verify your workflow.`, 
             variant: "warning" 
           });
         } else {
-          toast({ title: "Blueprint saved", description: "Metadata updated successfully.", variant: "success" });
+          toast({ title: "Workflow saved", description: "Metadata updated successfully.", variant: "success" });
         }
         
-        setBlueprint(cloned);
-        setBlueprintDirty(false);
+        setWorkflow(cloned);
+        setWorkflowDirty(false);
         await fetchAutomation({ preserveSelection: options?.preserveSelection });
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Unable to save blueprint";
-        setBlueprintError(message);
-        toast({ title: "Unable to save blueprint", description: message, variant: "error" });
+        const message = err instanceof Error ? err.message : "Unable to save workflow";
+        setWorkflowError(message);
+        toast({ title: "Unable to save workflow", description: message, variant: "error" });
       } finally {
       }
     },
-    [blueprint, fetchAutomation, selectedVersion, toast]
+    [workflow, fetchAutomation, selectedVersion, toast]
   );
 
   const refreshAutomationPreservingSelection = useCallback(async () => {
@@ -779,10 +905,10 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [automation?.versions, fetchAutomation, toast]
   );
 
-  const applyBlueprintUpdate = useCallback(
-    (updater: (current: Blueprint) => Blueprint) => {
+  const applyWorkflowUpdate = useCallback(
+    (updater: (current: Workflow) => Workflow) => {
       let didUpdate = false;
-      setBlueprint((current) => {
+      setWorkflow((current) => {
         if (!current) {
           return current;
         }
@@ -794,35 +920,35 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         return current;
       });
       if (didUpdate) {
-        setBlueprintDirty(true);
-        setBlueprintError(null);
+        setWorkflowDirty(true);
+        setWorkflowError(null);
       }
     },
-    [setBlueprintDirty, setBlueprintError]
+    [setWorkflowDirty, setWorkflowError]
   );
 
-  const handleBlueprintAIUpdates = useCallback(
-    (updates: CopilotBlueprintUpdates | Blueprint) => {
-      setIsSynthesizingBlueprint(true);
+  const handleWorkflowAIUpdates = useCallback(
+    (updates: CopilotWorkflowUpdates | Workflow) => {
+      setIsSynthesizingWorkflow(true);
       if (synthesisTimeoutRef.current) {
         clearTimeout(synthesisTimeoutRef.current);
       }
       synthesisTimeoutRef.current = setTimeout(() => {
-        setIsSynthesizingBlueprint(false);
+        setIsSynthesizingWorkflow(false);
       }, 1500);
-      applyBlueprintUpdate((current) => {
+      applyWorkflowUpdate((current) => {
         if (!current) return current;
-        const maybeBlueprint = updates as Blueprint;
-        if (Array.isArray(maybeBlueprint?.steps) && Array.isArray((maybeBlueprint as any)?.sections)) {
-          setBlueprint(maybeBlueprint);
-          setBlueprintDirty(true);
-          setBlueprintError(null);
-          return maybeBlueprint;
+        const maybeWorkflow = updates as Workflow;
+        if (Array.isArray(maybeWorkflow?.steps) && Array.isArray((maybeWorkflow as any)?.sections)) {
+          setWorkflow(maybeWorkflow);
+          setWorkflowDirty(true);
+          setWorkflowError(null);
+          return maybeWorkflow;
         }
-        return applyBlueprintUpdates(current, updates as CopilotBlueprintUpdates);
+        return applyWorkflowUpdates(current, updates as CopilotWorkflowUpdates);
       });
     },
-    [applyBlueprintUpdate]
+    [applyWorkflowUpdate]
   );
 
   useEffect(() => {
@@ -834,18 +960,18 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   }, []);
 
   const handleStepChange = useCallback(
-    (stepId: string, patch: Partial<BlueprintStep>) => {
-      applyBlueprintUpdate((current) => ({
+    (stepId: string, patch: Partial<WorkflowStep>) => {
+      applyWorkflowUpdate((current) => ({
         ...current,
         steps: current.steps.map((step) => (step.id === stepId ? { ...step, ...patch } : step)),
       }));
     },
-    [applyBlueprintUpdate]
+    [applyWorkflowUpdate]
   );
 
   const handleDeleteStep = useCallback(
     (stepId: string) => {
-      applyBlueprintUpdate((current) => ({
+      applyWorkflowUpdate((current) => ({
         ...current,
         steps: current.steps
           .filter((step) => step.id !== stepId)
@@ -860,7 +986,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         setShowStepHelper(true);
       }
     },
-    [applyBlueprintUpdate, selectedStepId]
+    [applyWorkflowUpdate, selectedStepId]
   );
 
   const handleConnectNodes = useCallback(
@@ -868,9 +994,9 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       if (!connection.source || !connection.target || connection.source === connection.target) {
         return;
       }
-      applyBlueprintUpdate((current) => addConnection(current, connection));
+      applyWorkflowUpdate((current) => addConnection(current, connection));
     },
-    [applyBlueprintUpdate]
+    [applyWorkflowUpdate]
   );
 
   const handleNodesChange = useCallback(
@@ -881,7 +1007,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       ) as Array<NodeChange & { type: "position"; position: { x: number; y: number } }>;
       
       if (positionChanges.length > 0) {
-        applyBlueprintUpdate((current) => {
+        applyWorkflowUpdate((current) => {
           const nodePositions = { ...(current.metadata?.nodePositions ?? {}) };
           positionChanges.forEach((change) => {
             if (change.id && change.position) {
@@ -902,7 +1028,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       // Handle node removal
       const removeChanges = changes.filter((change) => change.type === "remove");
       if (removeChanges.length > 0) {
-        applyBlueprintUpdate((current) => {
+        applyWorkflowUpdate((current) => {
           const removedIds = new Set(
             removeChanges
               .map((change) => (change.type === "remove" ? change.id : null))
@@ -926,7 +1052,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         });
       }
     },
-    [applyBlueprintUpdate]
+    [applyWorkflowUpdate]
   );
 
   const handleEdgesChange = useCallback(
@@ -935,7 +1061,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       if (removeChanges.length === 0) {
         return;
       }
-      applyBlueprintUpdate((current) => {
+      applyWorkflowUpdate((current) => {
         let updated = current;
         for (const change of removeChanges) {
           updated = removeConnection(updated, change.id);
@@ -943,7 +1069,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         return updated;
       });
     },
-    [applyBlueprintUpdate]
+    [applyWorkflowUpdate]
   );
 
   const handleEdgeUpdate = useCallback(
@@ -951,9 +1077,9 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       if (!oldEdge.id || !newConnection.source || !newConnection.target) {
         return;
       }
-      applyBlueprintUpdate((current) => reconnectEdge(current, oldEdge.id, newConnection));
+      applyWorkflowUpdate((current) => reconnectEdge(current, oldEdge.id, newConnection));
     },
-    [applyBlueprintUpdate]
+    [applyWorkflowUpdate]
   );
 
   const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
@@ -997,8 +1123,8 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       return;
     }
     setIsRequestingSuggestions(true);
-    setIsSynthesizingBlueprint(true);
-    setSuggestionStatus("Evaluating blueprint…");
+    setIsSynthesizingWorkflow(true);
+    setSuggestionStatus("Evaluating workflow…");
     const decoder = new TextDecoder();
     let telemetrySummary: SanitizationSummaryPayload | null = null;
 
@@ -1030,7 +1156,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           }
           const event = JSON.parse(chunk.slice(5)) as SuggestionStreamEvent;
           if (event.status === "thinking") {
-            setSuggestionStatus("Evaluating blueprint…");
+            setSuggestionStatus("Evaluating workflow…");
           } else if (event.status === "message") {
             setSuggestionStatus(event.content);
           } else if (event.status === "complete") {
@@ -1058,17 +1184,17 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     } finally {
       setSuggestionStatus(null);
       setIsRequestingSuggestions(false);
-      setIsSynthesizingBlueprint(false);
+      setIsSynthesizingWorkflow(false);
     }
   }, [refreshAutomationPreservingSelection, selectedVersion?.id, toast]);
 
   const handleViewTaskStep = useCallback(
     (stepNumber: string) => {
-      if (!blueprint || !stepNumber) {
+      if (!workflow || !stepNumber) {
         return;
       }
       const normalized = stepNumber.trim();
-      const target = blueprint.steps.find((stepEntry) => stepEntry.stepNumber === normalized);
+      const target = workflow.steps.find((stepEntry) => stepEntry.stepNumber === normalized);
       if (!target) {
         return;
       }
@@ -1077,7 +1203,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setHasSelectedStep(true);
       setShowStepHelper(false);
     },
-    [blueprint]
+    [workflow]
   );
 
   const handleViewTask = useCallback((task: VersionTask) => {
@@ -1122,7 +1248,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [toast]
   );
 
-  const completion = useMemo(() => getBlueprintCompletionState(blueprint), [blueprint]);
+  const completion = useMemo(() => getWorkflowCompletionState(workflow), [workflow]);
   const taskLookup = useMemo(() => {
     const map = new Map<string, VersionTask>();
     versionTasks.forEach((task) => map.set(task.id, task));
@@ -1131,24 +1257,55 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
 
   const flowNodes = useMemo<Node[]>(() => {
     // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:1095',message:'flowNodes useMemo entry',data:{hasBlueprint:!!blueprint,stepCount:blueprint?.steps?.length??0,blueprintStatus:blueprint?.status,steps:blueprint?.steps?.map(s=>({id:s.id,name:s.name,stepNumber:s.stepNumber,parentStepId:s.parentStepId,nextStepIds:s.nextStepIds}))??[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'E'})}).catch(()=>{});
+    sendDevAgentLog({
+      location: "page.tsx:1095",
+      message: "flowNodes useMemo entry",
+      data: {
+        hasWorkflow: !!workflow,
+        stepCount: workflow?.steps?.length ?? 0,
+        workflowStatus: workflow?.status,
+        steps:
+          workflow?.steps?.map((s) => ({
+            id: s.id,
+            name: s.name,
+            stepNumber: s.stepNumber,
+            parentStepId: s.parentStepId,
+            nextStepIds: s.nextStepIds,
+          })) ?? [],
+      },
+      timestamp: Date.now(),
+      sessionId: "debug-session",
+      runId: "run2",
+      hypothesisId: "E",
+    });
     // #endregion
-    const nodes = blueprintToNodes(blueprint, taskLookup);
+    const nodes = workflowToNodes(workflow, taskLookup);
     // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'page.tsx:1095',message:'flowNodes useMemo exit',data:{nodeCount:nodes.length,nodes:nodes.map(n=>({id:n.id,position:n.position,title:n.data.title}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'E'})}).catch(()=>{});
+    sendDevAgentLog({
+      location: "page.tsx:1095",
+      message: "flowNodes useMemo exit",
+      data: {
+        nodeCount: nodes.length,
+        nodes: nodes.map((n) => ({ id: n.id, position: n.position, title: n.data.title })),
+      },
+      timestamp: Date.now(),
+      sessionId: "debug-session",
+      runId: "run2",
+      hypothesisId: "E",
+    });
     // #endregion
     return nodes;
-  }, [blueprint, taskLookup]);
+  }, [workflow, taskLookup]);
   
   const handleEdgeDelete = useCallback(
     (edgeId: string) => {
-      applyBlueprintUpdate((current) => removeConnection(current, edgeId));
+      applyWorkflowUpdate((current) => removeConnection(current, edgeId));
     },
-    [applyBlueprintUpdate]
+    [applyWorkflowUpdate]
   );
 
   const flowEdges = useMemo<Edge[]>(() => {
-    const edges = blueprintToEdges(blueprint);
+    const edges = workflowToEdges(workflow);
     // Add onDelete handler to all edges
     return edges.map((edge) => ({
       ...edge,
@@ -1157,20 +1314,20 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         onDelete: handleEdgeDelete,
       },
     }));
-  }, [blueprint, handleEdgeDelete]);
+  }, [workflow, handleEdgeDelete]);
 
   // Debug logging (commented out to reduce console noise)
   // useEffect(() => {
-  //   console.log("🎨 Blueprint updated:", {
-  //     stepCount: blueprint?.steps?.length ?? 0,
-  //     steps: blueprint?.steps?.map((step) => step.name),
+  //   console.log("🎨 Workflow updated:", {
+  //     stepCount: workflow?.steps?.length ?? 0,
+  //     steps: workflow?.steps?.map((step) => step.name),
   //     nodeCount: flowNodes.length,
   //     edgeCount: flowEdges.length,
   //   });
-  // }, [blueprint, flowNodes, flowEdges]);
+  // }, [workflow, flowNodes, flowEdges]);
   const selectedStep = useMemo(
-    () => (blueprint ? blueprint.steps.find((step) => step.id === selectedStepId) ?? null : null),
-    [blueprint, selectedStepId]
+    () => (workflow ? workflow.steps.find((step) => step.id === selectedStepId) ?? null : null),
+    [workflow, selectedStepId]
   );
 
   const inspectorTasks = useMemo(() => {
@@ -1187,19 +1344,19 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         metadata: task.metadata ?? {},
       }));
   }, [selectedStep?.stepNumber, versionTasks]);
-  const blueprintIsEmpty = useMemo(() => isBlueprintEffectivelyEmpty(blueprint), [blueprint]);
+  const workflowIsEmpty = useMemo(() => isWorkflowEffectivelyEmpty(workflow), [workflow]);
   // Simple checkmark-based checklist - only show the 4 required items
   const REQUIRED_CHECKLIST_ITEMS = [
-    { id: "business_requirements", label: "Business Requirements", sectionKey: "business_requirements" as BlueprintSectionKey },
-    { id: "business_objectives", label: "Business Objectives", sectionKey: "business_objectives" as BlueprintSectionKey },
-    { id: "success_criteria", label: "Success Criteria", sectionKey: "success_criteria" as BlueprintSectionKey },
-    { id: "systems", label: "Systems", sectionKey: "systems" as BlueprintSectionKey },
+    { id: "business_requirements", label: "Business Requirements", sectionKey: "business_requirements" as WorkflowSectionKey },
+    { id: "business_objectives", label: "Business Objectives", sectionKey: "business_objectives" as WorkflowSectionKey },
+    { id: "success_criteria", label: "Success Criteria", sectionKey: "success_criteria" as WorkflowSectionKey },
+    { id: "systems", label: "Systems", sectionKey: "systems" as WorkflowSectionKey },
   ] as const;
 
-  const checklistItems = useMemo<BlueprintChecklistItem[]>(() => {
+  const checklistItems = useMemo<WorkflowChecklistItem[]>(() => {
     return REQUIRED_CHECKLIST_ITEMS.map((item) => {
       // Check if section exists and has content
-      const hasContent = item.sectionKey && blueprint?.sections?.some(
+      const hasContent = item.sectionKey && workflow?.sections?.some(
         (s) => s.key === item.sectionKey && s.content?.trim().length > 0
       );
       
@@ -1210,7 +1367,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         completed: hasContent ?? false,
       };
     });
-  }, [blueprint]);
+  }, [workflow]);
   // Check if all 4 required items are completed
   const requiredItemsComplete = useMemo(() => {
     return checklistItems.every((item) => item.completed);
@@ -1296,7 +1453,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     }
   }, [selectedVersion?.id, proceedButtonDisabled, alreadyInBuild, fetchAutomation, toast]);
   useEffect(() => {
-    if (!blueprint) {
+    if (!workflow) {
       return;
     }
     const prev = completionRef.current;
@@ -1305,34 +1462,34 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         const prevSection = prev.sections.find((entry) => entry.key === section.key);
         if (prevSection && !prevSection.complete && section.complete) {
           toast({
-            title: `${BLUEPRINT_SECTION_TITLES[section.key]} captured`,
-            description: "Great progress—keep refining the rest of the blueprint.",
+            title: `${WORKFLOW_SECTION_TITLES[section.key]} captured`,
+            description: "Great progress—keep refining the rest of the workflow.",
             variant: "success",
           });
         }
       });
     }
     completionRef.current = completion;
-  }, [blueprint, completion, toast]);
+  }, [workflow, completion, toast]);
 
   useEffect(() => {
-    if (blueprint && blueprint.steps.length > 0 && !hasSelectedStep) {
+    if (workflow && workflow.steps.length > 0 && !hasSelectedStep) {
       setShowStepHelper(true);
     }
-  }, [blueprint, hasSelectedStep]);
+  }, [workflow, hasSelectedStep]);
 
-  // Auto-save blueprint with 2-second debounce
+  // Auto-save workflow with 2-second debounce
   useEffect(() => {
-    if (!isBlueprintDirty || !blueprint) {
+    if (!isWorkflowDirty || !workflow) {
       return undefined;
     }
 
     const timeoutId = setTimeout(() => {
-      handleSaveBlueprint(undefined, { preserveSelection: true });
+      handleSaveWorkflow(undefined, { preserveSelection: true });
     }, 2000);
 
     return () => clearTimeout(timeoutId);
-  }, [blueprint, isBlueprintDirty, handleSaveBlueprint]);
+  }, [workflow, isWorkflowDirty, handleSaveWorkflow]);
 
   if (loading && !automation) {
     return (
@@ -1384,7 +1541,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const handleRunTest = () => {
     toast({
       title: "Test run queued",
-      description: "Blueprint test harness wiring is on the roadmap.",
+      description: "Workflow test harness wiring is on the roadmap.",
       variant: "success",
     });
   };
@@ -1463,7 +1620,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         updatedAt={selectedVersion?.updatedAt ?? null}
         onInviteTeam={handleInviteTeam}
         onRunTest={handleRunTest}
-        onEditBlueprint={() => setActiveTab("Workflow")}
+        onEditWorkflow={() => setActiveTab("Workflow")}
       />
 
       <OverviewMetrics stats={kpiStats} isLoading={metricsLoading} error={metricsError} />
@@ -1485,9 +1642,9 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     </div>
   );
 
-  const blueprintContent = !blueprint ? (
+  const workflowContent = !workflow ? (
     <div className="p-6">
-      <div className="rounded-lg border border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-500">Loading blueprint…</div>
+      <div className="rounded-lg border border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-500">Loading workflow…</div>
     </div>
   ) : (
     <div className="flex flex-col h-full w-full relative bg-gray-50 min-h-0">
@@ -1596,23 +1753,23 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         </div>
       </div>
 
-      {blueprintError ? (
-        <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{blueprintError}</div>
+      {workflowError ? (
+        <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{workflowError}</div>
       ) : null}
 
       <div className="flex-1 flex relative overflow-hidden bg-gray-50 min-h-0">
         <div className="w-[360px] shrink-0 z-20 h-full bg-[#F9FAFB] border-r border-gray-200 shadow-[4px_0_24px_rgba(0,0,0,0.02)] overflow-hidden">
           <StudioChat
             automationVersionId={selectedVersion?.id ?? null}
-            blueprintEmpty={blueprintIsEmpty}
-            onBlueprintUpdates={handleBlueprintAIUpdates}
-            onBlueprintRefresh={refreshAutomationPreservingSelection}
+            workflowEmpty={workflowIsEmpty}
+            onWorkflowUpdates={handleWorkflowAIUpdates}
+            onWorkflowRefresh={refreshAutomationPreservingSelection}
             injectedMessage={injectedChatMessage}
             onInjectedMessageConsumed={() => setInjectedChatMessage(null)}
             onSuggestNextSteps={handleSuggestNextSteps}
             isRequestingSuggestions={isRequestingSuggestions}
             suggestionStatus={suggestionStatus}
-            onBlueprintUpdatingChange={setIsSynthesizingBlueprint}
+            onWorkflowUpdatingChange={setIsSynthesizingWorkflow}
           />
         </div>
 
@@ -1668,7 +1825,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 size="sm"
                 variant="secondary"
                 onClick={handleOptimizeFlow}
-                disabled={isOptimizingFlow || blueprintIsEmpty}
+                disabled={isOptimizingFlow || workflowIsEmpty}
                 className="text-xs font-semibold h-8 px-3 bg-white border border-gray-200 shadow-sm hover:bg-gray-50"
               >
                 {isOptimizingFlow ? (
@@ -1712,12 +1869,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 onConnect={handleConnectNodes}
                 onEdgeUpdate={handleEdgeUpdate}
                 onNodeClick={handleNodeClick}
-                isSynthesizing={isSynthesizingBlueprint}
+                isSynthesizing={isSynthesizingWorkflow}
                 emptyState={
-                  blueprintIsEmpty ? (
+                  workflowIsEmpty ? (
                     <div className="text-center max-w-md mx-auto space-y-2">
                       <Sparkles className="w-12 h-12 text-gray-300 mx-auto mb-2" />
-                      <p className="text-sm font-semibold text-gray-600">Blueprint Canvas</p>
+                      <p className="text-sm font-semibold text-gray-600">Workflow Canvas</p>
                       <p className="text-xs text-gray-500 leading-relaxed">
                         Chat with the copilot to build your automation. Steps will appear here as you describe your workflow.
                       </p>
@@ -1726,7 +1883,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 }
               />
 
-              {showStepHelper && !blueprintIsEmpty && (
+              {showStepHelper && !workflowIsEmpty && (
                 <div className="absolute bottom-4 right-4 bg-gray-900/90 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none">
                   Click on any step to configure or refine.
                 </div>
@@ -1840,7 +1997,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         {activeTab === "Workflow" ? (
           <>
             {errorBanner ? <div className="px-6 pt-6">{errorBanner}</div> : null}
-            <div className="flex-1 min-h-0">{blueprintContent}</div>
+            <div className="flex-1 min-h-0">{workflowContent}</div>
           </>
         ) : activeTab === "Chat" ? (
           <div className="flex-1 min-h-0">
@@ -1868,7 +2025,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             ) : activeTab === "Activity" ? (
               <ActivityTab
                 automationVersionId={selectedVersion?.id ?? ""}
-                onNavigateToBlueprint={() => setActiveTab("Workflow")}
+                onNavigateToWorkflow={() => setActiveTab("Workflow")}
               />
             ) : activeTab === "Settings" ? (
               <SettingsTab
@@ -2026,7 +2183,7 @@ interface AutomationHeaderProps {
   updatedAt: string | null;
   onInviteTeam: () => void;
   onRunTest: () => void;
-  onEditBlueprint: () => void;
+  onEditWorkflow: () => void;
 }
 
 function AutomationHeader({
@@ -2038,7 +2195,7 @@ function AutomationHeader({
   updatedAt,
   onInviteTeam,
   onRunTest,
-  onEditBlueprint,
+  onEditWorkflow,
 }: AutomationHeaderProps) {
   return (
     <section className="flex flex-col md:flex-row md:items-start md:justify-between gap-6">
@@ -2073,7 +2230,7 @@ function AutomationHeader({
           Run Test
         </Button>
         <Button
-          onClick={onEditBlueprint}
+          onClick={onEditWorkflow}
           className="h-9 text-xs font-bold bg-[#0A0A0A] hover:bg-gray-900 text-white shadow-lg shadow-gray-900/10 transition-all hover:-translate-y-0.5"
         >
           <Edit3 size={14} className="mr-2" />

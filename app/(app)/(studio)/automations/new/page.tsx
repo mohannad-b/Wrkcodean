@@ -1052,7 +1052,7 @@ export default function NewAutomationPage() {
         variant: "success",
       });
 
-      // Navigate to the blueprint screen
+      // Navigate to the workflow screen
       router.push(`/automations/${automationId}?version=${versionId}&tab=Workflow`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error");

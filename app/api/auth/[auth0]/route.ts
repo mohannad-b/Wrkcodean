@@ -1,16 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import auth0 from "@/lib/auth/auth0";
+import { sendDevAgentLog } from "@/lib/dev/agent-log";
+
+export const runtime = "nodejs";
+
+const AUTH0_LOG_OPTIONS = {
+  throttleMs: 2000,
+  sampleRate: 0.1,
+};
+
+function logAuth0(payload: Record<string, unknown>, request: NextRequest, action: string) {
+  const returnTo = request.nextUrl.searchParams.get("returnTo") ?? "/dashboard";
+  sendDevAgentLog(
+    {
+      ...payload,
+      returnTo,
+    },
+    {
+      ...AUTH0_LOG_OPTIONS,
+      dedupeKey: `${action}|${request.nextUrl.pathname}|${returnTo}`,
+    }
+  );
+}
 
 type Auth0Action = "login" | "logout" | "callback" | "profile";
 
 async function dispatch(action: Auth0Action, request: NextRequest): Promise<NextResponse> {
   const client: any = (auth0 as any)?.authClient ?? (auth0 as any);
 
-  // #region agent log
-  fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  logAuth0(
+    {
       sessionId: "debug-session",
       runId: "pre-fix",
       hypothesisId: "H2",
@@ -22,12 +41,12 @@ async function dispatch(action: Auth0Action, request: NextRequest): Promise<Next
         hasHandleLogout: !!client?.handleLogout,
         hasHandleCallback: !!client?.handleCallback,
         hasHandleProfile: !!client?.handleProfile,
-        keys: Object.keys(client ?? {}),
+        keyCount: Object.keys(client ?? {}).length,
       },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
+    },
+    request,
+    action
+  );
 
   if (!client?.handleLogin || !client?.handleLogout || !client?.handleCallback || !client?.handleProfile) {
     return NextResponse.json({ error: "Auth0 client missing handlers" }, { status: 500 });
@@ -35,11 +54,8 @@ async function dispatch(action: Auth0Action, request: NextRequest): Promise<Next
 
   switch (action) {
     case "login":
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      logAuth0(
+        {
           sessionId: "debug-session",
           runId: "pre-fix",
           hypothesisId: "H3",
@@ -47,22 +63,18 @@ async function dispatch(action: Auth0Action, request: NextRequest): Promise<Next
           message: "Handling login",
           data: {
             hasStartInteractiveLogin: !!client?.startInteractiveLogin,
-            returnTo: request.nextUrl.searchParams.get("returnTo") ?? "/dashboard",
           },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
+        },
+        request,
+        action
+      );
       try {
         return client.startInteractiveLogin({
           returnTo: request.nextUrl.searchParams.get("returnTo") ?? "/dashboard",
         });
       } catch (err: any) {
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        logAuth0(
+          {
             sessionId: "debug-session",
             runId: "login-error",
             hypothesisId: "H7",
@@ -73,62 +85,53 @@ async function dispatch(action: Auth0Action, request: NextRequest): Promise<Next
               name: err?.name ?? "unknown",
               stack: err?.stack ? String(err.stack).slice(0, 500) : "n/a",
             },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
+          },
+          request,
+          action
+        );
         throw err;
       }
     case "logout":
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      logAuth0(
+        {
           sessionId: "debug-session",
           runId: "pre-fix",
           hypothesisId: "H4",
           location: "app/api/auth/[auth0]/route.ts:dispatch",
           message: "Handling logout",
           data: { hasHandleLogout: !!client?.handleLogout },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
+        },
+        request,
+        action
+      );
       return client.handleLogout(request);
     case "callback":
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      logAuth0(
+        {
           sessionId: "debug-session",
           runId: "pre-fix",
           hypothesisId: "H5",
           location: "app/api/auth/[auth0]/route.ts:dispatch",
           message: "Handling callback",
           data: { hasHandleCallback: !!client?.handleCallback },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
+        },
+        request,
+        action
+      );
       return client.handleCallback(request);
     case "profile":
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      logAuth0(
+        {
           sessionId: "debug-session",
           runId: "pre-fix",
           hypothesisId: "H6",
           location: "app/api/auth/[auth0]/route.ts:dispatch",
           message: "Handling profile",
           data: { hasHandleProfile: !!client?.handleProfile },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
+        },
+        request,
+        action
+      );
       return client.handleProfile(request);
     default:
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -149,11 +152,8 @@ export async function GET(request: NextRequest, { params }: { params: { auth0?: 
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // #region agent log
-  fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  logAuth0(
+    {
       sessionId: "debug-session",
       runId: "pre-fix",
       hypothesisId: "H1",
@@ -161,15 +161,15 @@ export async function GET(request: NextRequest, { params }: { params: { auth0?: 
       message: "Dispatching auth0 action",
       data: {
         action,
-        hasHandleLogin: typeof (auth0 as any)?.handleLogin,
+        hasHandleLogin: typeof (auth0 as any)?.handleLogin === "function",
         hasAuthClient: !!(auth0 as any)?.authClient,
-        authClientKeys: Object.keys((auth0 as any)?.authClient ?? {}),
-        directKeys: Object.keys(auth0 as any),
+        authClientKeyCount: Object.keys((auth0 as any)?.authClient ?? {}).length,
+        directKeyCount: Object.keys(auth0 as any).length,
       },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
+    },
+    request,
+    action
+  );
 
   return dispatch(action, request);
 }

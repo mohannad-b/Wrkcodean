@@ -1,4 +1,4 @@
-import type { BlueprintUpdates } from "@/lib/blueprint/ai-updates";
+import type { BlueprintUpdates } from "@/lib/workflows/ai-updates";
 
 export type ParsedCopilotReply = {
   displayText: string;

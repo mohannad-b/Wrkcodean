@@ -4,7 +4,7 @@ import { HeroNode } from './HeroNode';
 import { Cursor } from './Cursor';
 import { Sparkles, Send } from 'lucide-react';
 
-export const CardChatBlueprint = () => {
+export const CardChatWorkflow = () => {
   return (
     <div className="w-full h-full flex overflow-hidden bg-white rounded-xl shadow-2xl border border-gray-800/10">
       {/* Left: Chat Panel */}
@@ -61,7 +61,7 @@ export const CardChatBlueprint = () => {
         </div>
       </div>
 
-      {/* Right: Blueprint View */}
+      {/* Right: Workflow View */}
       <div className="flex-1 bg-[#F9FAFB] relative p-8 flex flex-col items-center justify-center overflow-hidden">
         <div className="absolute inset-0 opacity-[0.4]" style={{ backgroundImage: 'radial-gradient(#E5E7EB 1.5px, transparent 1.5px)', backgroundSize: '24px 24px' }} />
         

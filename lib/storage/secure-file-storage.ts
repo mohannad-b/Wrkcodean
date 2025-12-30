@@ -3,6 +3,17 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { access } from "node:fs/promises";
 
+const devLog = (payload: Record<string, unknown>) => {
+  if (process.env.NODE_ENV !== "development") return;
+  console.debug(
+    JSON.stringify({
+      channel: "agent-log",
+      ...payload,
+      timestamp: Date.now(),
+    })
+  );
+};
+
 export type EncryptionMetadata = {
   algorithm: "aes-256-gcm";
   iv: string;
@@ -99,49 +110,35 @@ async function persistEncryptedBuffer(params: {
   const storageKey = path.join(tenantId, `${randomUUID()}.bin`);
   const abs = path.join(UPLOAD_ROOT, storageKey);
 
-  // #region agent log
-  fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      sessionId: "debug-session",
-      runId: "upload-path",
-      hypothesisId: "U1",
-      location: "lib/storage/secure-file-storage.ts:persistEncryptedBuffer",
-      message: "Preparing to store encrypted buffer",
-      data: { uploadRoot: UPLOAD_ROOT, storageKey, abs },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
+  devLog({
+    sessionId: "debug-session",
+    runId: "upload-path",
+    hypothesisId: "U1",
+    location: "lib/storage/secure-file-storage.ts:persistEncryptedBuffer",
+    message: "Preparing to store encrypted buffer",
+    data: { uploadRoot: UPLOAD_ROOT, storageKey, abs },
+  });
 
   try {
     ensureUnderRoot(abs);
     await ensureDirectory(path.dirname(abs));
     await fs.writeFile(abs, ciphertext);
   } catch (err: any) {
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId: "upload-path",
-        hypothesisId: "U2",
-        location: "lib/storage/secure-file-storage.ts:persistEncryptedBuffer",
-        message: "Failed to write encrypted buffer",
-        data: {
-          uploadRoot: UPLOAD_ROOT,
-          storageKey,
-          abs,
-          error: err?.message ?? "unknown",
-          code: err?.code ?? "unknown",
-          stack: err?.stack ? String(err.stack).slice(0, 500) : "n/a",
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
+    devLog({
+      sessionId: "debug-session",
+      runId: "upload-path",
+      hypothesisId: "U2",
+      location: "lib/storage/secure-file-storage.ts:persistEncryptedBuffer",
+      message: "Failed to write encrypted buffer",
+      data: {
+        uploadRoot: UPLOAD_ROOT,
+        storageKey,
+        abs,
+        error: err?.message ?? "unknown",
+        code: err?.code ?? "unknown",
+        stack: err?.stack ? String(err.stack).slice(0, 500) : "n/a",
+      },
+    });
     throw err;
   }
 

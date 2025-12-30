@@ -7,30 +7,32 @@ import { can } from "@/lib/auth/rbac";
 import { buildRateLimitKey, ensureRateLimit } from "@/lib/rate-limit";
 import { getAutomationVersionDetail } from "@/lib/services/automations";
 import { logAudit } from "@/lib/audit/log";
-import { createEmptyBlueprint } from "@/lib/blueprint/factory";
-import type { Blueprint } from "@/lib/blueprint/types";
-import { BlueprintSchema } from "@/lib/blueprint/schema";
-import { getBlueprintCompletionState } from "@/lib/blueprint/completion";
-import { buildBlueprintFromChat, type AITask } from "@/lib/blueprint/ai-builder-simple";
-import { applyStepNumbers } from "@/lib/blueprint/step-numbering";
-import { parseCommand, isDirectCommand } from "@/lib/blueprint/command-parser";
-import { executeCommand } from "@/lib/blueprint/command-executor";
+import { createEmptyWorkflowSpec } from "@/lib/workflows/factory";
+import type { Workflow } from "@/lib/workflows/types";
+import { WorkflowSchema } from "@/lib/workflows/schema";
+import { getWorkflowCompletionState } from "@/lib/workflows/completion";
+import { buildWorkflowFromChat, type AITask } from "@/lib/workflows/ai-builder-simple";
+import { applyStepNumbers } from "@/lib/workflows/step-numbering";
+import { parseCommand, isDirectCommand } from "@/lib/workflows/command-parser";
+import { executeCommand } from "@/lib/workflows/command-executor";
 import { db } from "@/db";
 import { automationVersions } from "@/db/schema";
 import { createCopilotMessage } from "@/lib/services/copilot-messages";
 import { determineConversationPhase, generateThinkingSteps } from "@/lib/ai/copilot-orchestrator";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
-import { diffBlueprint } from "@/lib/blueprint/diff";
-import { syncAutomationTasks } from "@/lib/blueprint/task-sync";
-import { evaluateBlueprintProgress } from "@/lib/ai/blueprint-progress";
+import { diffWorkflow } from "@/lib/workflows/diff";
+import { syncAutomationTasks } from "@/lib/workflows/task-sync";
+import { evaluateWorkflowProgress } from "@/lib/ai/workflow-progress";
+import { withLegacyWorkflowAlias } from "@/lib/workflows/legacy";
 import {
   createEmptyCopilotAnalysisState,
   createEmptyMemory,
   type CopilotAnalysisState,
   type CopilotMemory,
-} from "@/lib/blueprint/copilot-analysis";
+} from "@/lib/workflows/copilot-analysis";
 import { getCopilotAnalysis, upsertCopilotAnalysis } from "@/lib/services/copilot-analysis";
 import { buildWorkflowViewModel } from "@/lib/workflows/view-model";
+import { sendDevAgentLog } from "@/lib/dev/agent-log";
 
 const DraftRequestSchema = z.object({
   messages: z
@@ -56,17 +58,17 @@ const MIN_AUTOMATION_KEYWORDS = ["automation", "workflow", "process", "step", "s
 const OFF_TOPIC_KEYWORDS = ["weather", "stock", "joke", "recipe", "story", "novel", "poem"];
 
 const SYSTEM_PROMPT =
-  "You are Wrk Copilot. You ONLY help users describe and design business processes to automate. If the user asks unrelated questions (general knowledge, advice, or chit chat) you politely redirect them to describing the workflow they want to automate. You return a JSON object that matches the provided Blueprint schema exactly.";
+  "You are Wrk Copilot. You ONLY help users describe and design business processes to automate. If the user asks unrelated questions (general knowledge, advice, or chit chat) you politely redirect them to describing the workflow they want to automate. You return a JSON object that matches the provided Workflow schema exactly.";
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
-    console.log("[copilot:draft-blueprint] Request received for version:", params.id);
+    console.log("[copilot:draft-workflow] Request received for version:", params.id);
     
     const session = await requireTenantSession();
-    console.log("[copilot:draft-blueprint] Session validated, tenantId:", session.tenantId);
+    console.log("[copilot:draft-workflow] Session validated, tenantId:", session.tenantId);
 
     if (!can(session, "automation:metadata:update", { type: "automation_version", tenantId: session.tenantId })) {
-      console.error("[copilot:draft-blueprint] Permission denied");
+      console.error("[copilot:draft-workflow] Permission denied");
       throw new ApiError(403, "Forbidden");
     }
 
@@ -74,21 +76,21 @@ export async function POST(request: Request, { params }: { params: { id: string 
     let rawBody: any;
     try {
       rawBody = await request.json();
-      console.log("[copilot:draft-blueprint] Request body parsed, keys:", Object.keys(rawBody || {}));
+      console.log("[copilot:draft-workflow] Request body parsed, keys:", Object.keys(rawBody || {}));
       payload = DraftRequestSchema.parse(rawBody);
-      console.log("[copilot:draft-blueprint] Validation passed, messages count:", payload.messages?.length);
+      console.log("[copilot:draft-workflow] Validation passed, messages count:", payload.messages?.length);
     } catch (error) {
       if (error instanceof z.ZodError) {
         const issues = error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join(", ");
-        console.error("[copilot:draft-blueprint] Validation error:", issues);
-        console.error("[copilot:draft-blueprint] Raw body:", JSON.stringify(rawBody, null, 2));
+        console.error("[copilot:draft-workflow] Validation error:", issues);
+        console.error("[copilot:draft-workflow] Raw body:", JSON.stringify(rawBody, null, 2));
         throw new ApiError(400, `Invalid request body: ${issues}`);
       }
       if (error instanceof SyntaxError) {
-        console.error("[copilot:draft-blueprint] JSON parse error:", error.message);
+        console.error("[copilot:draft-workflow] JSON parse error:", error.message);
         throw new ApiError(400, `Invalid JSON: ${error.message}`);
       }
-      console.error("[copilot:draft-blueprint] Request parsing error:", error);
+      console.error("[copilot:draft-workflow] Request parsing error:", error);
       throw new ApiError(400, `Invalid request body: ${error instanceof Error ? error.message : String(error)}`);
     }
 
@@ -113,25 +115,25 @@ export async function POST(request: Request, { params }: { params: { id: string 
         windowMs: 60 * 60 * 1000,
       });
     } catch {
-      throw new ApiError(429, "Too many blueprints requested. Please wait before trying again.");
+      throw new ApiError(429, "Too many workflows requested. Please wait before trying again.");
     }
 
     const normalizedMessages = normalizeMessages(payload.messages);
     const hasUserMessage = normalizedMessages.some((message) => message.role === "user");
     if (!hasUserMessage) {
-      throw new ApiError(400, "Add at least one user message before drafting a blueprint.");
+      throw new ApiError(400, "Add at least one user message before drafting a workflow.");
     }
 
     const latestUserMessage = [...normalizedMessages].reverse().find((message) => message.role === "user");
     if (latestUserMessage && isOffTopic(latestUserMessage.content)) {
       throw new ApiError(
         400,
-        "Wrk Copilot only helps design automations. Tell me about the workflow you want to automate and I can draft a blueprint."
+        "Wrk Copilot only helps design automations. Tell me about the workflow you want to automate and I can draft a workflow."
       );
     }
 
     const contextSummary = buildConversationSummary(normalizedMessages, payload.intakeNotes ?? detail.version.intakeNotes);
-    const currentBlueprint = workflow.workflowSpec ?? createEmptyBlueprint();
+    const currentWorkflow = workflow.workflowSpec ?? createEmptyWorkflowSpec();
     const userMessageContent =
       latestUserMessage?.content ??
       normalizedMessages.find((message) => message.role === "user")?.content ??
@@ -140,18 +142,18 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const directCommand = Boolean(latestUserMessage?.content && isDirectCommand(latestUserMessage.content));
     let responseMessage = "";
     let commandExecuted = false;
-    let blueprintWithTasks: Blueprint;
+    let workflowWithTasks: Workflow;
     let aiTasks: AITask[] = [];
     let updatedRequirementsText: string | null | undefined;
 
     if (directCommand && latestUserMessage) {
       commandExecuted = true;
       const command = parseCommand(latestUserMessage.content);
-      const commandResult = executeCommand(currentBlueprint, command);
+      const commandResult = executeCommand(currentWorkflow, command);
       if (!commandResult.success) {
         throw new ApiError(400, commandResult.error ?? "Command failed");
       }
-      blueprintWithTasks = commandResult.blueprint;
+      workflowWithTasks = commandResult.workflow;
       responseMessage = commandResult.message ? `Done. ${commandResult.message}` : "Done.";
 
       if (commandResult.auditEvents.length) {
@@ -169,7 +171,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         );
       }
 
-      copilotDebug("draft_blueprint.command_executed", {
+      copilotDebug("draft_workflow.command_executed", {
         automationVersionId: params.id,
         command: command.type,
         message: responseMessage,
@@ -177,36 +179,33 @@ export async function POST(request: Request, { params }: { params: { id: string 
     } else {
       try {
         // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: "debug-session",
-            runId: "draft-blueprint",
-            hypothesisId: "B1",
-            location: "app/api/automation-versions/[id]/copilot/draft-blueprint/route.ts",
-            message: "Invoking buildBlueprintFromChat",
-            data: {
-              tenantId: session.tenantId,
-              automationVersionId: params.id,
-              messageCount: normalizedMessages.length,
-              hasIntakeNotes: Boolean(payload.intakeNotes ?? detail.version.intakeNotes),
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
+        sendDevAgentLog({
+          sessionId: "debug-session",
+          runId: "draft-workflow",
+          hypothesisId: "B1",
+          location: "app/api/automation-versions/[id]/copilot/draft-workflow/route.ts",
+          message: "Invoking buildWorkflowFromChat",
+          data: {
+            tenantId: session.tenantId,
+            automationVersionId: params.id,
+            messageCount: normalizedMessages.length,
+            hasIntakeNotes: Boolean(payload.intakeNotes ?? detail.version.intakeNotes),
+          },
+          timestamp: Date.now(),
+        });
         // #endregion
 
         const {
-          blueprint: aiGeneratedBlueprint,
+          workflow: aiGeneratedWorkflow,
           tasks: generatedTasks,
           chatResponse,
           followUpQuestion,
           sanitizationSummary,
           requirementsText: newRequirementsText,
-        } = await buildBlueprintFromChat({
+        } = await buildWorkflowFromChat({
           userMessage: userMessageContent,
-          currentBlueprint,
+          currentWorkflow,
+          currentBlueprint: currentWorkflow,
           conversationHistory: normalizedMessages.map((message) => ({
             role: message.role,
             content: message.content,
@@ -217,19 +216,20 @@ export async function POST(request: Request, { params }: { params: { id: string 
         });
         updatedRequirementsText = newRequirementsText;
 
-        const numberedBlueprint = applyStepNumbers(aiGeneratedBlueprint);
+        const numberedWorkflow = applyStepNumbers(aiGeneratedWorkflow);
         aiTasks = generatedTasks;
 
         const taskAssignments = await syncAutomationTasks({
           tenantId: session.tenantId,
           automationVersionId: params.id,
           aiTasks,
-          blueprint: numberedBlueprint,
+          blueprint: numberedWorkflow,
+          workflow: numberedWorkflow,
         });
 
-        blueprintWithTasks = {
-          ...numberedBlueprint,
-          steps: numberedBlueprint.steps.map((step) => ({
+        workflowWithTasks = {
+          ...numberedWorkflow,
+          steps: numberedWorkflow.steps.map((step) => ({
             ...step,
             taskIds: Array.from(new Set(taskAssignments[step.id] ?? step.taskIds ?? [])),
           })),
@@ -238,7 +238,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         const nextFollowUp = chooseFollowUpQuestion({
           candidate: trimmedFollowUp,
           memory: analysisState.memory ?? createEmptyMemory(),
-          blueprint: blueprintWithTasks,
+          workflow: workflowWithTasks,
           userMessage: userMessageContent,
         });
 
@@ -246,7 +246,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           ...analysisState,
           memory: refreshMemoryState({
             previous: analysisState.memory ?? createEmptyMemory(),
-            blueprint: blueprintWithTasks,
+            workflow: workflowWithTasks,
             lastUserMessage: userMessageContent,
             appliedFollowUp: nextFollowUp,
           }),
@@ -254,55 +254,51 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
         responseMessage = nextFollowUp ? `${chatResponse} ${nextFollowUp}`.trim() : chatResponse;
 
-        copilotDebug("draft_blueprint.llm_response", {
+        copilotDebug("draft_workflow.llm_response", {
           automationVersionId: params.id,
           chatResponse,
           followUpQuestion: trimmedFollowUp,
-          stepCount: blueprintWithTasks.steps.length,
+          stepCount: workflowWithTasks.steps.length,
           taskCount: aiTasks.length,
           sanitizationSummary,
         });
-        console.log("[copilot:draft-blueprint] raw assistant reply:", chatResponse);
+        console.log("[copilot:draft-workflow] raw assistant reply:", chatResponse);
       } catch (error: any) {
         // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: "debug-session",
-            runId: "draft-blueprint",
-            hypothesisId: "B2",
-            location: "app/api/automation-versions/[id]/copilot/draft-blueprint/route.ts",
-            message: "Blueprint generation failed",
-            data: {
-              tenantId: session.tenantId,
-              automationVersionId: params.id,
-              error: error?.message ?? "unknown",
-              name: error?.name ?? "unknown",
-              stack: error?.stack ? String(error.stack).slice(0, 500) : "n/a",
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
+        sendDevAgentLog({
+          sessionId: "debug-session",
+          runId: "draft-workflow",
+          hypothesisId: "B2",
+          location: "app/api/automation-versions/[id]/copilot/draft-workflow/route.ts",
+          message: "Workflow generation failed",
+          data: {
+            tenantId: session.tenantId,
+            automationVersionId: params.id,
+            error: error?.message ?? "unknown",
+            name: error?.name ?? "unknown",
+            stack: error?.stack ? String(error.stack).slice(0, 500) : "n/a",
+          },
+          timestamp: Date.now(),
+        });
         // #endregion
         throw error;
       }
     }
 
-    const validatedBlueprint = directCommand
+    const validatedWorkflow = directCommand
       ? ({
-          ...blueprintWithTasks,
-          status: blueprintWithTasks.status ?? "Draft",
+          ...workflowWithTasks,
+          status: workflowWithTasks.status ?? "Draft",
           updatedAt: new Date().toISOString(),
-        } as Blueprint)
-      : BlueprintSchema.parse({
-          ...blueprintWithTasks,
+        } as Workflow)
+      : WorkflowSchema.parse({
+          ...workflowWithTasks,
           status: "Draft",
           updatedAt: new Date().toISOString(),
         });
 
-    const updatePayload: { workflowJson: Blueprint; requirementsText?: string | null; updatedAt: Date } = {
-      workflowJson: validatedBlueprint,
+    const updatePayload: { workflowJson: Workflow; requirementsText?: string | null; updatedAt: Date } = {
+      workflowJson: validatedWorkflow,
       updatedAt: new Date(),
     };
     
@@ -321,7 +317,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       .returning();
 
     if (!savedVersion) {
-      throw new ApiError(500, "Failed to save blueprint.");
+      throw new ApiError(500, "Failed to save workflow.");
     }
 
     revalidatePath(`/automations/${detail.automation?.id ?? savedVersion.automationId}`);
@@ -334,22 +330,22 @@ export async function POST(request: Request, { params }: { params: { id: string 
       createdBy: null,
     });
 
-    copilotDebug("draft_blueprint.persisted_message", {
+    copilotDebug("draft_workflow.persisted_message", {
       automationVersionId: params.id,
       messageId: assistantMessage.id,
       commandExecuted,
     });
 
     const augmentedMessages = [...normalizedMessages, { role: "assistant" as const, content: responseMessage }];
-    const conversationPhase = determineConversationPhase(validatedBlueprint, augmentedMessages);
-    const thinkingSteps = generateThinkingSteps(conversationPhase, latestUserMessage?.content, validatedBlueprint);
+    const conversationPhase = determineConversationPhase(validatedWorkflow, augmentedMessages);
+    const thinkingSteps = generateThinkingSteps(conversationPhase, latestUserMessage?.content, validatedWorkflow);
 
     if (!commandExecuted) {
-      const diff = diffBlueprint(currentBlueprint, validatedBlueprint);
+      const diff = diffWorkflow(currentWorkflow, validatedWorkflow);
       await logAudit({
         tenantId: session.tenantId,
         userId: session.userId,
-        action: "automation.blueprint.drafted",
+        action: "automation.workflow.drafted",
         resourceType: "automation_version",
         resourceId: params.id,
         metadata: {
@@ -368,16 +364,16 @@ export async function POST(request: Request, { params }: { params: { id: string 
       });
     }
 
-    const completionState = getBlueprintCompletionState(validatedBlueprint);
+    const completionState = getWorkflowCompletionState(validatedWorkflow);
     let progressSnapshot = null;
     try {
-      progressSnapshot = await evaluateBlueprintProgress({
-        blueprint: validatedBlueprint,
+      progressSnapshot = await evaluateWorkflowProgress({
+        workflow: validatedWorkflow,
         completionState,
         latestUserMessage: latestUserMessage?.content ?? null,
       });
     } catch (error) {
-      copilotDebug("draft_blueprint.progress_eval_failed", error instanceof Error ? error.message : error);
+      copilotDebug("draft_workflow.progress_eval_failed", error instanceof Error ? error.message : error);
     }
 
     if (progressSnapshot) {
@@ -398,13 +394,13 @@ export async function POST(request: Request, { params }: { params: { id: string 
       });
     } catch (analysisError) {
       copilotDebug(
-        "draft_blueprint.progress_persist_failed",
+        "draft_workflow.progress_persist_failed",
         analysisError instanceof Error ? analysisError.message : analysisError
       );
     }
 
     return NextResponse.json({
-      blueprint: validatedBlueprint,
+      ...withLegacyWorkflowAlias(validatedWorkflow),
       completion: completionState,
       progress: progressSnapshot,
       prompt: commandExecuted
@@ -480,11 +476,11 @@ function buildConversationSummary(messages: CopilotMessage[], intakeNotes?: stri
 type FollowUpChoiceArgs = {
   candidate?: string | null;
   memory: CopilotMemory;
-  blueprint: Blueprint;
+  workflow: Workflow;
   userMessage: string;
 };
 
-function chooseFollowUpQuestion({ candidate, memory, blueprint, userMessage }: FollowUpChoiceArgs): string | null {
+function chooseFollowUpQuestion({ candidate, memory, workflow, userMessage }: FollowUpChoiceArgs): string | null {
   const trimmed = candidate?.trim();
   const normalizedCandidate = trimmed ? normalizeQuestionText(trimmed) : null;
   const reachedCap = memory.question_count >= 10;
@@ -493,7 +489,7 @@ function chooseFollowUpQuestion({ candidate, memory, blueprint, userMessage }: F
     return "This looks complete — want me to finalize or tweak anything?";
   }
 
-  const mergedFacts = mergeFacts(memory.facts ?? {}, blueprint, userMessage);
+  const mergedFacts = mergeFacts(memory.facts ?? {}, workflow, userMessage);
   const stage = computeStage(mergedFacts, memory.question_count);
 
   if (trimmed && normalizedCandidate && !memory.asked_questions_normalized.includes(normalizedCandidate)) {
@@ -520,13 +516,13 @@ function chooseFollowUpQuestion({ candidate, memory, blueprint, userMessage }: F
 
 type RefreshMemoryArgs = {
   previous: CopilotMemory;
-  blueprint: Blueprint;
+  workflow: Workflow;
   lastUserMessage: string;
   appliedFollowUp?: string | null;
 };
 
-function refreshMemoryState({ previous, blueprint, lastUserMessage, appliedFollowUp }: RefreshMemoryArgs): CopilotMemory {
-  const mergedFacts = mergeFacts(previous.facts ?? {}, blueprint, lastUserMessage);
+function refreshMemoryState({ previous, workflow, lastUserMessage, appliedFollowUp }: RefreshMemoryArgs): CopilotMemory {
+  const mergedFacts = mergeFacts(previous.facts ?? {}, workflow, lastUserMessage);
   const normalizedFollowUp = appliedFollowUp ? normalizeQuestionText(appliedFollowUp) : null;
   const newCount =
     appliedFollowUp && previous.question_count < 10 ? previous.question_count + 1 : previous.question_count;
@@ -537,7 +533,7 @@ function refreshMemoryState({ previous, blueprint, lastUserMessage, appliedFollo
   }
 
   return {
-    summary_compact: buildMemorySummary(blueprint, mergedFacts, lastUserMessage, previous.summary_compact),
+    summary_compact: buildMemorySummary(workflow, mergedFacts, lastUserMessage, previous.summary_compact),
     facts: mergedFacts,
     question_count: newCount,
     asked_questions_normalized: Array.from(asked).slice(-30),
@@ -547,7 +543,7 @@ function refreshMemoryState({ previous, blueprint, lastUserMessage, appliedFollo
 
 function mergeFacts(
   existing: CopilotMemory["facts"],
-  blueprint: Blueprint,
+  workflow: Workflow,
   lastUserMessage: string
 ): CopilotMemory["facts"] {
   const facts: CopilotMemory["facts"] = { ...(existing ?? {}) };
@@ -564,7 +560,7 @@ function mergeFacts(
     facts.trigger_time = timeMatch[0];
   }
 
-  blueprint.sections?.forEach((section) => {
+  workflow.sections?.forEach((section) => {
     const content = section.content?.trim();
     if (!content) return;
     switch (section.key) {
@@ -585,9 +581,9 @@ function mergeFacts(
     }
   });
 
-  if (!facts.systems && blueprint.steps?.length) {
+  if (!facts.systems && workflow.steps?.length) {
     const systems = new Set<string>();
-    blueprint.steps.forEach((step) => {
+    workflow.steps.forEach((step) => {
       step.systemsInvolved?.forEach((system) => systems.add(system));
     });
     if (systems.size > 0) {
@@ -595,8 +591,8 @@ function mergeFacts(
     }
   }
 
-  if (!facts.storage_destination && blueprint.summary) {
-    const summaryLower = blueprint.summary.toLowerCase();
+  if (!facts.storage_destination && workflow.summary) {
+    const summaryLower = workflow.summary.toLowerCase();
     if (summaryLower.includes("sheet") || summaryLower.includes("excel")) {
       facts.storage_destination = "Google Sheets";
     }
@@ -648,13 +644,13 @@ function pickStageQuestion(stage: CopilotMemory["stage"], facts: CopilotMemory["
 }
 
 function buildMemorySummary(
-  blueprint: Blueprint,
+  workflow: Workflow,
   facts: CopilotMemory["facts"],
   lastUserMessage: string,
   previous?: string | null
 ): string {
   const parts: string[] = [];
-  const summary = blueprint.summary?.trim() || previous || "";
+  const summary = workflow.summary?.trim() || previous || "";
   if (summary) {
     parts.push(truncateText(summary, 200));
   }

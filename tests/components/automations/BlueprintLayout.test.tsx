@@ -4,6 +4,17 @@ import { StudioChat } from "@/components/automations/StudioChat";
 import { StudioCanvas } from "@/components/automations/StudioCanvas";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 
+vi.mock("@/components/providers/user-profile-provider", () => ({
+  useUserProfile: () => ({
+    profile: {
+      id: "user-1",
+      email: "user@example.com",
+      name: "Test User",
+      avatarUrl: null,
+    },
+  }),
+}));
+
 describe("Blueprint workspace shell", () => {
   it("renders Copilot, canvas, and inspector without legacy create cards", () => {
     render(

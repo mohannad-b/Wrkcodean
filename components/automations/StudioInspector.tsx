@@ -7,13 +7,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { BlueprintStep } from "@/lib/blueprint/types";
+import type { WorkflowStep } from "@/lib/workflows/types";
 import { cn } from "@/lib/utils";
 
 interface StudioInspectorProps {
-  step: BlueprintStep | null;
+  step: WorkflowStep | null;
   onClose: () => void;
-  onChange: (stepId: string, patch: Partial<BlueprintStep>) => void;
+  onChange: (stepId: string, patch: Partial<WorkflowStep>) => void;
   onDelete: (stepId: string) => void;
   clientName?: string;
   tasks?: StepTaskSummary[];
@@ -36,13 +36,13 @@ type StepTaskSummary = {
 
 type ResponsibilityTab = "automated" | "human" | "approval";
 
-const RESPONSIBILITY_MAP: Record<ResponsibilityTab, BlueprintStep["responsibility"]> = {
+const RESPONSIBILITY_MAP: Record<ResponsibilityTab, WorkflowStep["responsibility"]> = {
   automated: "Automated",
   human: "HumanReview",
   approval: "Approval",
 };
 
-const RESPONSIBILITY_TAB_MAP: Record<BlueprintStep["responsibility"], ResponsibilityTab> = {
+const RESPONSIBILITY_TAB_MAP: Record<WorkflowStep["responsibility"], ResponsibilityTab> = {
   Automated: "automated",
   HumanReview: "human",
   Approval: "approval",
@@ -55,7 +55,7 @@ const BADGE_STYLES: Record<"complete" | "warning" | "error" | "ai-suggested", st
   "ai-suggested": "border-blue-200 bg-blue-50 text-blue-700",
 };
 
-function deriveBadgeStatus(step: BlueprintStep): keyof typeof BADGE_STYLES {
+function deriveBadgeStatus(step: WorkflowStep): keyof typeof BADGE_STYLES {
   if (step.riskLevel === "High") return "error";
   if (step.riskLevel === "Medium") return "warning";
   if (step.notesForOps || step.notesExceptions) return "complete";
@@ -233,7 +233,7 @@ export function StudioInspector({ step, onClose, onChange, onDelete, clientName,
     );
   }
 
-  const handleChange = (patch: Partial<BlueprintStep>) => {
+  const handleChange = (patch: Partial<WorkflowStep>) => {
     onChange(step.id, patch);
   };
 

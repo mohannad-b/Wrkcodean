@@ -1,19 +1,17 @@
-import { NextResponse } from "next/server";
-import { requireEitherTenantOrStaffSession } from "@/lib/api/context";
+import { ApiError, handleApiError, requireEitherTenantOrStaffSession } from "@/lib/api/context";
 import { authorize } from "@/lib/auth/rbac";
-import { getOrCreateConversation } from "@/lib/services/workflow-chat";
-import { chatEventEmitter, type ChatEvent } from "@/lib/realtime/events";
+import { getOrCreateConversation, getUnreadCount } from "@/lib/services/workflow-chat";
+import { subscribeToChatEvents, type ChatEvent } from "@/lib/realtime/events";
 import { db } from "@/db";
-import { automationVersions } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { automationVersions, workflowMessages, workflowReadReceipts } from "@/db/schema";
+import { eq, and, desc, isNull } from "drizzle-orm";
 
-/**
- * Server-Sent Events endpoint for realtime chat updates
- */
-export async function GET(
-  request: Request,
-  { params }: { params: { workflowId: string } }
-) {
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const HEARTBEAT_INTERVAL_MS = 20000;
+
+export async function GET(request: Request, { params }: { params: { workflowId: string } }) {
   try {
     const session = await requireEitherTenantOrStaffSession();
 
@@ -29,7 +27,7 @@ export async function GET(
     });
 
     if (!workflow) {
-      return new NextResponse("Workflow not found", { status: 404 });
+      throw new ApiError(404, "Workflow not found");
     }
 
     // Check permissions
@@ -42,45 +40,64 @@ export async function GET(
       automationVersionId: params.workflowId,
     });
 
+    const lastEventId = request.headers.get("last-event-id");
+
+    const lastMessage = await db.query.workflowMessages.findFirst({
+      where: and(
+        eq(workflowMessages.conversationId, conversation.id),
+        eq(workflowMessages.tenantId, workflow.tenantId),
+        isNull(workflowMessages.deletedAt)
+      ),
+      orderBy: desc(workflowMessages.createdAt),
+    });
+
+    const lastReadReceipt = await db.query.workflowReadReceipts.findFirst({
+      where: and(
+        eq(workflowReadReceipts.conversationId, conversation.id),
+        eq(workflowReadReceipts.userId, session.userId)
+      ),
+    });
+
+    const unreadCount = await getUnreadCount({ conversationId: conversation.id, userId: session.userId });
+
     // Create SSE stream
     const stream = new ReadableStream({
       async start(controller) {
         const encoder = new TextEncoder();
-
-        // Send initial connection message
-        const send = (data: string) => {
-          controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+        const send = (event: string, data: unknown, id?: string) => {
+          const idLine = id ? `id: ${id}\n` : "";
+          controller.enqueue(encoder.encode(`${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         };
 
-        send(JSON.stringify({ type: "connected", conversationId: conversation.id }));
-
-        // Subscribe to events
-        const unsubscribe = chatEventEmitter.subscribe(conversation.id, (event: ChatEvent) => {
-          send(JSON.stringify(event));
+        send("message", {
+          type: "connected",
+          conversationId: conversation.id,
+          lastMessageId: lastMessage?.id ?? null,
+          lastReadMessageId: lastReadReceipt?.lastReadMessageId ?? null,
+          unreadCount,
+          resyncRecommended: Boolean(lastEventId),
         });
 
-        // Handle client disconnect
-        request.signal.addEventListener("abort", () => {
-          unsubscribe();
-          controller.close();
+        // Subscribe to events
+        const unsubscribe = await subscribeToChatEvents(params.workflowId, (event: ChatEvent) => {
+          send("message", event, event.eventId);
         });
 
         // Keep connection alive with heartbeat
         const heartbeatInterval = setInterval(() => {
           try {
-            send(JSON.stringify({ type: "heartbeat", timestamp: new Date().toISOString() }));
-          } catch {
-            // Client disconnected
-            clearInterval(heartbeatInterval);
-            unsubscribe();
-            controller.close();
+            send("ping", {});
+          } catch (error) {
+            console.error("Failed to send SSE heartbeat", error);
           }
-        }, 30000); // Every 30 seconds
+        }, HEARTBEAT_INTERVAL_MS);
 
         // Cleanup on close
         request.signal.addEventListener("abort", () => {
           clearInterval(heartbeatInterval);
-          unsubscribe();
+          unsubscribe()
+            .catch((error) => console.error("SSE cleanup error", error))
+            .finally(() => controller.close());
         });
       },
     });
@@ -94,8 +111,7 @@ export async function GET(
       },
     });
   } catch (error) {
-    console.error("SSE error:", error);
-    return new NextResponse("Internal Server Error", { status: 500 });
+    return handleApiError(error);
   }
 }
 

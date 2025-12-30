@@ -72,8 +72,8 @@ vi.mock("drizzle-orm", () => ({
   inArray: () => ({}),
 }));
 
-vi.mock("@/lib/blueprint/factory", () => ({
-  createEmptyWorkflow: vi.fn(() => ({ empty: true })),
+vi.mock("@/lib/workflows/factory", () => ({
+  createEmptyWorkflowSpec: vi.fn(() => ({ empty: true })),
 }));
 
 import { createAutomationVersion } from "@/lib/services/automations";

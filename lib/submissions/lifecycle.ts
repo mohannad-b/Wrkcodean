@@ -87,7 +87,6 @@ const STATUS_ALIASES: Record<string, SubmissionLifecycleStatus> = {
   "build in progress": "BuildInProgress",
   "qa & testing": "QATesting",
   "ready to launch": "ReadyForBuild",
-  blocked: "BuildInProgress",
 };
 
 const ALLOWED_TRANSITIONS: Record<SubmissionLifecycleStatus, SubmissionLifecycleStatus[]> = {

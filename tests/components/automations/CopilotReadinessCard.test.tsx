@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { CopilotReadinessCard } from "@/components/automations/CopilotReadinessCard";
-import { createEmptyCopilotAnalysisState } from "@/lib/blueprint/copilot-analysis";
+import { createEmptyCopilotAnalysisState } from "@/lib/workflows/copilot-analysis";
 
 describe("CopilotReadinessCard", () => {
   it("renders readiness score and todos", () => {

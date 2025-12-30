@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { HeroBlueprint } from './HeroBlueprint';
+import { HeroWorkflow } from './HeroWorkflow';
 import { cn } from '../../lib/utils';
 
 const STEPS = [
@@ -103,7 +103,7 @@ export const HeroProductFrame: React.FC = () => {
 
           {/* Viewport */}
           <div className="relative w-full h-full bg-white group">
-             <HeroBlueprint step={currentStep as 1|2|3|4} />
+             <HeroWorkflow step={currentStep as 1|2|3|4} />
 
              {/* Step Description Overlay */}
              <AnimatePresence mode="wait">

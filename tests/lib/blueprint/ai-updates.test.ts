@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { applyBlueprintUpdates, type BlueprintUpdates } from "@/lib/blueprint/ai-updates";
-import { createEmptyBlueprint } from "@/lib/blueprint/factory";
+import { applyBlueprintUpdates, type BlueprintUpdates } from "@/lib/workflows/ai-updates";
+import { createEmptyBlueprint } from "@/lib/workflows/factory";
 
 describe("applyBlueprintUpdates", () => {
   it("fills empty sections but leaves populated ones intact", () => {

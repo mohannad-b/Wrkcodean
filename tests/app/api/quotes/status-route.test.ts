@@ -36,6 +36,7 @@ vi.mock("@/lib/auth/rbac", async () => {
   return {
     ...actual,
     can: canMock,
+    AuthorizationError: actual.AuthorizationError,
   };
 });
 

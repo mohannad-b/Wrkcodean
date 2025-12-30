@@ -1,10 +1,4 @@
-import {
-  BlueprintGallery as WorkflowGallery,
-  ComparisonBlock,
-  HowItWorks,
-  PricingOverview,
-  TrustSection,
-} from "@/components/website/HomeSections";
+import { WorkflowGallery, ComparisonBlock, HowItWorks, PricingOverview, TrustSection } from "@/components/website/HomeSections";
 import { NewHero } from "@/components/website/NewHero";
 
 export default function HomePage() {

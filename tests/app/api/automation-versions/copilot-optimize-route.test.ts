@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyBlueprint } from "@/lib/blueprint/factory";
+import { createEmptyBlueprint } from "@/lib/workflows/factory";
 
 const canMock = vi.fn();
 const logAuditMock = vi.fn();
@@ -37,7 +37,7 @@ vi.mock("@/lib/audit/log", () => ({
   logAudit: logAuditMock,
 }));
 
-vi.mock("@/lib/blueprint/sanitizer", () => ({
+vi.mock("@/lib/workflows/sanitizer", () => ({
   sanitizeBlueprintTopology: sanitizeMock,
 }));
 

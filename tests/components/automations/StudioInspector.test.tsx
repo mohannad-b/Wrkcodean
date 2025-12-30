@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { StudioInspector } from "@/components/automations/StudioInspector";
-import type { BlueprintStep } from "@/lib/blueprint/types";
+import type { BlueprintStep } from "@/lib/workflows/types";
 
 const baseStep: BlueprintStep = {
   id: "step-1",

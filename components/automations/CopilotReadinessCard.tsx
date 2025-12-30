@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import type { CopilotAnalysisState, CopilotTodoItem } from "@/lib/blueprint/copilot-analysis";
+import type { CopilotAnalysisState, CopilotTodoItem } from "@/lib/workflows/copilot-analysis";
 import { cn } from "@/lib/utils";
 
 type Props = {

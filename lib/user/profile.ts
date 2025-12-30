@@ -67,6 +67,9 @@ export async function getTenantScopedProfile(session: AppSession): Promise<UserP
 export function buildProfileUpdate(data: UserProfileUpdateInput): UserProfileUpdatePayload {
   const payload: UserProfileUpdatePayload = {};
 
+  if (data.name !== undefined && data.name !== null) {
+    payload.name = data.name;
+  }
   if (data.firstName !== undefined) {
     payload.firstName = data.firstName;
   }
@@ -107,7 +110,9 @@ export async function updateUserProfile(
 
   // Compute name from firstName/lastName if either is being updated
   const updatePayload: Record<string, unknown> = { ...updates };
-  if (updates.firstName !== undefined || updates.lastName !== undefined) {
+  if (updates.name !== undefined) {
+    updatePayload.name = updates.name;
+  } else if (updates.firstName !== undefined || updates.lastName !== undefined) {
     const finalFirstName = updates.firstName !== undefined ? updates.firstName : user.firstName;
     const finalLastName = updates.lastName !== undefined ? updates.lastName : user.lastName;
     const parts = [finalFirstName, finalLastName].filter(Boolean);

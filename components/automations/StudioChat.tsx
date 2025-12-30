@@ -7,10 +7,10 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
-import type { BlueprintUpdates } from "@/lib/blueprint/ai-updates";
-import type { Blueprint } from "@/lib/blueprint/types";
+import type { WorkflowUpdates } from "@/lib/workflows/ai-updates";
+import type { Workflow } from "@/lib/workflows/types";
 import type { CopilotThinkingStep } from "@/types/copilot-thinking";
-import type { BlueprintProgressSnapshot } from "@/lib/blueprint/copilot-analysis";
+import type { WorkflowProgressSnapshot } from "@/lib/workflows/copilot-analysis";
 
 type ChatRole = "user" | "assistant" | "system";
 
@@ -25,18 +25,18 @@ export interface CopilotMessage {
 
 interface StudioChatProps {
   automationVersionId: string | null;
-  blueprintEmpty: boolean;
+  workflowEmpty: boolean;
   disabled?: boolean;
   onConversationChange?: (messages: CopilotMessage[]) => void;
-  onBlueprintUpdates?: (updates: BlueprintUpdates | Blueprint) => void;
-  onBlueprintRefresh?: () => Promise<void> | void;
-  onProgressUpdate?: (progress: BlueprintProgressSnapshot | null) => void;
+  onWorkflowUpdates?: (updates: WorkflowUpdates | Workflow) => void;
+  onWorkflowRefresh?: () => Promise<void> | void;
+  onProgressUpdate?: (progress: WorkflowProgressSnapshot | null) => void;
   injectedMessage?: CopilotMessage | null;
   onInjectedMessageConsumed?: () => void;
   onSuggestNextSteps?: () => void;
   isRequestingSuggestions?: boolean;
   suggestionStatus?: string | null;
-  onBlueprintUpdatingChange?: (isUpdating: boolean) => void;
+  onWorkflowUpdatingChange?: (isUpdating: boolean) => void;
 }
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
@@ -58,7 +58,7 @@ type ApiCopilotMessage = {
 const DEFAULT_USER_FACING_THINKING_STEPS: CopilotThinkingStep[] = [
   { id: "thinking-default-1", label: "Digesting what you're trying to accomplish" },
   { id: "thinking-default-2", label: "Mapping how the systems should connect" },
-  { id: "thinking-default-3", label: "Drafting the next blueprint updates" },
+  { id: "thinking-default-3", label: "Drafting the next workflow updates" },
 ];
 const MAX_FOLLOWUP_QUESTIONS = 10;
 
@@ -67,18 +67,18 @@ const formatTimestamp = (iso: string) =>
 
 export function StudioChat({
   automationVersionId,
-  blueprintEmpty,
+  workflowEmpty,
   disabled = false,
   onConversationChange,
-  onBlueprintUpdates,
-  onBlueprintRefresh,
+  onWorkflowUpdates,
+  onWorkflowRefresh,
   onProgressUpdate,
   injectedMessage = null,
   onInjectedMessageConsumed,
   onSuggestNextSteps,
   isRequestingSuggestions = false,
   suggestionStatus = null,
-  onBlueprintUpdatingChange,
+  onWorkflowUpdatingChange,
 }: StudioChatProps) {
   const { profile } = useUserProfile();
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
@@ -96,7 +96,7 @@ export function StudioChat({
   const [thinkingTextProgress, setThinkingTextProgress] = useState<Record<string, number>>({});
   const typingIntervalRef = useRef<number | null>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
-  const prevBlueprintEmptyRef = useRef<boolean>(blueprintEmpty);
+  const prevWorkflowEmptyRef = useRef<boolean>(workflowEmpty);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const actionButtonsDisabled = disabled || !automationVersionId;
   const [attachedFiles, setAttachedFiles] = useState<Array<{ id: string; filename: string; url: string; type: string }>>([]);
@@ -126,7 +126,7 @@ export function StudioChat({
     (message: ApiCopilotMessage): CopilotMessage => ({
       id: message.id,
       role: message.role,
-      content: message.role === "assistant" ? stripBlueprintBlocks(message.content) : message.content,
+      content: message.role === "assistant" ? stripWorkflowBlocks(message.content) : message.content,
       createdAt: message.createdAt,
     }),
     []
@@ -177,7 +177,7 @@ export function StudioChat({
   }, [automationVersionId, mapApiMessage]);
 
   useEffect(() => {
-    if (prevBlueprintEmptyRef.current && !blueprintEmpty) {
+    if (prevWorkflowEmptyRef.current && !workflowEmpty) {
       setMessages((prev) => [
         ...prev,
         {
@@ -189,8 +189,8 @@ export function StudioChat({
         },
       ]);
     }
-    prevBlueprintEmptyRef.current = blueprintEmpty;
-  }, [blueprintEmpty]);
+    prevWorkflowEmptyRef.current = workflowEmpty;
+  }, [workflowEmpty]);
 
   const durableMessages = useMemo(() => dropTransientMessages(messages), [messages, dropTransientMessages]);
 
@@ -270,7 +270,7 @@ useEffect(() => {
     onInjectedMessageConsumed?.();
   }, [injectedMessage, onInjectedMessageConsumed]);
 
-  // Auto-trigger blueprint generation if there's a user message but no assistant response
+  // Auto-trigger workflow generation if there's a user message but no assistant response
   useEffect(() => {
     if (!automationVersionId || isSending || isAwaitingReply || isLoadingThread || disabled) {
       return;
@@ -281,7 +281,7 @@ useEffect(() => {
     const assistantCount = assistantMessages.length;
     
     // If there's at least one user message but no assistant response, auto-trigger
-    if (userMessages.length > 0 && assistantMessages.length === 0 && blueprintEmpty) {
+    if (userMessages.length > 0 && assistantMessages.length === 0 && workflowEmpty) {
       if (assistantCount >= MAX_FOLLOWUP_QUESTIONS) {
         return;
       }
@@ -302,7 +302,7 @@ useEffect(() => {
         setCurrentThinkingIndex(0);
         setAssistantError(null);
 
-        fetch(`/api/automation-versions/${automationVersionId}/copilot/draft-blueprint`, {
+        fetch(`/api/automation-versions/${automationVersionId}/copilot/draft-workflow`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ messages: draftMessages }),
@@ -310,15 +310,15 @@ useEffect(() => {
           .then(async (response) => {
             if (!response.ok) {
               const errorData = await response.json().catch(() => ({}));
-              throw new Error(errorData.error ?? "Failed to generate blueprint");
+              throw new Error(errorData.error ?? "Failed to generate workflow");
             }
             return response.json();
           })
           .then(async (data: {
-            blueprint?: Blueprint | null;
+            workflow?: Workflow | null;
             message?: ApiCopilotMessage;
             thinkingSteps?: CopilotThinkingStep[];
-            progress?: BlueprintProgressSnapshot | null;
+            progress?: WorkflowProgressSnapshot | null;
           }) => {
             if (data.message) {
               const assistantMessage = mapApiMessage(data.message);
@@ -329,27 +329,27 @@ useEffect(() => {
                 return updated;
               });
             }
-            const runBlueprintUpdate = async () => {
-              if (data.blueprint) {
-                onBlueprintUpdatingChange?.(true);
+            const runWorkflowUpdate = async () => {
+              if (data.workflow) {
+                onWorkflowUpdatingChange?.(true);
                 try {
-                  onBlueprintUpdates?.(data.blueprint);
-                  await onBlueprintRefresh?.();
+                  onWorkflowUpdates?.(data.workflow);
+                  await onWorkflowRefresh?.();
                 } finally {
-                  onBlueprintUpdatingChange?.(false);
+                  onWorkflowUpdatingChange?.(false);
                 }
               }
               if (data.progress) {
                 onProgressUpdate?.(data.progress);
               }
             };
-            void runBlueprintUpdate();
+            void runWorkflowUpdate();
             if (data.thinkingSteps && data.thinkingSteps.length > 0) {
               setThinkingSteps(data.thinkingSteps);
             }
           })
           .catch((error) => {
-            setAssistantError(error instanceof Error ? error.message : "Failed to generate blueprint");
+            setAssistantError(error instanceof Error ? error.message : "Failed to generate workflow");
           })
           .finally(() => {
             setIsAwaitingReply(false);
@@ -360,16 +360,16 @@ useEffect(() => {
   }, [
     automationVersionId,
     durableMessages,
-    blueprintEmpty,
+    workflowEmpty,
     isSending,
     isAwaitingReply,
     isLoadingThread,
     disabled,
     mapApiMessage,
-    onBlueprintUpdates,
-    onBlueprintRefresh,
+    onWorkflowUpdates,
+    onWorkflowRefresh,
     onProgressUpdate,
-    onBlueprintUpdatingChange,
+    onWorkflowUpdatingChange,
   ]);
 
   const displayedThinkingSteps = useMemo(
@@ -517,7 +517,7 @@ useEffect(() => {
         }));
 
       if (draftMessages.length === 0) {
-        setAssistantError("Describe the workflow so Copilot can draft a blueprint.");
+        setAssistantError("Describe the workflow so Copilot can draft a workflow.");
         setShowThinkingBubble(false);
         setThinkingSteps([]);
         setCurrentThinkingIndex(0);
@@ -531,7 +531,7 @@ useEffect(() => {
       setCurrentThinkingIndex(0);
 
       const draftResponse = await fetch(
-        `/api/automation-versions/${automationVersionId}/copilot/draft-blueprint`,
+        `/api/automation-versions/${automationVersionId}/copilot/draft-workflow`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -540,14 +540,14 @@ useEffect(() => {
       );
 
       if (!draftResponse.ok) {
-        throw new Error("Failed to update blueprint");
+        throw new Error("Failed to update workflow");
       }
 
       const draftData: {
-        blueprint?: Blueprint | null;
+        workflow?: Workflow | null;
         message?: ApiCopilotMessage;
         thinkingSteps?: CopilotThinkingStep[];
-        progress?: BlueprintProgressSnapshot | null;
+        progress?: WorkflowProgressSnapshot | null;
       } = await draftResponse.json();
 
       if (draftData.message) {
@@ -561,22 +561,22 @@ useEffect(() => {
         });
       }
 
-      const runBlueprintUpdate = async () => {
+      const runWorkflowUpdate = async () => {
         const progressValue = draftData.progress ?? null;
-        if (draftData.blueprint && onBlueprintUpdates) {
-          onBlueprintUpdatingChange?.(true);
+        if (draftData.workflow && onWorkflowUpdates) {
+          onWorkflowUpdatingChange?.(true);
           try {
-            onBlueprintUpdates(mapBlueprintToUpdates(draftData.blueprint));
-            await onBlueprintRefresh?.();
+            onWorkflowUpdates(mapWorkflowToUpdates(draftData.workflow));
+            await onWorkflowRefresh?.();
           } finally {
-            onBlueprintUpdatingChange?.(false);
+            onWorkflowUpdatingChange?.(false);
           }
         }
         if (typeof onProgressUpdate === "function") {
           onProgressUpdate(progressValue);
         }
       };
-      void runBlueprintUpdate();
+      void runWorkflowUpdate();
 
       if (draftData.thinkingSteps && draftData.thinkingSteps.length > 0) {
         setThinkingSteps(draftData.thinkingSteps);
@@ -594,7 +594,7 @@ useEffect(() => {
         setMessages((prev) => prev.filter((msg) => msg.id !== optimisticMessage.id));
         setLocalError("Failed to send message. Try again.");
       } else {
-        setAssistantError("Failed to update blueprint. Try again.");
+        setAssistantError("Failed to update workflow. Try again.");
       }
       setThinkingSteps([]);
       setShowThinkingBubble(false);
@@ -613,9 +613,9 @@ useEffect(() => {
     isAwaitingReply,
     isSending,
     mapApiMessage,
-    onBlueprintRefresh,
-    onBlueprintUpdates,
-    onBlueprintUpdatingChange,
+    onWorkflowRefresh,
+    onWorkflowUpdates,
+    onWorkflowUpdatingChange,
     onProgressUpdate,
   ]);
 
@@ -868,7 +868,7 @@ useEffect(() => {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
             placeholder={
-              blueprintEmpty ? "Describe the workflow, systems, and exceptions..." : "Capture refinements or clarifications..."
+              workflowEmpty ? "Describe the workflow, systems, and exceptions..." : "Capture refinements or clarifications..."
             }
             className="w-full bg-white text-[#0A0A0A] placeholder:text-gray-400 text-sm rounded-xl py-3 pl-10 pr-12 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#E43632]/10 focus:border-[#E43632] transition-all shadow-sm hover:border-gray-300"
             disabled={disabled || !automationVersionId || isSending || isAwaitingReply}
@@ -886,14 +886,14 @@ useEffect(() => {
   );
 }
 
-const BLUEPRINT_BLOCK_REGEX = /```json blueprint_updates[\s\S]*?```/gi;
+const WORKFLOW_BLOCK_REGEX = /```json workflow_updates[\s\S]*?```/gi;
 
-function stripBlueprintBlocks(content: string): string {
+function stripWorkflowBlocks(content: string): string {
   if (!content) {
     return content;
   }
   return content
-    .replace(BLUEPRINT_BLOCK_REGEX, "")
+    .replace(WORKFLOW_BLOCK_REGEX, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -902,18 +902,18 @@ function countAssistantMessages(messages: CopilotMessage[]): number {
   return messages.filter((message) => message.role === "assistant").length;
 }
 
-function mapBlueprintToUpdates(blueprint: Blueprint): BlueprintUpdates {
-  const sections: NonNullable<BlueprintUpdates["sections"]> = {};
-  blueprint.sections.forEach((section) => {
+function mapWorkflowToUpdates(workflow: Workflow): WorkflowUpdates {
+  const sections: NonNullable<WorkflowUpdates["sections"]> = {};
+  workflow.sections.forEach((section) => {
     const content = section.content?.trim();
     if (content) {
       sections[section.key] = content;
     }
   });
 
-  const updates: BlueprintUpdates = {
-    summary: blueprint.summary,
-    steps: blueprint.steps.map((step) => ({
+  const updates: WorkflowUpdates = {
+    summary: workflow.summary,
+    steps: workflow.steps.map((step) => ({
       id: step.id,
       title: step.name,
       type: step.type,

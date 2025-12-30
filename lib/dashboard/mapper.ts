@@ -56,8 +56,8 @@ export function toDashboardAutomation(api: ApiAutomationSummary): DashboardAutom
 
 export function summarizeCounts(automations: DashboardAutomation[]) {
   const total = automations.length;
-  const live = automations.filter((a) => a.status === "Live").length;
-  const building = automations.filter((a) => a.status === "Build in Progress").length;
+  const live = automations.filter((a) => a.statusEnum === "Live").length;
+  const building = automations.filter((a) => a.statusEnum === "BuildInProgress").length;
   return { total, live, building };
 }
 

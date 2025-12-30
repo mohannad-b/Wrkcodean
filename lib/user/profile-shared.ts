@@ -17,7 +17,7 @@ export interface UserProfile {
 
 export type UserProfileEditableFields = Pick<
   UserProfile,
-  "firstName" | "lastName" | "title" | "avatarUrl" | "timezone" | "notificationPreference"
+  "name" | "firstName" | "lastName" | "title" | "avatarUrl" | "timezone" | "notificationPreference"
 >;
 
 export type UserProfileUpdatePayload = Partial<UserProfileEditableFields>;
@@ -31,6 +31,7 @@ export const USER_PROFILE_NAME_MAX = 120;
 export const USER_PROFILE_FIRST_NAME_MAX = 60;
 export const USER_PROFILE_LAST_NAME_MAX = 60;
 export const USER_PROFILE_TITLE_MAX = 120;
+export const USER_PROFILE_FULL_NAME_MAX = 120;
 
 const TIMEZONE_PATTERN = /^[A-Za-z]+(?:[_-][A-Za-z]+)*(?:\/[A-Za-z]+(?:[_-][A-Za-z]+)*)+$/;
 const SUPPORTED_TIMEZONES =
@@ -106,6 +107,7 @@ const timezoneField = z
 
 export const userProfileUpdateSchema = z
   .object({
+    name: nullableLimitedString(USER_PROFILE_FULL_NAME_MAX),
     firstName: nullableLimitedString(USER_PROFILE_FIRST_NAME_MAX),
     lastName: nullableLimitedString(USER_PROFILE_LAST_NAME_MAX),
     title: nullableLimitedString(USER_PROFILE_TITLE_MAX),

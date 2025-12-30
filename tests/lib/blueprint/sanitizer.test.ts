@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { sanitizeBlueprintTopology } from "@/lib/blueprint/sanitizer";
-import type { Blueprint } from "@/lib/blueprint/types";
+import { sanitizeBlueprintTopology } from "@/lib/workflows/sanitizer";
+import type { Blueprint } from "@/lib/workflows/types";
 
 const baseBlueprint = (): Blueprint => ({
   version: 1,

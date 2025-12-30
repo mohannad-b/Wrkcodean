@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CardChatBlueprint } from './hero/CardChatBlueprint';
+import { CardChatWorkflow } from './hero/CardChatWorkflow';
 import { CardCollaboration } from './hero/CardCollaboration';
 import { CardLaunchDashboard } from './hero/CardLaunchDashboard';
 import { cn } from '@/lib/utils';
@@ -21,8 +21,8 @@ export const HeroAnimation = () => {
     {
       id: 'chat',
       title: 'Describe',
-      component: <CardChatBlueprint />,
-      description: 'Chat to Blueprint'
+      component: <CardChatWorkflow />,
+      description: 'Chat to Workflow'
     },
     {
       id: 'collab',

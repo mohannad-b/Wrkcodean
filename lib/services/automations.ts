@@ -22,11 +22,12 @@ import {
   fromDbAutomationStatus,
   toDbAutomationStatus,
 } from "@/lib/automations/status";
-import type { Workflow } from "@/lib/blueprint/types";
-import { createEmptyWorkflow } from "@/lib/blueprint/factory";
+import type { Workflow } from "@/lib/workflows/types";
+import { createEmptyWorkflowSpec } from "@/lib/workflows/factory";
 import { getLatestMetricForVersion, getLatestMetricsForVersions } from "@/lib/services/automation-metrics";
 import { ApiError } from "@/lib/api/context";
 import { buildWorkflowViewModel, type WorkflowViewModel } from "@/lib/workflows/view-model";
+import { sendDevAgentLog } from "@/lib/dev/agent-log";
 
 type AutomationWithLatestVersion = Automation & {
   latestVersion: (AutomationVersion & { latestQuote: Quote | null; latestMetrics: AutomationVersionMetric | null }) | null;
@@ -34,18 +35,34 @@ type AutomationWithLatestVersion = Automation & {
 };
 
 export async function listAutomationsForTenant(tenantId: string): Promise<AutomationWithLatestVersion[]> {
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:35',message:'listAutomationsForTenant entry',data:{tenantId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
+  sendDevAgentLog(
+    {
+      location: "lib/services/automations.ts:35",
+      message: "listAutomationsForTenant entry",
+      data: { tenantId },
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "A",
+    },
+    { dedupeKey: `list-automations-${tenantId}-entry`, throttleMs: 2000, sampleRate: 0.2 }
+  );
   const queryStart = Date.now();
   const automationRows = await db
     .select()
     .from(automations)
     .where(eq(automations.tenantId, tenantId))
     .orderBy(desc(automations.updatedAt));
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:40',message:'automations query completed',data:{automationCount:automationRows.length,queryTimeMs:Date.now()-queryStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-  // #endregion
+  sendDevAgentLog(
+    {
+      location: "lib/services/automations.ts:40",
+      message: "automations query completed",
+      data: { automationCount: automationRows.length, queryTimeMs: Date.now() - queryStart },
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "C",
+    },
+    { dedupeKey: `list-automations-${tenantId}-complete`, throttleMs: 2000, sampleRate: 0.2 }
+  );
 
   if (automationRows.length === 0) {
     return [];
@@ -55,14 +72,34 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
   const creatorIdsRaw = automationRows
     .map((row) => row.createdBy)
     .filter((id): id is string => id !== null);
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:49',message:'creatorIds before deduplication',data:{creatorIdsRaw,rawCount:creatorIdsRaw.length,uniqueCount:new Set(creatorIdsRaw).size,hasDuplicates:creatorIdsRaw.length!==new Set(creatorIdsRaw).size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
+  sendDevAgentLog(
+    {
+      location: "lib/services/automations.ts:49",
+      message: "creatorIds before deduplication",
+      data: {
+        creatorIdsRaw,
+        rawCount: creatorIdsRaw.length,
+        uniqueCount: new Set(creatorIdsRaw).size,
+        hasDuplicates: creatorIdsRaw.length !== new Set(creatorIdsRaw).size,
+      },
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "A",
+    },
+    { dedupeKey: `creator-ids-raw-${tenantId}`, throttleMs: 2000, sampleRate: 0.2 }
+  );
   const creatorIds = Array.from(new Set(creatorIdsRaw));
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:52',message:'creatorIds after deduplication',data:{creatorIds,deduplicatedCount:creatorIds.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-
-  // #endregion
+  sendDevAgentLog(
+    {
+      location: "lib/services/automations.ts:52",
+      message: "creatorIds after deduplication",
+      data: { creatorIds, deduplicatedCount: creatorIds.length },
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "A",
+    },
+    { dedupeKey: `creator-ids-dedup-${tenantId}`, throttleMs: 2000, sampleRate: 0.2 }
+  );
   // Fetch creator information
   const creatorQueryStart = Date.now();
   const creatorRows = creatorIds.length
@@ -71,9 +108,21 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
         .from(users)
         .where(inArray(users.id, creatorIds))
     : [];
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:57',message:'users query completed',data:{creatorRowsCount:creatorRows.length,queryTimeMs:Date.now()-creatorQueryStart,creatorIdsCount:creatorIds.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
+  sendDevAgentLog(
+    {
+      location: "lib/services/automations.ts:57",
+      message: "users query completed",
+      data: {
+        creatorRowsCount: creatorRows.length,
+        queryTimeMs: Date.now() - creatorQueryStart,
+        creatorIdsCount: creatorIds.length,
+      },
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "A",
+    },
+    { dedupeKey: `creator-users-query-${tenantId}`, throttleMs: 2000, sampleRate: 0.2 }
+  );
 
   const creatorMap = new Map<string, User>();
   for (const creator of creatorRows) {
@@ -86,9 +135,21 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
     .from(automationVersions)
     .where(inArray(automationVersions.automationId, automationIds))
     .orderBy(desc(automationVersions.createdAt));
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:68',message:'automationVersions query completed',data:{versionRowsCount:versionRows.length,automationIdsCount:automationIds.length,queryTimeMs:Date.now()-versionQueryStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-  // #endregion
+  sendDevAgentLog(
+    {
+      location: "lib/services/automations.ts:68",
+      message: "automationVersions query completed",
+      data: {
+        versionRowsCount: versionRows.length,
+        automationIdsCount: automationIds.length,
+        queryTimeMs: Date.now() - versionQueryStart,
+      },
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "C",
+    },
+    { dedupeKey: `version-query-${tenantId}`, throttleMs: 2000, sampleRate: 0.2 }
+  );
 
   const latestVersionMap = new Map<string, AutomationVersion>();
   for (const version of versionRows) {
@@ -104,9 +165,21 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
 
   const metricsQueryStart = Date.now();
   const latestMetricMap = await getLatestMetricsForVersions(tenantId, latestVersionIds);
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:81',message:'getLatestMetricsForVersions completed',data:{latestVersionIdsCount:latestVersionIds.length,metricsCount:latestMetricMap.size,queryTimeMs:Date.now()-metricsQueryStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-  // #endregion
+  sendDevAgentLog(
+    {
+      location: "lib/services/automations.ts:81",
+      message: "getLatestMetricsForVersions completed",
+      data: {
+        latestVersionIdsCount: latestVersionIds.length,
+        metricsCount: latestMetricMap.size,
+        queryTimeMs: Date.now() - metricsQueryStart,
+      },
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "C",
+    },
+    { dedupeKey: `metrics-query-${tenantId}`, throttleMs: 2000, sampleRate: 0.2 }
+  );
   const quoteQueryStart = Date.now();
   const quoteRows = latestVersionIds.length
     ? await db
@@ -115,9 +188,21 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
         .where(inArray(quotes.automationVersionId, latestVersionIds))
         .orderBy(desc(quotes.createdAt))
     : [];
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:88',message:'quotes query completed',data:{quoteRowsCount:quoteRows.length,latestVersionIdsCount:latestVersionIds.length,queryTimeMs:Date.now()-quoteQueryStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-  // #endregion
+  sendDevAgentLog(
+    {
+      location: "lib/services/automations.ts:88",
+      message: "quotes query completed",
+      data: {
+        quoteRowsCount: quoteRows.length,
+        latestVersionIdsCount: latestVersionIds.length,
+        queryTimeMs: Date.now() - quoteQueryStart,
+      },
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "C",
+    },
+    { dedupeKey: `quotes-query-${tenantId}`, throttleMs: 2000, sampleRate: 0.2 }
+  );
 
   const latestQuoteMap = new Map<string, Quote>();
   for (const quote of quoteRows) {
@@ -127,9 +212,17 @@ export async function listAutomationsForTenant(tenantId: string): Promise<Automa
   }
 
   const totalTime = Date.now() - queryStart;
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'lib/services/automations.ts:97',message:'listAutomationsForTenant exit',data:{totalTimeMs:totalTime,automationCount:automationRows.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-  // #endregion
+  sendDevAgentLog(
+    {
+      location: "lib/services/automations.ts:97",
+      message: "listAutomationsForTenant exit",
+      data: { totalTimeMs: totalTime, automationCount: automationRows.length },
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "C",
+    },
+    { dedupeKey: `list-automations-${tenantId}-exit`, throttleMs: 2000, sampleRate: 0.2 }
+  );
   return automationRows.map((automation) => {
     const version = latestVersionMap.get(automation.id);
     const creator = automation.createdBy ? creatorMap.get(automation.createdBy) ?? null : null;
@@ -303,7 +396,7 @@ export async function createAutomationVersion(params: CreateAutomationVersionPar
 
     const workflowJson: Workflow = sourceVersion?.workflowJson
       ? clone(sourceVersion.workflowJson as Workflow)
-      : createEmptyWorkflow();
+      : createEmptyWorkflowSpec();
     const summary = params.summary ?? sourceVersion?.summary ?? null;
     const intakeNotes = params.intakeNotes ?? sourceVersion?.intakeNotes ?? null;
     const requirementsText = sourceVersion?.requirementsText ?? null;
@@ -390,9 +483,12 @@ export type UpdateMetadataParams = {
   intakeNotes?: string | null;
   requirementsText?: string | null;
   workflowJson?: Workflow | null;
+  // Legacy compatibility: prefer workflowJson but accept blueprintJson when present
+  blueprintJson?: Workflow | null;
 };
 
 export async function updateAutomationVersionMetadata(params: UpdateMetadataParams) {
+  const workflowJson = params.workflowJson ?? params.blueprintJson ?? undefined;
   return db.transaction(async (tx) => {
     const versionRow = await tx
       .select()
@@ -441,8 +537,8 @@ export async function updateAutomationVersionMetadata(params: UpdateMetadataPara
     if (params.requirementsText !== undefined) {
       updatePayload.requirementsText = params.requirementsText;
     }
-    if (params.workflowJson !== undefined) {
-      updatePayload.workflowJson = params.workflowJson ?? undefined;
+    if (workflowJson !== undefined) {
+      updatePayload.workflowJson = workflowJson ?? undefined;
     }
     if (params.businessOwner !== undefined) {
       updatePayload.businessOwner = params.businessOwner ?? null;

@@ -43,7 +43,12 @@ type ChatEvent = {
   type: string;
   conversationId?: string;
   data?: unknown;
+  payload?: unknown;
   timestamp?: string;
+  lastMessageId?: string | null;
+  lastReadMessageId?: string | null;
+  unreadCount?: number;
+  resyncRecommended?: boolean;
 };
 
 interface WorkflowChatProps {
@@ -102,6 +107,9 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
       const reversedMessages = (data.messages || []).reverse();
       setMessages(reversedMessages);
       setConversationId(data.conversationId);
+      if (data.lastReadMessageId) {
+        setLastReadMessageId(data.lastReadMessageId);
+      }
       console.log("Fetched messages:", reversedMessages.length, reversedMessages);
     } catch (error) {
       console.error("Failed to fetch messages:", error);
@@ -246,11 +254,19 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
     eventSource.onmessage = (event) => {
       try {
         const data: ChatEvent = JSON.parse(event.data);
+        const payload = (data.payload ?? data.data) as unknown;
 
         if (data.type === "connected") {
           setConversationId(data.conversationId || null);
+          // If server hints at resync, fetch fresh messages.
+          if (data.resyncRecommended) {
+            fetchMessages();
+          } else if (data.lastMessageId) {
+            // Ensure we have the latest messages without duplication.
+            fetchMessages();
+          }
         } else if (data.type === "message.created") {
-          const message = data.data as WorkflowMessage;
+          const message = payload as WorkflowMessage;
           setMessages((prev) => {
             // Deduplicate by checking if message already exists
             const exists = prev.some(
@@ -282,15 +298,20 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
             setHasNewMessages(true);
           }
         } else if (data.type === "message.updated") {
-          const message = data.data as WorkflowMessage;
+          const message = payload as WorkflowMessage;
           setMessages((prev) =>
             prev.map((m) => (m.id === message.id ? message : m))
           );
         } else if (data.type === "message.deleted") {
-          const { messageId } = data.data as { messageId: string };
-          setMessages((prev) => prev.filter((m) => m.id !== messageId));
+          const { messageId, deletedAt } = (payload as { messageId: string; deletedAt?: string }) || {};
+          if (!messageId) return;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === messageId ? { ...m, deletedAt: deletedAt || new Date().toISOString(), body: "" } : m
+            )
+          );
         } else if (data.type === "typing.started") {
-          const typing = data.data as TypingState;
+          const typing = payload as TypingState;
           setTypingUsers((prev) => {
             const next = new Map(prev);
             next.set(typing.userId, typing);
@@ -307,7 +328,7 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
           }, 3000);
           typingTimeoutRef.current.set(typing.userId, timeout);
         } else if (data.type === "typing.stopped") {
-          const { userId } = data.data as { userId: string };
+          const { userId } = (payload as { userId: string }) || {};
           setTypingUsers((prev) => {
             const next = new Map(prev);
             next.delete(userId);
@@ -317,6 +338,11 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
           if (timeout) {
             clearTimeout(timeout);
             typingTimeoutRef.current.delete(userId);
+          }
+        } else if (data.type === "read.updated") {
+          const receipt = payload as { lastReadMessageId?: string };
+          if (receipt?.lastReadMessageId) {
+            setLastReadMessageId(receipt.lastReadMessageId);
           }
         }
       } catch (error) {
@@ -467,6 +493,14 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
                         <span className="text-xs text-gray-500">
                           {formatTime(message.createdAt)}
                         </span>
+                        <span
+                          className={cn(
+                            "text-[10px] px-2 py-0.5 rounded-full border",
+                            isWrk ? "border-[#E43632] text-[#E43632]" : "border-gray-300 text-gray-500"
+                          )}
+                        >
+                          {isWrk ? "Staff" : "Tenant"}
+                        </span>
                         {message.editedAt && (
                           <span className="text-xs text-gray-400">(edited)</span>
                         )}
@@ -482,7 +516,11 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
                           : "bg-gray-50 text-gray-800 rounded-tl-none border border-gray-100"
                       )}
                     >
-                      {message.body}
+                      {message.deletedAt ? (
+                        <span className="text-gray-500 italic">Message deleted</span>
+                      ) : (
+                        message.body
+                      )}
                       {message.attachments && message.attachments.length > 0 && (
                         <div className="mt-2 space-y-1">
                           {message.attachments.map((att) => (

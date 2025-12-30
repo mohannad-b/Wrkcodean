@@ -1,7 +1,7 @@
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-interface BlueprintProgressDonutProps {
+interface WorkflowProgressDonutProps {
   progress?: number;
   complete?: boolean;
   size?: number;
@@ -19,14 +19,14 @@ const getProgressColor = (value: number) => {
   return `hsl(${hue}, 70%, ${lightness}%)`;
 };
 
-export function BlueprintProgressDonut({
+export function WorkflowProgressDonut({
   progress = 0,
   complete = false,
   size = 28,
   thickness = 4,
   className,
   showPercentage = true,
-}: BlueprintProgressDonutProps) {
+}: WorkflowProgressDonutProps) {
   const clamped = clamp(progress);
   const angle = clamped * 360;
   const fillColor = getProgressColor(clamped);
