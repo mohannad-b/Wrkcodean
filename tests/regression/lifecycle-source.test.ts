@@ -19,7 +19,11 @@ function walk(dir: string, files: string[] = []): string[] {
 
 describe("lifecycle single source of truth", () => {
   it("uses lifecycle module instead of legacy build-status helpers", () => {
-    const allowList = new Set(["lib/submissions/lifecycle.ts", "lib/build-status/types.ts"]);
+    const allowList = new Set([
+      "lib/submissions/lifecycle.ts",
+      "lib/build-status/types.ts",
+      "tests/regression/lifecycle-source.test.ts",
+    ]);
     const root = process.cwd();
     const files = walk(root);
     const offenders: string[] = [];

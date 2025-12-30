@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import AutomationsPage from "@/app/(studio)/automations/page";
+import AutomationsPage from "@/app/(app)/(studio)/automations/page";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({

@@ -1,5 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/api/context", () => ({
+  requireTenantSession: vi.fn(async () => ({})),
+  handleApiError: (error: unknown) => new Response(String((error as Error)?.message ?? "error"), { status: 500 }),
+  ApiError: class ApiError extends Error {
+    status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.status = status;
+    }
+  },
+}));
+
+vi.mock("@/lib/auth/rbac", () => ({
+  can: () => true,
+}));
+
+vi.mock("@/lib/services/automations", () => ({
+  getAutomationVersionDetail: vi.fn(async () => ({
+    version: { workflowJson: null },
+    automation: { id: "a1", name: "Automation" },
+  })),
+}));
+
 vi.mock("openai", () => ({
   default: class OpenAI {
     chat = { completions: { create: vi.fn(async () => ({ choices: [{ message: { content: "[]" } }] })) } };

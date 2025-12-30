@@ -38,7 +38,7 @@ vi.mock("@/lib/audit/log", () => ({
 }));
 
 vi.mock("@/lib/workflows/sanitizer", () => ({
-  sanitizeBlueprintTopology: sanitizeMock,
+  sanitizeWorkflowTopology: sanitizeMock,
 }));
 
 vi.mock("next/cache", () => ({
@@ -64,13 +64,13 @@ describe("POST /api/automation-versions/[id]/copilot/optimize", () => {
         automationId: "auto-1",
         status: "Draft",
         intakeNotes: "",
-        blueprintJson: blueprint,
+        workflowJson: blueprint,
         updatedAt: new Date().toISOString(),
       },
       automation: { id: "auto-1", name: "Invoice Automation" },
     });
     sanitizeMock.mockImplementation((value) => ({
-      blueprint: value,
+      workflow: value,
       summary: {
         removedDuplicateEdges: 0,
         reparentedBranches: 0,
@@ -97,7 +97,7 @@ describe("POST /api/automation-versions/[id]/copilot/optimize", () => {
     expect(payload.telemetry?.sanitizationSummary).toBeDefined();
     expect(logAuditMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: "automation.blueprint.optimized",
+        action: "automation.workflow.optimized",
         resourceId: "version-1",
       })
     );

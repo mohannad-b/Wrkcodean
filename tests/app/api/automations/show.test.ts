@@ -6,6 +6,7 @@ const getAutomationDetailMock = vi.fn();
 
 vi.mock("@/lib/auth/session", () => ({
   getSession: getSessionMock,
+  getTenantSession: getSessionMock,
 }));
 
 vi.mock("@/lib/auth/rbac", () => ({

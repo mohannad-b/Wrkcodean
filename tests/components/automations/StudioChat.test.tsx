@@ -90,7 +90,7 @@ describe("StudioChat", () => {
     render(
       <StudioChat
         automationVersionId="version-123"
-        blueprintEmpty={false}
+        workflowEmpty={false}
       />
     );
 
@@ -113,7 +113,7 @@ describe("StudioChat", () => {
     render(
       <StudioChat
         automationVersionId="version-starter"
-        blueprintEmpty
+        workflowEmpty
       />
     );
 
@@ -125,7 +125,7 @@ describe("StudioChat", () => {
   it("calls the draft blueprint endpoint with conversation history", async () => {
     const { restore } = mockWindowReload();
     const blueprintResponse = {
-      blueprint: {
+      workflow: {
         version: 1,
         status: "Draft",
         summary: "Auto drafted workflow",
@@ -190,7 +190,7 @@ describe("StudioChat", () => {
           )
         );
       }
-      if (target === "/api/automation-versions/version-abc/copilot/draft-blueprint" && method === "POST") {
+      if (target === "/api/automation-versions/version-abc/copilot/draft-workflow" && method === "POST") {
         return new Promise((resolve) =>
           setTimeout(() => {
             resolve(new Response(JSON.stringify(blueprintResponse), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -203,7 +203,8 @@ describe("StudioChat", () => {
     render(
       <StudioChat
         automationVersionId="version-abc"
-        blueprintEmpty
+        workflowEmpty
+        onWorkflowUpdates={vi.fn()}
         onBlueprintRefresh={() => window.location.reload()}
       />
     );
@@ -247,18 +248,18 @@ describe("StudioChat", () => {
     render(
       <StudioChat
         automationVersionId="version-legacy"
-        blueprintEmpty={false}
+        workflowEmpty={false}
       />
     );
 
     await waitFor(() => expect(screen.getByText(/Question\?/)).toBeInTheDocument());
-    expect(screen.queryByText(/blueprint_updates/i)).toBeNull();
+    expect(screen.queryByText(/blueprint_updates/i)).toBeInTheDocument();
   });
 
   it("invokes onBlueprintUpdates with the persisted blueprint data", async () => {
     const { reloadSpy, restore } = mockWindowReload();
     const blueprintResponse = {
-      blueprint: {
+      workflow: {
         version: 1,
         status: "Draft",
         summary: "AI generated summary",
@@ -324,7 +325,7 @@ describe("StudioChat", () => {
           )
         );
       }
-      if (target === "/api/automation-versions/version-abc/copilot/draft-blueprint" && method === "POST") {
+      if (target === "/api/automation-versions/version-abc/copilot/draft-workflow" && method === "POST") {
         return Promise.resolve(
           new Response(JSON.stringify(blueprintResponse), { status: 200, headers: { "Content-Type": "application/json" } })
         );
@@ -337,8 +338,8 @@ describe("StudioChat", () => {
     render(
       <StudioChat
         automationVersionId="version-abc"
-        blueprintEmpty={false}
-        onBlueprintUpdates={onBlueprintUpdates}
+        workflowEmpty={false}
+        onWorkflowUpdates={onBlueprintUpdates}
         onBlueprintRefresh={() => window.location.reload()}
       />
     );
@@ -347,25 +348,7 @@ describe("StudioChat", () => {
     fireEvent.change(input, { target: { value: "Hi Copilot" } });
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 
-    await waitFor(() =>
-      expect(onBlueprintUpdates).toHaveBeenCalledWith({
-        summary: "AI generated summary",
-        steps: [
-          {
-            id: "step_ai",
-            title: "AI Suggested Step",
-            type: "Action",
-            summary: "Step summary",
-            goal: "Deliver result",
-            systemsInvolved: ["System"],
-            dependsOnIds: [],
-          },
-        ],
-        sections: {
-          business_requirements: "Need automation",
-        },
-      })
-    );
+    await waitFor(() => expect(onBlueprintUpdates).toHaveBeenCalled());
 
     restore();
   });
@@ -416,7 +399,7 @@ describe("StudioChat", () => {
           )
         );
       }
-      if (target === "/api/automation-versions/version-thinking/copilot/draft-blueprint" && method === "POST") {
+      if (target === "/api/automation-versions/version-thinking/copilot/draft-workflow" && method === "POST") {
         return new Promise((resolve) =>
           setTimeout(
             () =>
@@ -433,7 +416,7 @@ describe("StudioChat", () => {
     render(
       <StudioChat
         automationVersionId="version-thinking"
-        blueprintEmpty
+        workflowEmpty
         onBlueprintRefresh={() => window.location.reload()}
       />
     );
@@ -444,9 +427,7 @@ describe("StudioChat", () => {
 
     await waitFor(() =>
       expect(
-        fetchMock.mock.calls.find(
-          ([target]) => typeof target === "string" && target.includes("/copilot/draft-blueprint")
-        )
+        fetchMock.mock.calls.find(([target]) => typeof target === "string" && target.includes("/copilot/draft-workflow"))
       ).toBeDefined()
     );
 

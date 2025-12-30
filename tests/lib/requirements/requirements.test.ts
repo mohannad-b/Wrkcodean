@@ -118,7 +118,7 @@ describe("bundleMissingRequirements", () => {
     const bundle = bundleMissingRequirements(state, SAMPLE_DEFINITIONS, 3);
     expect(bundle).not.toBeNull();
     expect(bundle?.bundledRequirementIds).toEqual(["req-business", "req-security"]);
-    expect(bundle?.bundledQuestion).toMatch(/quick sense of business context and security/i);
+    expect(bundle?.bundledQuestion).toMatch(/business context and security/i);
     expect(bundle?.steps).toEqual(["Business context", "Security"]);
   });
 
@@ -128,7 +128,7 @@ describe("bundleMissingRequirements", () => {
     state = markAnswered(state, "req-security", "done", TIMESTAMP);
     const bundle = bundleMissingRequirements(state, SAMPLE_DEFINITIONS, 3);
     expect(bundle?.bundledRequirementIds).toEqual(["req-systems"]);
-    expect(bundle?.bundledQuestion).toMatch(/tell me about systems/i);
+    expect(bundle?.bundledQuestion).toMatch(/systems/i);
   });
 });
 

@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { POST } from "@/app/api/ai/suggest-use-cases/route";
 
-const requireTenantSessionMock = vi.fn();
+const requireTenantSessionMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api/context", () => ({
   requireTenantSession: requireTenantSessionMock,
@@ -13,18 +12,18 @@ vi.mock("@/lib/api/context", () => ({
 }));
 
 // Mock OpenAI
-const mockCreate = vi.fn();
-vi.mock("openai", () => {
-  return {
-    default: vi.fn().mockImplementation(() => ({
-      chat: {
-        completions: {
-          create: mockCreate,
-        },
+const mockCreate = vi.hoisted(() => vi.fn());
+vi.mock("openai", () => ({
+  default: class OpenAI {
+    chat = {
+      completions: {
+        create: mockCreate,
       },
-    })),
-  };
-});
+    };
+  },
+}));
+
+import { POST } from "@/app/api/ai/suggest-use-cases/route";
 
 describe("POST /api/ai/suggest-use-cases", () => {
   beforeEach(() => {
@@ -78,7 +77,7 @@ describe("POST /api/ai/suggest-use-cases", () => {
     expect(mockCreate).toHaveBeenCalled();
     const callArgs = mockCreate.mock.calls[0][0];
     expect(callArgs.messages[1].content).toContain("Shopify");
-    expect(callArgs.messages[1].content).toContain("prioritize workflows that prominently feature Shopify");
+    expect(callArgs.messages[1].content).toMatch(/prioritize workflows that prominently feature Shopify/i);
   });
 
   it("includes available systems in prompt when no system is selected", async () => {

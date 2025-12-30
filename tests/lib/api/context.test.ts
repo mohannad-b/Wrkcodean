@@ -12,6 +12,7 @@ vi.mock("@/lib/auth/session", () => ({
   getWrkStaffSession: mocks.getWrkStaffSessionMock,
   getUserSession: mocks.getUserSessionMock,
   NoTenantMembershipError: class NoTenantMembershipError extends Error {},
+  NoActiveWorkspaceError: class NoActiveWorkspaceError extends Error {},
   NotWrkStaffError: class NotWrkStaffError extends Error {},
 }));
 

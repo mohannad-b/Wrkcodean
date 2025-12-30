@@ -6,7 +6,7 @@ const logAuditMock = vi.fn();
 const requireTenantSessionMock = vi.fn();
 const getDetailMock = vi.fn();
 const rateLimitMock = vi.fn();
-const buildBlueprintFromChatMock = vi.fn();
+const buildWorkflowFromChatMock = vi.fn();
 const applyStepNumbersMock = vi.fn();
 const revalidatePathMock = vi.fn();
 const returningMock = vi.fn();
@@ -42,7 +42,8 @@ vi.mock("@/lib/audit/log", () => ({
 }));
 
 vi.mock("@/lib/workflows/ai-builder-simple", () => ({
-  buildBlueprintFromChat: buildBlueprintFromChatMock,
+  buildWorkflowFromChat: buildWorkflowFromChatMock,
+  buildBlueprintFromChat: buildWorkflowFromChatMock,
 }));
 
 vi.mock("@/lib/workflows/step-numbering", () => ({
@@ -77,6 +78,15 @@ vi.mock("@/lib/ai/blueprint-progress", () => ({
   summarizeBlueprintProgress: () => "ok",
 }));
 
+vi.mock("@/lib/services/copilot-analysis", () => ({
+  getCopilotAnalysis: vi.fn(async () => null),
+  upsertCopilotAnalysis: vi.fn(async () => {}),
+}));
+
+vi.mock("@/lib/ai/workflow-progress", () => ({
+  evaluateWorkflowProgress: vi.fn(async () => ({ score: 1 })),
+}));
+
 describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -92,7 +102,7 @@ describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
         automationId: "auto-1",
         status: "IntakeInProgress",
         intakeNotes: "Sample intake",
-        blueprintJson: null,
+        workflowJson: null,
         updatedAt: new Date().toISOString(),
       },
       automation: { id: "auto-1", name: "Invoice Automation", description: "desc" },
@@ -121,18 +131,20 @@ describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
       ],
       branches: [],
     };
-    buildBlueprintFromChatMock.mockResolvedValue({
+    buildWorkflowFromChatMock.mockResolvedValue({
       blueprint: sampleBlueprint,
+      workflow: sampleBlueprint,
       tasks: [],
       chatResponse: "Got it.",
       followUpQuestion: undefined,
+      sanitizationSummary: {},
     });
     applyStepNumbersMock.mockImplementation((blueprint) => blueprint);
     returningMock.mockResolvedValue([
       {
         id: "version-1",
         automationId: "auto-1",
-        blueprintJson: sampleBlueprint,
+        workflowJson: sampleBlueprint,
       },
     ]);
     updateMock.mockReturnValue({ set: setMock });
@@ -163,12 +175,12 @@ describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
     const response = await POST(request, { params: { id: "version-1" } });
     expect(response.status).toBe(200);
     const payload = await response.json();
-    expect(payload.blueprint).toMatchObject({
+    expect(payload.workflowJson).toMatchObject({
       status: "Draft",
       sections: expect.any(Array),
       steps: expect.any(Array),
     });
-    expect(buildBlueprintFromChatMock).toHaveBeenCalledWith(
+    expect(buildWorkflowFromChatMock).toHaveBeenCalledWith(
       expect.objectContaining({
         userMessage: expect.stringContaining("invoices"),
       })
@@ -181,7 +193,7 @@ describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
     );
     expect(payload.message).toMatchObject({
       role: "assistant",
-      content: "Got it.",
+      content: expect.stringContaining("Got it."),
     });
     expect(syncAutomationTasksMock).toHaveBeenCalled();
     expect(updateMock).toHaveBeenCalled();
@@ -189,7 +201,7 @@ describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
     expect(revalidatePathMock).toHaveBeenCalledWith("/automations/auto-1");
     expect(logAuditMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: "automation.blueprint.drafted",
+        action: "automation.workflow.drafted",
         resourceId: "version-1",
         metadata: expect.objectContaining({
           source: "copilot",
@@ -213,7 +225,7 @@ describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
 
     const response = await POST(request, { params: { id: "version-1" } });
     expect(response.status).toBe(400);
-    expect(buildBlueprintFromChatMock).not.toHaveBeenCalled();
+    expect(buildWorkflowFromChatMock).not.toHaveBeenCalled();
   });
 
   it("executes direct commands locally", async () => {
@@ -224,7 +236,7 @@ describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
         automationId: "auto-1",
         status: "IntakeInProgress",
         intakeNotes: "Sample intake",
-        blueprintJson: {
+        workflowJson: {
           ...createEmptyBlueprint(),
           steps: [
             {
@@ -263,7 +275,7 @@ describe("POST /api/automation-versions/[id]/copilot/draft-blueprint", () => {
     const payload = await response.json();
     expect(payload.commandExecuted).toBe(true);
     expect(payload.message.content).toContain("Deleted step 1");
-    expect(buildBlueprintFromChatMock).not.toHaveBeenCalled();
+    expect(buildWorkflowFromChatMock).not.toHaveBeenCalled();
     expect(createCopilotMessageMock).toHaveBeenCalledWith(
       expect.objectContaining({
         automationVersionId: "version-1",

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createVersionWithRedirect } from "@/app/(studio)/automations/[automationId]/create-version";
+import { createVersionWithRedirect } from "@/app/(app)/(studio)/automations/[automationId]/create-version";
 
 const fetchAutomationMock = vi.fn();
 const setSelectedVersionIdMock = vi.fn();

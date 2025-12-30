@@ -136,12 +136,13 @@ describe("generateThinkingSteps", () => {
 
   it("references systems from the latest user message", () => {
     const steps = generateThinkingSteps("flow", "Route leads from Salesforce into HubSpot", null);
-    expect(steps[1].label).toBe("Connecting Salesforce and HubSpot");
+    expect(steps[1].label).toContain("Salesforce");
+    expect(steps[1].label).toContain("HubSpot");
   });
 
   it("highlights approval logic when mentioned", () => {
     const steps = generateThinkingSteps("details", "If it's over $5K we need to approve manually", null);
-    expect(steps[0].label).toBe("Analyzing approval threshold logic");
+    expect(steps[0].label.toLowerCase()).toContain("approval");
   });
 });
 

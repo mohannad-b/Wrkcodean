@@ -43,7 +43,7 @@ const sections = [
   { id: "sec-8", key: "flow_complete", title: "Flow Complete", content: "CRM updated" },
 ];
 
-const validBlueprint = {
+const validWorkflow = {
   version: 1,
   status: "Draft",
   summary: "Draft workflow for onboarding new leads.",
@@ -78,7 +78,7 @@ describe("PATCH /api/automation-versions/[id]", () => {
       version: {
         id: "version-1",
         intakeNotes: "notes",
-        blueprintJson: validBlueprint,
+        workflowJson: validWorkflow,
         businessOwner: "Owner",
         tags: ["Tag"],
       },
@@ -91,7 +91,7 @@ describe("PATCH /api/automation-versions/[id]", () => {
         status: "IntakeInProgress",
         intakeNotes: "notes",
         summary: "Summary",
-        blueprintJson: validBlueprint,
+        workflowJson: validWorkflow,
         businessOwner: "Owner",
         tags: ["Tag"],
         createdAt: new Date().toISOString(),
@@ -104,7 +104,7 @@ describe("PATCH /api/automation-versions/[id]", () => {
     const { PATCH } = await import("@/app/api/automation-versions/[id]/route");
     const request = new Request("http://localhost/api/automation-versions/version-1", {
       method: "PATCH",
-      body: JSON.stringify({ blueprintJson: { version: 2 } }),
+      body: JSON.stringify({ workflowJson: { version: 2 } }),
     });
 
     const response = await PATCH(request, { params: { id: "version-1" } });
@@ -116,13 +116,13 @@ describe("PATCH /api/automation-versions/[id]", () => {
     const { PATCH } = await import("@/app/api/automation-versions/[id]/route");
     const request = new Request("http://localhost/api/automation-versions/version-1", {
       method: "PATCH",
-      body: JSON.stringify({ blueprintJson: validBlueprint }),
+      body: JSON.stringify({ workflowJson: validWorkflow }),
     });
 
     const response = await PATCH(request, { params: { id: "version-1" } });
     expect(response.status).toBe(200);
     expect(updateMetadataMock).toHaveBeenCalledWith(
-      expect.objectContaining({ blueprintJson: validBlueprint, automationVersionId: "version-1" })
+      expect.objectContaining({ workflowJson: validWorkflow, automationVersionId: "version-1" })
     );
     expect(getDetailMock).toHaveBeenCalled();
   });
@@ -130,8 +130,8 @@ describe("PATCH /api/automation-versions/[id]", () => {
   it("persists inspector step edits", async () => {
     const { PATCH } = await import("@/app/api/automation-versions/[id]/route");
     const updatedBlueprint = {
-      ...validBlueprint,
-      steps: validBlueprint.steps.map((step) =>
+      ...validWorkflow,
+      steps: validWorkflow.steps.map((step) =>
         step.id === "step-1"
           ? {
               ...step,
@@ -143,17 +143,17 @@ describe("PATCH /api/automation-versions/[id]", () => {
     };
     const request = new Request("http://localhost/api/automation-versions/version-1", {
       method: "PATCH",
-      body: JSON.stringify({ blueprintJson: updatedBlueprint }),
+      body: JSON.stringify({ workflowJson: updatedBlueprint }),
     });
 
     const response = await PATCH(request, { params: { id: "version-1" } });
     expect(response.status).toBe(200);
     expect(updateMetadataMock).toHaveBeenCalledWith(
-      expect.objectContaining({ blueprintJson: updatedBlueprint, automationVersionId: "version-1" })
+      expect.objectContaining({ workflowJson: updatedBlueprint, automationVersionId: "version-1" })
     );
     const auditCall = logAuditMock.mock.calls.at(-1)?.[0];
-    expect(auditCall?.metadata?.blueprintSummary).toBeDefined();
-    expect(Array.isArray(auditCall?.metadata?.blueprintSummary)).toBe(true);
+    expect(auditCall?.metadata?.workflowSummary).toBeDefined();
+    expect(Array.isArray(auditCall?.metadata?.workflowSummary)).toBe(true);
   });
 });
 

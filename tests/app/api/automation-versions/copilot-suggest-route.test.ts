@@ -5,7 +5,7 @@ const canMock = vi.fn();
 const logAuditMock = vi.fn();
 const requireTenantSessionMock = vi.fn();
 const getDetailMock = vi.fn();
-const buildBlueprintFromChatMock = vi.fn();
+const buildWorkflowFromChatMock = vi.fn();
 const syncAutomationTasksMock = vi.fn();
 const revalidatePathMock = vi.fn();
 const createCopilotMessageMock = vi.fn();
@@ -44,7 +44,8 @@ vi.mock("@/lib/services/copilot-messages", () => ({
 }));
 
 vi.mock("@/lib/workflows/ai-builder-simple", () => ({
-  buildBlueprintFromChat: buildBlueprintFromChatMock,
+  buildWorkflowFromChat: buildWorkflowFromChatMock,
+  buildBlueprintFromChat: buildWorkflowFromChatMock,
 }));
 
 vi.mock("@/lib/workflows/task-sync", () => ({
@@ -83,17 +84,19 @@ describe("POST /api/automation-versions/[id]/copilot/suggest-next-steps", () => 
         automationId: "auto-1",
         status: "Draft",
         intakeNotes: "",
-        blueprintJson: blueprint,
+        workflowJson: blueprint,
         updatedAt: new Date().toISOString(),
       },
       automation: { id: "auto-1", name: "Invoice Automation" },
     });
     listCopilotMessagesMock.mockResolvedValue([]);
-    buildBlueprintFromChatMock.mockResolvedValue({
+    buildWorkflowFromChatMock.mockResolvedValue({
       blueprint,
+      workflow: blueprint,
       tasks: [],
       chatResponse: "Here are the next steps.",
       followUpQuestion: undefined,
+      sanitizationSummary: {},
     });
     syncAutomationTasksMock.mockResolvedValue({});
     returningMock.mockResolvedValue([{ automationId: "auto-1" }]);
@@ -121,14 +124,14 @@ describe("POST /api/automation-versions/[id]/copilot/suggest-next-steps", () => 
     expect(response.status).toBe(200);
     const body = await response.text();
     expect(body).toContain('"status":"complete"');
-    expect(buildBlueprintFromChatMock).toHaveBeenCalled();
+    expect(buildWorkflowFromChatMock).toHaveBeenCalled();
     expect(createCopilotMessageMock).toHaveBeenCalledWith(
       expect.objectContaining({ automationVersionId: "version-1" })
     );
     expect(revalidatePathMock).toHaveBeenCalledWith("/automations/auto-1");
     expect(logAuditMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: "automation.blueprint.suggested",
+        action: "automation.workflow.suggested",
         resourceId: "version-1",
       })
     );

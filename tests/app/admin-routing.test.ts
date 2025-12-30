@@ -17,6 +17,22 @@ vi.mock("@/lib/auth/rbac", async () => {
   };
 });
 
+vi.mock("@/components/wrk-admin/AdminSidebar", () => ({
+  AdminSidebar: () => null,
+}));
+
+vi.mock("next/navigation", () => ({
+  notFound: vi.fn(() => {
+    throw new Error("notFound");
+  }),
+  redirect: vi.fn((url: string) => {
+    const error = new Error(`redirect:${url}`);
+    // @ts-expect-error annotate redirect marker for assertions if needed
+    error.isRedirect = true;
+    throw error;
+  }),
+}));
+
 describe("wrк-admin layout auth", () => {
   beforeEach(() => {
     vi.resetModules();

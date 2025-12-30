@@ -8,21 +8,57 @@ const getOrCreateConversationMock = vi.fn();
 const getUnreadCountMock = vi.fn();
 const findReceiptMock = vi.fn();
 
-vi.mock("@/lib/api/context", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/api/context")>("@/lib/api/context");
-  return {
-    ...actual,
-    requireEitherTenantOrStaffSession: requireEitherTenantOrStaffSessionMock,
-  };
-});
+class MockAuthorizationError extends Error {
+  status: number;
+  code: "FORBIDDEN" | "UNAUTHORIZED" | "CONTEXT_REQUIRED";
+  action: string;
+  context?: unknown;
+  subject: { userId: string; tenantId: string | null; wrkStaffRole?: string | null };
 
-vi.mock("@/lib/auth/rbac", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/auth/rbac")>("@/lib/auth/rbac");
-  return {
-    ...actual,
-    authorize: authorizeMock,
-  };
-});
+  constructor(params: {
+    message: string;
+    status?: number;
+    code?: "FORBIDDEN" | "UNAUTHORIZED" | "CONTEXT_REQUIRED";
+    action: string;
+    context?: unknown;
+    subject: { userId: string; tenantId: string | null; wrkStaffRole?: string | null };
+  }) {
+    super(params.message);
+    this.status = params.status ?? 403;
+    this.code = params.code ?? "FORBIDDEN";
+    this.action = params.action;
+    this.context = params.context;
+    this.subject = params.subject;
+  }
+}
+
+vi.mock("@/lib/api/context", () => ({
+  requireEitherTenantOrStaffSession: requireEitherTenantOrStaffSessionMock,
+  ApiError: class ApiError extends Error {
+    status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.status = status;
+    }
+  },
+  handleApiError: (error: unknown) => {
+    if (error instanceof MockAuthorizationError) {
+      return new Response(
+        JSON.stringify({ error: error.message, code: error.code, action: error.action }),
+        { status: error.status }
+      );
+    }
+    const status = (error as any)?.status ?? 500;
+    const message = (error as any)?.message ?? "Unexpected error.";
+    return new Response(JSON.stringify({ error: message }), { status });
+  },
+}));
+
+vi.mock("@/lib/auth/rbac", () => ({
+  AuthorizationError: MockAuthorizationError,
+  authorize: authorizeMock,
+  can: () => true,
+}));
 
 vi.mock("@/lib/services/workflow-chat", () => ({
   createMessage: createMessageMock,
@@ -68,9 +104,8 @@ beforeEach(() => {
 
 describe("POST /api/workflows/[workflowId]/chat/messages", () => {
   it("denies viewers from posting messages", async () => {
-    const { AuthorizationError } = await vi.importActual<typeof import("@/lib/auth/rbac")>("@/lib/auth/rbac");
     authorizeMock.mockImplementation(() => {
-      throw new AuthorizationError({
+      throw new MockAuthorizationError({
         message: "forbidden",
         action: "workflow:chat:write",
         subject: { userId: "user-1", tenantId: "tenant-1" },
