@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 
 interface OperatorNodeData {
   stepNumber?: string;
+  displayId?: string;
   displayLabel?: string;
   title: string;
   description: string;
@@ -48,6 +49,7 @@ const CustomNode = ({ data, selected }: NodeProps<OperatorNodeData>) => {
   const hasPendingTasks = pendingTasks > 0;
   const isNew = Boolean(data.isNew);
   const isUpdated = Boolean(data.isUpdated);
+  const badgeLabel = data.displayId || data.stepNumber;
 
   return (
     <div
@@ -57,9 +59,9 @@ const CustomNode = ({ data, selected }: NodeProps<OperatorNodeData>) => {
         !isNew && isUpdated && "animate-in fade-in zoom-in-50 duration-500"
       )}
     >
-      {data.stepNumber && (
+      {badgeLabel && (
         <div className="absolute -top-3 -left-3 z-20 bg-[#E43632] text-white w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold shadow-lg border-2 border-white">
-          {data.stepNumber}
+          {badgeLabel}
         </div>
       )}
 

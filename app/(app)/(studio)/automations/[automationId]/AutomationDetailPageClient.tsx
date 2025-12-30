@@ -39,6 +39,7 @@ import type { Connection, Node, Edge, EdgeChange, NodeChange } from "reactflow";
 import { StudioChat, type CopilotMessage } from "@/components/automations/StudioChat";
 import type { StudioCanvasProps } from "@/components/StudioCanvas";
 import { StudioInspector } from "@/components/automations/StudioInspector";
+import { EdgeInspector } from "@/components/automations/EdgeInspector";
 import { ActivityTab } from "@/components/automations/ActivityTab";
 import { BuildStatusTab } from "@/components/automations/BuildStatusTab";
 import { SettingsTab } from "@/components/automations/SettingsTab";
@@ -46,6 +47,7 @@ import { ChatTab } from "@/components/automations/ChatTab";
 import { createEmptyWorkflowSpec } from "@/lib/workflows/factory";
 import type { Workflow, WorkflowSectionKey, WorkflowStep } from "@/lib/workflows/types";
 import { WORKFLOW_SECTION_TITLES } from "@/lib/workflows/types";
+import { generateStepNumbers } from "@/lib/workflows/step-numbering";
 import { getWorkflowCompletionState } from "@/lib/workflows/completion";
 import { isWorkflowEffectivelyEmpty } from "@/lib/workflows/utils";
 import { workflowToNodes, workflowToEdges, addConnection, removeConnection, reconnectEdge } from "@/lib/workflows/canvas-utils";
@@ -134,6 +136,85 @@ function formatSanitizationSummary(summary?: SanitizationSummaryPayload | null):
     parts.push(`${summary.removedDuplicateEdges} duplicate edge${summary.removedDuplicateEdges === 1 ? "" : "s"} removed`);
   }
   return parts.length > 0 ? `Workflow updated (${parts.join(", ")}).` : "Workflow updated.";
+}
+
+type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
+
+function SaveIndicator({
+  state,
+  lastSavedAt,
+  error,
+  onRetry,
+}: {
+  state: SaveState;
+  lastSavedAt: Date | null;
+  error?: string | null;
+  onRetry?: () => void;
+}) {
+  const savedText = lastSavedAt ? `Saved ${formatDistanceToNow(lastSavedAt, { addSuffix: true })}` : "Saved";
+
+  if (state === "saving") {
+    return (
+      <div
+        className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border border-gray-200 bg-white shadow-sm"
+        data-testid="save-indicator"
+      >
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-500" />
+        <span className="text-gray-700">Saving…</span>
+      </div>
+    );
+  }
+
+  if (state === "error") {
+    return (
+      <div
+        className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border border-red-200 bg-red-50 text-red-700 shadow-sm"
+        data-testid="save-indicator"
+      >
+        <AlertTriangle className="h-3.5 w-3.5" />
+        <span>{error || "Save failed"}</span>
+        {onRetry ? (
+          <Button size="sm" variant="secondary" className="h-6 text-[11px]" onClick={onRetry}>
+            Retry
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (state === "dirty") {
+    return (
+      <div
+        className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border border-amber-200 bg-amber-50 text-amber-800 shadow-sm"
+        data-testid="save-indicator"
+      >
+        <Sparkles className="h-3.5 w-3.5" />
+        <span>Unsaved changes</span>
+      </div>
+    );
+  }
+
+  if (state === "saved") {
+    return (
+      <div
+        className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm"
+        data-testid="save-indicator"
+      >
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        <span>{savedText}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border border-gray-200 bg-white text-gray-600 shadow-sm"
+      data-testid="save-indicator"
+    >
+      <Clock className="h-3.5 w-3.5" />
+      <span>Idle</span>
+    </div>
+  );
 }
 
 type AutomationVersion = {
@@ -273,6 +354,9 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [showProceedCelebration, setShowProceedCelebration] = useState(false);
   const [showPricingModal, setShowPricingModal] = useState(false);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isWorkflowDirty, setWorkflowDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [creatingVersion, setCreatingVersion] = useState(false);
@@ -298,6 +382,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [requirementsText, setRequirementsText] = useState("");
   const [savingRequirements, setSavingRequirements] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const previousRequirementsRef = useRef<string>("");
   const [injectedChatMessage, setInjectedChatMessage] = useState<CopilotMessage | null>(null);
   const [selectedTask, setSelectedTask] = useState<VersionTask | null>(null);
@@ -429,6 +514,9 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         setWorkflow(workflow);
         setWorkflowError(null);
         setWorkflowDirty(false);
+        setLastSavedAt(version?.updatedAt ? new Date(version.updatedAt) : null);
+        setSaveState("idle");
+        setSaveError(null);
         if (!shouldPreserveSelection) {
           setSelectedStepId(null);
           setHasSelectedStep(false);
@@ -643,6 +731,9 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     const nextWorkflow = version?.workflowJson ? cloneWorkflow(version.workflowJson) : createEmptyWorkflowSpec();
     setWorkflow(nextWorkflow ?? createEmptyWorkflowSpec());
     setWorkflowDirty(false);
+    setSaveState("idle");
+    setSaveError(null);
+    setLastSavedAt(version?.updatedAt ? new Date(version.updatedAt) : null);
     setWorkflowError(null);
     setSelectedStepId(null);
     setHasSelectedStep(false);
@@ -692,8 +783,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     async (overrides?: Partial<Workflow>, options?: { preserveSelection?: boolean }) => {
       if (!selectedVersion || !workflow) {
         setWorkflowError("Workflow is not available yet.");
+        setSaveState("error");
+        setSaveError("Workflow is not available yet.");
         return;
       }
+      setSaveState("saving");
+      setSaveError(null);
       const payload = { ...workflow, ...overrides, updatedAt: new Date().toISOString() };
       const stepCountBeforeSave = workflow.steps.length;
       const stepCountInPayload = payload.steps.length;
@@ -798,10 +893,15 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         
         setWorkflow(cloned);
         setWorkflowDirty(false);
+        setLastSavedAt(new Date());
+        setSaveState("saved");
+        setSaveError(null);
         await fetchAutomation({ preserveSelection: options?.preserveSelection });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unable to save workflow";
         setWorkflowError(message);
+        setSaveError(message);
+        setSaveState("error");
         toast({ title: "Unable to save workflow", description: message, variant: "error" });
       } finally {
       }
@@ -923,6 +1023,8 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       if (didUpdate) {
         setWorkflowDirty(true);
         setWorkflowError(null);
+        setSaveError(null);
+        setSaveState("dirty");
       }
     },
     [setWorkflowDirty, setWorkflowError]
@@ -1083,9 +1185,23 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     [applyWorkflowUpdate]
   );
 
+  const parseEdgeId = useCallback((edgeId: string) => {
+    const match = edgeId.match(/^edge-(.+)-(.+)$/);
+    if (!match) return null;
+    return { sourceId: match[1], targetId: match[2] };
+  }, []);
+
   const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     setSelectedStepId(node.id);
+    setSelectedEdgeId(null);
     setHasSelectedStep(true);
+    setShowStepHelper(false);
+  }, []);
+
+  const handleEdgeClick = useCallback((_event: React.MouseEvent, edge: Edge) => {
+    setSelectedEdgeId(edge.id);
+    setSelectedStepId(null);
+    setHasSelectedStep(false);
     setShowStepHelper(false);
   }, []);
 
@@ -1298,24 +1414,84 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     return nodes;
   }, [workflow, taskLookup]);
   
+  const branchLetters = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!workflow?.steps) return map;
+    workflow.steps.forEach((step) => {
+      if (!step.nextStepIds || step.nextStepIds.length <= 1) return;
+      const sortedTargets = [...step.nextStepIds].sort();
+      sortedTargets.forEach((targetId, index) => {
+        map.set(`edge-${step.id}-${targetId}`, String.fromCharCode(65 + index));
+      });
+    });
+    return map;
+  }, [workflow]);
+
+  const stepDisplayMap = useMemo(() => (workflow ? generateStepNumbers(workflow) : new Map()), [workflow]);
+
   const handleEdgeDelete = useCallback(
     (edgeId: string) => {
       applyWorkflowUpdate((current) => removeConnection(current, edgeId));
+      setSelectedEdgeId((current) => (current === edgeId ? null : current));
     },
     [applyWorkflowUpdate]
   );
 
+  const handleEdgeChange = useCallback(
+    (edgeId: string, updates: { label?: string; condition?: string }) => {
+      const parsed = parseEdgeId(edgeId);
+      if (!parsed) return;
+      applyWorkflowUpdate((current) => ({
+        ...current,
+        steps: current.steps.map((step) => {
+          if (step.id !== parsed.targetId) {
+            return step;
+          }
+          const nextLabel =
+            updates.label !== undefined ? (updates.label?.trim() ? updates.label : undefined) : step.branchLabel;
+          const nextCondition =
+            updates.condition !== undefined ? (updates.condition?.trim() || undefined) : step.branchCondition;
+          return {
+            ...step,
+            branchLabel: nextLabel,
+            branchCondition: nextCondition,
+          };
+        }),
+      }));
+    },
+    [applyWorkflowUpdate, parseEdgeId]
+  );
+
   const flowEdges = useMemo<Edge[]>(() => {
     const edges = workflowToEdges(workflow);
-    // Add onDelete handler to all edges
-    return edges.map((edge) => ({
-      ...edge,
-      data: {
-        ...edge.data,
-        onDelete: handleEdgeDelete,
-      },
-    }));
-  }, [workflow, handleEdgeDelete]);
+    const stepById = new Map(workflow?.steps?.map((step) => [step.id, step]) ?? []);
+    // Add handlers and branch metadata to all edges
+    return edges.map((edge) => {
+      const parsed = parseEdgeId(edge.id);
+      const targetStep = parsed ? stepById.get(parsed.targetId) : null;
+      const branchLetter = branchLetters.get(edge.id);
+      const label = (edge.data as any)?.label || targetStep?.branchLabel || branchLetter || "";
+      const conditionText = targetStep?.branchCondition ?? "";
+      const hasCondition = Boolean(label || conditionText);
+      return {
+        ...edge,
+        type: hasCondition ? "condition" : edge.type,
+        data: {
+          ...edge.data,
+          label,
+          branchLetter,
+          conditionText,
+          onDelete: handleEdgeDelete,
+          onInspect: (edgeId: string) => {
+            setSelectedEdgeId(edgeId);
+            setSelectedStepId(null);
+            setHasSelectedStep(false);
+            setShowStepHelper(false);
+          },
+        },
+      };
+    });
+  }, [workflow, handleEdgeDelete, parseEdgeId, branchLetters]);
 
   // Debug logging (commented out to reduce console noise)
   // useEffect(() => {
@@ -1330,6 +1506,27 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     () => (workflow ? workflow.steps.find((step) => step.id === selectedStepId) ?? null : null),
     [workflow, selectedStepId]
   );
+  const selectedStepDisplayId = selectedStep
+    ? stepDisplayMap.get(selectedStep.id)?.stepNumber ?? selectedStep.stepNumber ?? selectedStep.id
+    : null;
+
+  const selectedEdge = useMemo(() => {
+    if (!selectedEdgeId || !workflow) return null;
+    const parsed = parseEdgeId(selectedEdgeId);
+    if (!parsed) return null;
+    const sourceStep = workflow.steps.find((step) => step.id === parsed.sourceId);
+    const targetStep = workflow.steps.find((step) => step.id === parsed.targetId);
+    const branchLetter = branchLetters.get(selectedEdgeId);
+    return {
+      id: selectedEdgeId,
+      label: targetStep?.branchLabel || branchLetter,
+      branchLetter,
+      condition: targetStep?.branchCondition ?? "",
+      sourceName: sourceStep?.name,
+      targetName: targetStep?.name,
+      displayId: stepDisplayMap.get(parsed.targetId)?.stepNumber ?? targetStep?.stepNumber,
+    };
+  }, [selectedEdgeId, workflow, parseEdgeId, branchLetters, stepDisplayMap]);
 
   const inspectorTasks = useMemo(() => {
     if (!selectedStep?.stepNumber) return [];
@@ -1345,6 +1542,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         metadata: task.metadata ?? {},
       }));
   }, [selectedStep?.stepNumber, versionTasks]);
+  useEffect(() => {
+    if (selectedEdgeId && !flowEdges.some((edge) => edge.id === selectedEdgeId)) {
+      setSelectedEdgeId(null);
+    }
+  }, [selectedEdgeId, flowEdges]);
   const workflowIsEmpty = useMemo(() => isWorkflowEffectivelyEmpty(workflow), [workflow]);
   // Simple checkmark-based checklist - only show the 4 required items
   const REQUIRED_CHECKLIST_ITEMS = [
@@ -1478,6 +1680,16 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setShowStepHelper(true);
     }
   }, [workflow, hasSelectedStep]);
+
+  useEffect(() => {
+    if (saveState !== "saved") {
+      return;
+    }
+    const timer = setTimeout(() => {
+      setSaveState(isWorkflowDirty ? "dirty" : "idle");
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [saveState, isWorkflowDirty]);
 
   // Auto-save workflow with 2-second debounce
   useEffect(() => {
@@ -1870,6 +2082,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 onConnect={handleConnectNodes}
                 onEdgeUpdate={handleEdgeUpdate}
                 onNodeClick={handleNodeClick}
+                onEdgeClick={handleEdgeClick}
                 isSynthesizing={isSynthesizingWorkflow}
                 emptyState={
                   workflowIsEmpty ? (
@@ -1893,28 +2106,48 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
           )}
         </div>
 
-        {canvasViewMode === "flowchart" && (
+        {canvasViewMode === "flowchart" ? (
           <div
             className={cn(
               "shrink-0 z-20 bg-white transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)] border-l border-gray-200 shadow-xl overflow-y-auto min-h-0",
-              selectedStep ? "w-[420px] translate-x-0" : "w-0 translate-x-full opacity-0"
+              "w-[420px] translate-x-0"
             )}
           >
-            <StudioInspector
-              step={selectedStep}
-              onClose={() => {
-                setSelectedStepId(null);
-                setHasSelectedStep(false);
-                setShowStepHelper(true);
-              }}
-              onChange={handleStepChange}
-              onDelete={handleDeleteStep}
-              tasks={inspectorTasks}
-              onViewTask={handleInspectTask}
-              automationVersionId={selectedVersion?.id ?? null}
-            />
+            {selectedEdge ? (
+              <EdgeInspector
+                edge={selectedEdge}
+                onChange={handleEdgeChange}
+                onDelete={handleEdgeDelete}
+                onClose={() => setSelectedEdgeId(null)}
+              />
+            ) : selectedStep ? (
+              <StudioInspector
+                step={selectedStep}
+                onClose={() => {
+                  setSelectedStepId(null);
+                  setHasSelectedStep(false);
+                  setShowStepHelper(true);
+                }}
+                onChange={handleStepChange}
+                onDelete={handleDeleteStep}
+                tasks={inspectorTasks}
+                onViewTask={handleInspectTask}
+                automationVersionId={selectedVersion?.id ?? null}
+                displayId={selectedStepDisplayId}
+              />
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center bg-white p-8 text-center">
+                <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mb-4 border border-gray-100">
+                  <GitBranch className="text-gray-400" size={20} />
+                </div>
+                <h3 className="text-[#0A0A0A] font-bold mb-2">Select something to inspect</h3>
+                <p className="text-sm text-gray-500 max-w-[220px] mx-auto">
+                  Click a step to edit details or a connection to adjust its condition.
+                </p>
+              </div>
+            )}
           </div>
-        )}
+        ) : null}
 
         {isSwitchingVersion ? (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/85 backdrop-blur-sm">
@@ -1969,6 +2202,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                   <span>Loading version…</span>
                 </div>
               )}
+              <SaveIndicator
+                state={saveState}
+                lastSavedAt={lastSavedAt}
+                error={saveError}
+                onRetry={() => handleSaveWorkflow(undefined, { preserveSelection: true })}
+              />
             </div>
             <div className="flex h-full gap-1">
               {AUTOMATION_TABS.map((tab) => (

@@ -35,7 +35,9 @@ export function generateStepNumbers(blueprint: Blueprint): Map<string, StepNumbe
   });
 
   // Find root nodes (steps with no incoming edges)
-  const roots = blueprint.steps.filter((step) => incomingCount.get(step.id) === 0);
+  const roots = blueprint.steps
+    .filter((step) => incomingCount.get(step.id) === 0)
+    .sort(compareSteps);
 
   // Start numbering from each root
   let mainSequence = 1;
@@ -90,7 +92,9 @@ export function generateStepNumbers(blueprint: Blueprint): Map<string, StepNumbe
     });
 
     // Find next steps
-    const nextSteps = blueprint.steps.filter((s) => step.nextStepIds.includes(s.id));
+    const nextSteps = blueprint.steps
+      .filter((s) => step.nextStepIds.includes(s.id))
+      .sort(compareSteps);
 
     if (nextSteps.length === 0) {
       // End of path
@@ -151,5 +155,11 @@ function incrementMainSequence(prefix: string): string {
     return "1";
   }
   return (numeric + 1).toString();
+}
+
+function compareSteps(a: BlueprintStep, b: BlueprintStep) {
+  const left = a.name?.toLowerCase() ?? a.id;
+  const right = b.name?.toLowerCase() ?? b.id;
+  return left.localeCompare(right);
 }
 

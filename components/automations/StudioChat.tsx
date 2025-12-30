@@ -303,12 +303,43 @@ useEffect(() => {
         setCurrentThinkingIndex(0);
         setAssistantError(null);
 
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: "draft-pre",
+            hypothesisId: "A",
+            location: "StudioChat.tsx:306",
+            message: "Requesting draft-workflow (auto-trigger)",
+            data: { automationVersionId, draftCount: draftMessages.length },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+
         fetch(`/api/automation-versions/${automationVersionId}/copilot/draft-workflow`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ messages: draftMessages }),
         })
           .then(async (response) => {
+            // #region agent log
+            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: "debug-session",
+                runId: "draft-pre",
+                hypothesisId: "A",
+                location: "StudioChat.tsx:312",
+                message: "Draft-workflow response",
+                data: { status: response.status },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            // #endregion
             if (!response.ok) {
               const errorData = await response.json().catch(() => ({}));
               throw new Error(errorData.error ?? "Failed to generate workflow");
@@ -531,6 +562,22 @@ useEffect(() => {
       setThinkingSteps(DEFAULT_USER_FACING_THINKING_STEPS);
       setCurrentThinkingIndex(0);
 
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "debug-session",
+          runId: "draft-pre",
+          hypothesisId: "A",
+          location: "StudioChat.tsx:565",
+          message: "Requesting draft-workflow (user submit)",
+          data: { automationVersionId, draftCount: draftMessages.length },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
+
       const draftResponse = await fetch(
         `/api/automation-versions/${automationVersionId}/copilot/draft-workflow`,
         {
@@ -541,8 +588,39 @@ useEffect(() => {
       );
 
       if (!draftResponse.ok) {
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: "draft-pre",
+            hypothesisId: "A",
+            location: "StudioChat.tsx:574",
+            message: "Draft-workflow failed",
+            data: { status: draftResponse.status },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
         throw new Error("Failed to update workflow");
       }
+
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "debug-session",
+          runId: "draft-pre",
+          hypothesisId: "A",
+          location: "StudioChat.tsx:579",
+          message: "Draft-workflow succeeded",
+          data: { status: draftResponse.status },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
 
       const draftData: {
         workflow?: Workflow | null;

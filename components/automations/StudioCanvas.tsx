@@ -47,6 +47,7 @@ interface StudioCanvasProps {
   onConnect?: (connection: Connection) => void;
   onEdgeUpdate?: OnEdgeUpdateFunc;
   onNodeClick?: (event: React.MouseEvent, node: Node) => void;
+  onEdgeClick?: (event: React.MouseEvent, edge: Edge) => void;
   isSynthesizing?: boolean;
   emptyState?: React.ReactNode;
 }
@@ -59,6 +60,7 @@ export function StudioCanvas({
   onConnect,
   onEdgeUpdate,
   onNodeClick,
+  onEdgeClick,
   isSynthesizing = false,
   emptyState,
 }: StudioCanvasProps) {
@@ -139,6 +141,7 @@ export function StudioCanvas({
           onConnect={onConnect}
           onEdgeUpdate={onEdgeUpdate}
           onNodeClick={onNodeClick}
+          onEdgeClick={onEdgeClick}
           onInit={setRfInstance}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}

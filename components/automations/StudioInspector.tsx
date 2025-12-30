@@ -20,6 +20,7 @@ interface StudioInspectorProps {
   tasks?: StepTaskSummary[];
   onViewTask?: (taskId: string) => void;
   automationVersionId?: string | null;
+  displayId?: string | null;
 }
 
 type StepTaskSummary = {
@@ -95,7 +96,7 @@ type FileReference = {
   sizeBytes: number;
 };
 
-export function StudioInspector({ step, onClose, onChange, onDelete, clientName, tasks = [], onViewTask, automationVersionId }: StudioInspectorProps) {
+export function StudioInspector({ step, onClose, onChange, onDelete, clientName, tasks = [], onViewTask, automationVersionId, displayId }: StudioInspectorProps) {
   const [responsibilityTab, setResponsibilityTab] = useState<ResponsibilityTab>("automated");
   const [referencedFiles, setReferencedFiles] = useState<FileReference[]>([]);
 
@@ -234,6 +235,8 @@ export function StudioInspector({ step, onClose, onChange, onDelete, clientName,
     );
   }
 
+  const resolvedDisplayId = displayId ?? step.stepNumber ?? step.id;
+
   const handleChange = (patch: Partial<WorkflowStep>) => {
     onChange(step.id, patch);
   };
@@ -259,7 +262,7 @@ export function StudioInspector({ step, onClose, onChange, onDelete, clientName,
                 >
                   {badgeStatus === "ai-suggested" ? "Draft" : badgeStatus}
                 </Badge>
-                <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">ID: {step.id}</span>
+                <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">ID: {resolvedDisplayId}</span>
               </div>
               <h2 className="text-xl font-bold text-[#0A0A0A] leading-tight">{step.name}</h2>
             </div>

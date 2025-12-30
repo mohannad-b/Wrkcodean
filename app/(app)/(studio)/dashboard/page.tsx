@@ -33,6 +33,16 @@ import { buildKpiStats, type KpiStat, type VersionMetric } from "@/lib/metrics/k
 import { getStatusLabel, KANBAN_COLUMNS, resolveStatus } from "@/lib/submissions/lifecycle";
 import { fetchCurrentWorkspaceOnce, fetchTenantMembershipsOnce } from "@/lib/workspaces/client-cache";
 
+const STATUS_OPTIONS = [
+  { value: "all", label: "All Statuses" },
+  ...KANBAN_COLUMNS.flatMap((column) =>
+    column.statuses.map((status) => ({
+      value: status,
+      label: getStatusLabel(status),
+    }))
+  ),
+];
+
 type TenantMembership = {
   tenantId: string;
   tenantName: string;
@@ -247,7 +257,6 @@ export default function DashboardPage() {
   // Filter automations based on search and status filter
   const filteredAutomations = useMemo(() => {
     return automations.filter((auto) => {
-      // Search filter
       const searchLower = searchQuery.trim().toLowerCase();
       const matchesSearch =
         searchLower === "" ||
@@ -255,7 +264,6 @@ export default function DashboardPage() {
         (auto.description && auto.description.toLowerCase().includes(searchLower)) ||
         auto.version.toLowerCase().includes(searchLower);
 
-      // Status filter - compare against original enum status for accurate filtering
       const normalizedStatus =
         resolveStatus(auto.statusEnum ?? "IntakeInProgress") ?? (auto.statusEnum as string) ?? "IntakeInProgress";
       const matchesStatus = statusFilter.has("all") || statusFilter.has(normalizedStatus);
@@ -263,16 +271,6 @@ export default function DashboardPage() {
       return matchesSearch && matchesStatus;
     });
   }, [automations, searchQuery, statusFilter]);
-
-  const statusOptions = [
-    { value: "all", label: "All Statuses" },
-    ...KANBAN_COLUMNS.flatMap((column) =>
-      column.statuses.map((status) => ({
-        value: status,
-        label: getStatusLabel(status),
-      }))
-    ),
-  ];
 
   return (
     <div className="flex-1 h-full overflow-y-auto bg-gray-50/50">
@@ -400,7 +398,7 @@ export default function DashboardPage() {
                         <div className="px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">
                           Filter by Status
                         </div>
-                        {statusOptions.map((option) => (
+                        {STATUS_OPTIONS.map((option) => (
                           <button
                             key={option.value}
                             onClick={() => {
@@ -495,6 +493,7 @@ export default function DashboardPage() {
                     </PopoverContent>
                   </Popover>
                 </div>
+              </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {loadingAutomations ? (

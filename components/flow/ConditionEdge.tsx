@@ -3,14 +3,17 @@
 import { useState, useRef, useEffect, memo } from "react";
 import { BaseEdge, EdgeLabelRenderer, EdgeProps, getSmoothStepPath } from "reactflow";
 import { ChevronDown, AlertCircle, Sparkles, ExternalLink, Info, X } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
 // This is the data we expect in the edge
 interface ConditionEdgeData {
   label?: string;
+  branchLetter?: string;
   operator?: string;
   value?: string | number;
   unit?: string;
+  conditionText?: string;
   isMissingInfo?: boolean;
   onLabelChange?: (
     id: string,
@@ -18,6 +21,7 @@ interface ConditionEdgeData {
     newData: { operator: string; value: string | number; unit: string }
   ) => void;
   onDelete?: (id: string) => void;
+  onInspect?: (id: string) => void;
 }
 
 function ConditionEdge({
@@ -43,6 +47,7 @@ function ConditionEdge({
   });
 
   const [isEditing, setIsEditing] = useState(false);
+  const [isExplainOpen, setIsExplainOpen] = useState(false);
   const [operator, setOperator] = useState(data?.operator || ">");
   const [value, setValue] = useState(data?.value || "");
   const [unit, setUnit] = useState(data?.unit || "Dollars");
@@ -78,8 +83,40 @@ function ConditionEdge({
     }
   };
 
+  const explanation = (() => {
+    if (data?.conditionText?.trim()) {
+      return data.conditionText.trim();
+    }
+    const missing: string[] = [];
+    if (!data?.operator) missing.push("operator");
+    if (data?.value === undefined || data?.value === "") missing.push("value");
+    if (!data?.unit) missing.push("unit");
+    if (missing.length > 0) {
+      return `Add ${missing.join(", ")} to complete this condition.`;
+    }
+    const numericValue = typeof data?.value === "number" ? data.value : data?.value ?? "";
+    const unitText = data?.unit === "Percent" ? "%" : data?.unit === "Dollars" ? "$" : data?.unit ?? "";
+    return `Edge follows when value is ${data?.operator} ${unitText === "$" ? unitText : ""}${numericValue}${unitText === "%" ? unitText : ""}.`;
+  })();
+
+  const handleInspector = () => {
+    if (data?.onInspect) {
+      data.onInspect(id);
+      setIsEditing(false);
+      setIsExplainOpen(false);
+    }
+  };
+
+  const handleLabelKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setIsEditing(true);
+    }
+  };
+
   // Mock AI suggestions
   const suggestions = [5000, 10000, 25000];
+  const displayLabel = data?.label || data?.branchLetter || "Set Condition";
 
   return (
     <>
@@ -107,6 +144,10 @@ function ConditionEdge({
           {!isEditing ? (
             <div
               onClick={() => setIsEditing(true)}
+              onKeyDown={handleLabelKeyDown}
+              tabIndex={0}
+              role="button"
+              aria-label={`Edit condition ${displayLabel}`}
               className={cn(
                 "flex items-center gap-1.5 px-3 py-1.5 bg-white rounded-full shadow-sm border cursor-pointer transition-all hover:shadow-md hover:-translate-y-0.5",
                 selected
@@ -122,7 +163,7 @@ function ConditionEdge({
                   data?.isMissingInfo ? "text-amber-800" : "text-gray-700"
                 )}
               >
-                {data?.label || "Set Condition"}
+                {displayLabel}
               </span>
               {selected && data?.onDelete && (
                 <button
@@ -219,10 +260,26 @@ function ConditionEdge({
 
               {/* Footer Links */}
               <div className="flex items-center justify-between pt-1">
-                <button className="text-[10px] text-gray-400 hover:text-[#E43632] flex items-center gap-1 transition-colors">
-                  Explain <Info size={10} />
-                </button>
-                <button className="text-[10px] text-[#E43632] font-medium hover:text-[#C12E2A] flex items-center gap-1 transition-colors">
+                <Popover open={isExplainOpen} onOpenChange={setIsExplainOpen}>
+                  <PopoverTrigger asChild>
+                    <button className="text-[10px] text-gray-400 hover:text-[#E43632] flex items-center gap-1 transition-colors">
+                      Explain <Info size={10} />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="text-xs max-w-xs">
+                    <div className="flex items-start gap-2">
+                      <Sparkles size={12} className="text-[#E43632] mt-0.5" />
+                      <div className="space-y-1">
+                        <p className="font-semibold text-gray-900">Edge logic</p>
+                        <p className="text-gray-600 leading-snug">{explanation}</p>
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+                <button
+                  onClick={handleInspector}
+                  className="text-[10px] text-[#E43632] font-medium hover:text-[#C12E2A] flex items-center gap-1 transition-colors"
+                >
                   Inspector <ExternalLink size={10} />
                 </button>
               </div>

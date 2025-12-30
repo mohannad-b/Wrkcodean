@@ -24,6 +24,7 @@ export interface CanvasNodeData {
   isNew?: boolean;
   isUpdated?: boolean;
   stepNumber?: string;
+  displayId?: string;
   displayLabel?: string;
   branchCondition?: string;
   pendingTaskCount?: number;
@@ -180,6 +181,7 @@ export function workflowToNodes(
 
         // New fields
         stepNumber: stepNumbering?.stepNumber,
+        displayId: stepNumbering?.stepNumber,
         displayLabel: stepNumbering?.displayLabel,
         branchCondition: step.branchCondition,
         pendingTaskCount,

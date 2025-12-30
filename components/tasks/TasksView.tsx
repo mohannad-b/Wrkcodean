@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SecureUploader } from "@/components/files/SecureUploader";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +35,9 @@ interface Task {
   type: TaskType;
   title: string;
   automationName: string;
+  automationId?: string;
+  automationVersionId?: string;
+  stepId?: string;
   version: string;
   stepName?: string;
   priority: Priority;
@@ -50,6 +54,8 @@ const TASKS: Task[] = [
     title: "Sign Quote for Version 1.1",
     automationName: "Invoice Processing",
     version: "v1.1",
+    automationId: "auto-invoice",
+    automationVersionId: "v1-1",
     priority: "blocking",
     date: "2 hours ago",
     description:
@@ -63,6 +69,9 @@ const TASKS: Task[] = [
     title: "Review Unclassified Invoice",
     automationName: "Invoice Processing",
     version: "v1.0",
+    automationId: "auto-invoice",
+    automationVersionId: "v1-0",
+    stepId: "step-002",
     stepName: "Step 2: Extract Details",
     priority: "high",
     date: "Today, 9:41 AM",
@@ -89,6 +98,9 @@ const TASKS: Task[] = [
     title: 'Clarify "Manager Approval" Logic',
     automationName: "Expense Reporting",
     version: "v1.2 (Draft)",
+    automationId: "auto-expense",
+    automationVersionId: "v1-2",
+    stepId: "step-004",
     stepName: "Step 4: Manager Logic",
     priority: "normal",
     date: "Oct 26",
@@ -182,6 +194,7 @@ export function TasksView() {
   });
 
   const selectedTask = TASKS.find((t) => t.id === selectedTaskId);
+  const canViewWorkflow = Boolean(selectedTask?.automationId && selectedTask?.stepId);
 
   return (
     <div className="flex h-full bg-gray-50 relative overflow-hidden">
@@ -396,19 +409,37 @@ export function TasksView() {
                   />
                 </div>
 
-                <Button
-                  variant="outline"
-                  className="w-full justify-between border-gray-200 text-gray-700 h-11"
-                  onClick={() => {
-                    const automationId = "auto-1"; // TODO: lookup real automation id
-                    router.push(`/automations/${automationId}?tab=Workflow`);
-                  }}
-                >
-                  <span className="flex items-center gap-2 text-sm font-semibold">
-                    <Zap size={16} /> View in Workflow
-                  </span>
-                  <ArrowRight size={16} className="text-gray-400" />
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-between border-gray-200 text-gray-700 h-11"
+                      disabled={!canViewWorkflow}
+                      aria-disabled={!canViewWorkflow}
+                      onClick={() => {
+                        if (!selectedTask || !canViewWorkflow) return;
+                        const params = new URLSearchParams({ tab: "Workflow" });
+                        if (selectedTask.stepId) {
+                          params.set("stepId", selectedTask.stepId);
+                        }
+                        if (selectedTask.automationVersionId) {
+                          params.set("versionId", selectedTask.automationVersionId);
+                        }
+                        router.push(`/automations/${selectedTask.automationId}?${params.toString()}`);
+                      }}
+                    >
+                      <span className="flex items-center gap-2 text-sm font-semibold">
+                        <Zap size={16} /> View in Workflow
+                      </span>
+                      <ArrowRight size={16} className="text-gray-400" />
+                    </Button>
+                  </TooltipTrigger>
+                  {!canViewWorkflow && (
+                    <TooltipContent side="top" align="center">
+                      Not linked to a workflow step yet
+                    </TooltipContent>
+                  )}
+                </Tooltip>
               </div>
             </div>
 
