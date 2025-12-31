@@ -506,15 +506,66 @@ export const copilotMessages = pgTable(
   })
 );
 
+export const copilotRuns = pgTable(
+  "copilot_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    automationVersionId: uuid("automation_version_id")
+      .notNull()
+      .references(() => automationVersions.id, { onDelete: "cascade" }),
+    clientMessageId: text("client_message_id").notNull(),
+    userMessageId: uuid("user_message_id")
+      .notNull()
+      .references(() => copilotMessages.id, { onDelete: "cascade" }),
+    assistantMessageId: uuid("assistant_message_id")
+      .notNull()
+      .references(() => copilotMessages.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    uniqueClientMessage: uniqueIndex("copilot_runs_client_message_unique").on(
+      table.tenantId,
+      table.automationVersionId,
+      table.clientMessageId
+    ),
+  })
+);
+
 export const copilotAnalyses = pgTable("copilot_analyses", {
+  tenantId: uuid("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
   automationVersionId: uuid("automation_version_id")
     .primaryKey()
     .references(() => automationVersions.id, { onDelete: "cascade" }),
   analysisJson: jsonb("analysis_json").$type<CopilotAnalysisState>().notNull(),
   version: text("version").notNull(),
+  stage: text("stage"),
+  questionCount: integer("question_count").notNull().default(0),
+  askedQuestionsNormalized: jsonb("asked_questions_normalized").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  facts: jsonb("facts").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  assumptions: jsonb("assumptions")
+    .$type<Array<{ text: string; status: "assumed" | "confirmed" | "rejected"; source?: string }>>()
+    .notNull()
+    .default(sql`'[]'::jsonb`),
+  progress: jsonb("progress").$type<Record<string, unknown> | null>().default(null),
+  lastUserMessageId: uuid("last_user_message_id").references(() => copilotMessages.id, { onDelete: "set null" }),
+  lastAssistantMessageId: uuid("last_assistant_message_id").references(() => copilotMessages.id, { onDelete: "set null" }),
+  workflowUpdatedAt: timestamp("workflow_updated_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  tenantVersionUnique: uniqueIndex("copilot_analyses_tenant_version_unique").on(
+    table.tenantId,
+    table.automationVersionId
+  ),
+  tenantIdx: index("copilot_analyses_tenant_idx").on(table.tenantId),
+  stageIdx: index("copilot_analyses_stage_idx").on(table.stage),
+}));
 
 export const messages = pgTable(
   "messages",
@@ -706,6 +757,7 @@ export type Project = Submission;
 export type Quote = typeof quotes.$inferSelect;
 export type CopilotMessage = typeof copilotMessages.$inferSelect;
 export type CopilotAnalysis = typeof copilotAnalyses.$inferSelect;
+export type CopilotRun = typeof copilotRuns.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Task = typeof tasks.$inferSelect;
 export type File = typeof files.$inferSelect;

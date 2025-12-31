@@ -13,6 +13,205 @@ vi.mock("@/components/providers/user-profile-provider", () => ({
   }),
 }));
 
+describe("StudioChat", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders previously saved messages", async () => {
+    fetchMock.mockImplementation((url, init) => {
+      const method = init?.method ?? "GET";
+      const target = typeof url === "string" ? url : url.url;
+      if (typeof target === "string" && target.startsWith("http://127.0.0.1")) {
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }
+      if (method === "GET" && target === "/api/automation-versions/version-123/messages") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              messages: [
+                {
+                  id: "msg-1",
+                  role: "assistant",
+                  content: "Persisted hello",
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
+    });
+
+    render(<StudioChat automationVersionId="version-123" workflowEmpty={false} />);
+
+    await waitFor(() => expect(screen.getByText("Persisted hello")).toBeInTheDocument());
+    expect(fetchMock).toHaveBeenCalledWith("/api/automation-versions/version-123/messages", { cache: "no-store" });
+  });
+
+  it("renders initial assistant prompt and keeps input available", async () => {
+    fetchMock.mockImplementation((url, init) => {
+      const target = typeof url === "string" ? url : url.url;
+      const method = init?.method ?? "GET";
+      if (typeof target === "string" && target.startsWith("http://127.0.0.1")) {
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }
+      if (target === "/api/automation-versions/version-starter/messages" && method === "GET") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+        );
+      }
+      throw new Error(`Unexpected fetch: ${target} ${method}`);
+    });
+
+    render(<StudioChat automationVersionId="version-starter" workflowEmpty />);
+
+    await waitFor(() => expect(screen.getByText(/Hi! I'm here to help/i)).toBeInTheDocument());
+    const input = screen.getByPlaceholderText("Describe the workflow, systems, and exceptions...");
+    expect(input).toHaveValue("");
+  });
+
+  it("sends a single copilot chat request and shows placeholder immediately", async () => {
+    const chatResponse = {
+      workflow: {
+        version: 1,
+        status: "Draft",
+        summary: "Auto drafted workflow",
+        sections: [],
+        steps: [
+          {
+            id: "step-1",
+            type: "Action",
+            name: "Do something",
+            summary: "Summary",
+            description: "Description",
+            goalOutcome: "Outcome",
+            responsibility: "Automated",
+            systemsInvolved: ["System"],
+            notifications: [],
+            nextStepIds: [],
+            stepNumber: "1",
+            taskIds: [],
+          },
+        ],
+        branches: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      message: {
+        id: "assistant-msg",
+        role: "assistant",
+        content: "Got it.",
+        createdAt: new Date().toISOString(),
+      },
+      tasks: [
+        { id: "task-1", title: "Verify", status: "pending", priority: "important", automationVersionId: "version-abc" },
+      ],
+      thinkingSteps: [],
+      conversationPhase: "flow",
+    };
+
+    fetchMock.mockImplementation((url, init) => {
+      const target = typeof url === "string" ? url : url.url;
+      const method = init?.method ?? "GET";
+      if (typeof target === "string" && target.startsWith("http://127.0.0.1")) {
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }
+      if (target === "/api/automation-versions/version-abc/messages" && method === "GET") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+        );
+      }
+      if (target === "/api/automation-versions/version-abc/copilot/chat" && method === "POST") {
+        return new Promise((resolve) =>
+          setTimeout(
+            () => resolve(new Response(JSON.stringify(chatResponse), { status: 200, headers: { "Content-Type": "application/json" } })),
+            50
+          )
+        );
+      }
+      throw new Error(`Unexpected fetch: ${target} ${method}`);
+    });
+
+    render(
+      <StudioChat
+        automationVersionId="version-abc"
+        workflowEmpty
+        onWorkflowUpdates={vi.fn()}
+        onTasksUpdate={vi.fn()}
+      />
+    );
+
+    const input = await screen.findByRole("textbox");
+    fireEvent.change(input, { target: { value: "Hi Copilot" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    expect(screen.getByText("Drafting your workflow…")).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByText("Got it.")).toBeInTheDocument());
+    const chatCalls = fetchMock.mock.calls.filter(
+      ([target, init]) => typeof target === "string" && target.includes("/copilot/chat") && (init as any)?.method === "POST"
+    );
+    expect(chatCalls).toHaveLength(1);
+  });
+
+  it("strips blueprint JSON from loaded assistant messages", async () => {
+    fetchMock.mockImplementation((url, init) => {
+      const target = typeof url === "string" ? url : url.url;
+      const method = init?.method ?? "GET";
+      if (typeof target === "string" && target.startsWith("http://127.0.0.1")) {
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }
+      if (target === "/api/automation-versions/version-legacy/messages" && method === "GET") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              messages: [
+                {
+                  id: "assistant-msg",
+                  role: "assistant",
+                  content: "- Summary\n```json blueprint_updates\n{\"steps\":[{\"id\":\"legacy\"}]}\n```\nQuestion?",
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+      throw new Error(`Unexpected fetch: ${target} ${method}`);
+    });
+
+    render(<StudioChat automationVersionId="version-legacy" workflowEmpty={false} />);
+
+    await waitFor(() => expect(screen.getByText(/Question\?/)).toBeInTheDocument());
+    expect(screen.queryByText(/blueprint_updates/i)).toBeInTheDocument();
+  });
+});
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { StudioChat } from "@/components/automations/StudioChat";
+
+vi.mock("@/components/providers/user-profile-provider", () => ({
+  useUserProfile: () => ({
+    profile: {
+      id: "user-1",
+      email: "user@example.com",
+      name: "Test User",
+      avatarUrl: null,
+    },
+  }),
+}));
+
 function mockWindowReload() {
   const originalLocation = window.location;
   const reloadSpy = vi.fn();

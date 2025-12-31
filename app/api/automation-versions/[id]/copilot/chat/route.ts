@@ -1,28 +1,29 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
 import { buildRateLimitKey, ensureRateLimit } from "@/lib/rate-limit";
 import { getAutomationVersionDetail } from "@/lib/services/automations";
+import { createCopilotMessage, listCopilotMessages } from "@/lib/services/copilot-messages";
+import { determineConversationPhase, generateThinkingSteps } from "@/lib/ai/copilot-orchestrator";
+import { copilotDebug } from "@/lib/ai/copilot-debug";
+import { sendDevAgentLog } from "@/lib/dev/agent-log";
 import { logAudit } from "@/lib/audit/log";
+import { db } from "@/db";
+import { automationVersions, copilotMessages, tasks as tasksTable, type CopilotRun } from "@/db/schema";
 import { createEmptyWorkflowSpec } from "@/lib/workflows/factory";
 import type { Workflow } from "@/lib/workflows/types";
 import { WorkflowSchema } from "@/lib/workflows/schema";
-import { getWorkflowCompletionState } from "@/lib/workflows/completion";
-import { buildWorkflowFromChat, type AITask } from "@/lib/workflows/ai-builder-simple";
 import { applyStepNumbers } from "@/lib/workflows/step-numbering";
 import { parseCommand, isDirectCommand } from "@/lib/workflows/command-parser";
 import { executeCommand } from "@/lib/workflows/command-executor";
-import { db } from "@/db";
-import { automationVersions } from "@/db/schema";
-import { createCopilotMessage } from "@/lib/services/copilot-messages";
-import { determineConversationPhase, generateThinkingSteps } from "@/lib/ai/copilot-orchestrator";
-import { copilotDebug } from "@/lib/ai/copilot-debug";
-import { diffWorkflow } from "@/lib/workflows/diff";
+import { buildWorkflowFromChat, type AITask } from "@/lib/workflows/ai-builder-simple";
 import { syncAutomationTasks } from "@/lib/workflows/task-sync";
+import { getWorkflowCompletionState } from "@/lib/workflows/completion";
 import { evaluateWorkflowProgress } from "@/lib/ai/workflow-progress";
+import { diffWorkflow } from "@/lib/workflows/diff";
 import { withLegacyWorkflowAlias } from "@/lib/workflows/legacy";
 import {
   createEmptyCopilotAnalysisState,
@@ -31,26 +32,23 @@ import {
   type CopilotMemory,
 } from "@/lib/workflows/copilot-analysis";
 import { getCopilotAnalysis, upsertCopilotAnalysis } from "@/lib/services/copilot-analysis";
-import { buildWorkflowViewModel } from "@/lib/workflows/view-model";
-import { sendDevAgentLog } from "@/lib/dev/agent-log";
+import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
+import { createCopilotRun, getCopilotRunByClientMessageId } from "@/lib/services/copilot-runs";
 import { logger } from "@/lib/logger";
 
-const DraftRequestSchema = z.object({
-  messages: z
-    .array(
-      z.object({
-        role: z.enum(["user", "assistant"]),
-        content: z.string().min(1).max(8000),
-      })
-    )
-    .min(1),
+const ChatRequestSchema = z.object({
+  content: z.string().min(1).max(8000),
   intakeNotes: z.string().max(20000).optional().nullable(),
   snippets: z.array(z.string().max(4000)).optional(),
+  clientMessageId: z.string().max(128).optional(),
 });
 
-type DraftRequest = z.infer<typeof DraftRequestSchema>;
+type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
-type CopilotMessage = DraftRequest["messages"][number];
+type CopilotMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
 
 const MAX_MESSAGES = 10;
 const MAX_MESSAGE_CHARS = 4000;
@@ -63,71 +61,28 @@ const SYSTEM_PROMPT =
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId: "draft-pre",
-        hypothesisId: "A",
-        location: "draft-blueprint/route.ts:65",
-        message: "Route hit",
-        data: { versionId: params.id },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
-
-    logger.debug("[copilot:draft-workflow] Request received for version:", params.id);
-    
     const session = await requireTenantSession();
-    logger.debug("[copilot:draft-workflow] Session validated, tenantId:", session.tenantId);
 
     if (!can(session, "automation:metadata:update", { type: "automation_version", tenantId: session.tenantId })) {
-      logger.error("[copilot:draft-workflow] Permission denied");
       throw new ApiError(403, "Forbidden");
     }
 
-    let payload: DraftRequest;
+    let payload: ChatRequest;
     let rawBody: any;
     try {
       rawBody = await request.json();
-      logger.debug("[copilot:draft-workflow] Request body parsed, keys:", Object.keys(rawBody || {}));
-      payload = DraftRequestSchema.parse(rawBody);
-      logger.debug("[copilot:draft-workflow] Validation passed, messages count:", payload.messages?.length);
+      payload = ChatRequestSchema.parse(rawBody);
     } catch (error) {
       if (error instanceof z.ZodError) {
         const issues = error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join(", ");
-        logger.error("[copilot:draft-workflow] Validation error:", issues);
-        logger.error("[copilot:draft-workflow] Raw body:", JSON.stringify(rawBody, null, 2));
         throw new ApiError(400, `Invalid request body: ${issues}`);
       }
-      if (error instanceof SyntaxError) {
-        logger.error("[copilot:draft-workflow] JSON parse error:", error.message);
-        throw new ApiError(400, `Invalid JSON: ${error.message}`);
-      }
-      logger.error("[copilot:draft-workflow] Request parsing error:", error);
-      throw new ApiError(400, `Invalid request body: ${error instanceof Error ? error.message : String(error)}`);
+      throw new ApiError(400, "Invalid request body.");
     }
-
-    const detail = await getAutomationVersionDetail(session.tenantId, params.id);
-    if (!detail) {
-      throw new ApiError(404, "Automation version not found.");
-    }
-    const workflow = detail.workflowView ?? buildWorkflowViewModel(detail.version.workflowJson);
-
-    const existingAnalysis =
-      (await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id })) ??
-      createEmptyCopilotAnalysisState();
-    let analysisState: CopilotAnalysisState = {
-      ...existingAnalysis,
-      memory: existingAnalysis.memory ?? createEmptyMemory(),
-    };
 
     try {
       ensureRateLimit({
-        key: buildRateLimitKey("copilot:draft", session.tenantId),
+        key: buildRateLimitKey("copilot:chat", session.tenantId),
         limit: Number(process.env.COPILOT_DRAFTS_PER_HOUR ?? 20),
         windowMs: 60 * 60 * 1000,
       });
@@ -135,11 +90,59 @@ export async function POST(request: Request, { params }: { params: { id: string 
       throw new ApiError(429, "Too many workflows requested. Please wait before trying again.");
     }
 
-    const normalizedMessages = normalizeMessages(payload.messages);
-    const hasUserMessage = normalizedMessages.some((message) => message.role === "user");
-    if (!hasUserMessage) {
-      throw new ApiError(400, "Add at least one user message before drafting a workflow.");
+    const detail = await getAutomationVersionDetail(session.tenantId, params.id);
+    if (!detail) {
+      throw new ApiError(404, "Automation version not found.");
     }
+
+    const clientMessageId = payload.clientMessageId?.trim();
+    if (clientMessageId) {
+      const existingRun = await getCopilotRunByClientMessageId({
+        tenantId: session.tenantId,
+        automationVersionId: params.id,
+        clientMessageId,
+      });
+
+      if (existingRun) {
+        const replay = await buildIdempotentResponse({
+          run: existingRun,
+          tenantId: session.tenantId,
+          automationVersionId: params.id,
+          detail,
+        });
+        return NextResponse.json(replay);
+      }
+    }
+
+    const currentWorkflow = detail.workflowView?.workflowSpec ?? createEmptyWorkflowSpec();
+    const intakeNotes = payload.intakeNotes ?? detail.version.intakeNotes ?? undefined;
+
+    const trimmedContent = payload.content.trim();
+    if (!trimmedContent) {
+      throw new ApiError(400, "Message content is required.");
+    }
+
+    const userMessage = await createCopilotMessage({
+      tenantId: session.tenantId,
+      automationVersionId: params.id,
+      role: "user",
+      content: trimmedContent,
+      createdBy: session.userId,
+    });
+
+    const messages = await listCopilotMessages({
+      tenantId: session.tenantId,
+      automationVersionId: params.id,
+    });
+
+    const normalizedMessages = normalizeMessages(
+      messages
+        .filter((message) => message.role === "user" || message.role === "assistant")
+        .map((message) => ({
+          role: message.role as "user" | "assistant",
+          content: message.role === "assistant" ? parseCopilotReply(message.content).displayText : message.content,
+        }))
+    );
 
     const latestUserMessage = [...normalizedMessages].reverse().find((message) => message.role === "user");
     if (latestUserMessage && isOffTopic(latestUserMessage.content)) {
@@ -149,12 +152,24 @@ export async function POST(request: Request, { params }: { params: { id: string 
       );
     }
 
-    const contextSummary = buildConversationSummary(normalizedMessages, payload.intakeNotes ?? detail.version.intakeNotes);
-    const currentWorkflow = workflow.workflowSpec ?? createEmptyWorkflowSpec();
-    const userMessageContent =
-      latestUserMessage?.content ??
-      normalizedMessages.find((message) => message.role === "user")?.content ??
-      "Help me describe this workflow.";
+    const contextSummary = buildConversationSummary(normalizedMessages, intakeNotes);
+    const currentBlueprint = currentWorkflow ?? createEmptyWorkflowSpec();
+    const userMessageContent = latestUserMessage?.content ?? trimmedContent;
+
+    const existingAnalysisRaw =
+      (await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id })) ?? null;
+    const mostRecentUserMessageId = [...messages].reverse().find((message) => message.role === "user")?.id ?? null;
+    const workflowUpdatedAt = detail.version.updatedAt ? new Date(detail.version.updatedAt).toISOString() : null;
+    const staleAnalysis =
+      (existingAnalysisRaw?.workflowUpdatedAt && workflowUpdatedAt && existingAnalysisRaw.workflowUpdatedAt !== workflowUpdatedAt) ||
+      (existingAnalysisRaw?.lastUserMessageId && mostRecentUserMessageId && existingAnalysisRaw.lastUserMessageId !== mostRecentUserMessageId);
+    const existingAnalysis = staleAnalysis
+      ? createEmptyCopilotAnalysisState()
+      : existingAnalysisRaw ?? createEmptyCopilotAnalysisState();
+    let analysisState: CopilotAnalysisState = {
+      ...existingAnalysis,
+      memory: existingAnalysis.memory ?? createEmptyMemory(),
+    };
 
     const directCommand = Boolean(latestUserMessage?.content && isDirectCommand(latestUserMessage.content));
     let responseMessage = "";
@@ -188,29 +203,27 @@ export async function POST(request: Request, { params }: { params: { id: string 
         );
       }
 
-      copilotDebug("draft_workflow.command_executed", {
+      copilotDebug("copilot_chat.command_executed", {
         automationVersionId: params.id,
         command: command.type,
         message: responseMessage,
       });
     } else {
       try {
-        // #region agent log
         sendDevAgentLog({
           sessionId: "debug-session",
-          runId: "draft-workflow",
+          runId: "copilot-chat",
           hypothesisId: "B1",
-          location: "app/api/automation-versions/[id]/copilot/draft-workflow/route.ts",
+          location: "app/api/automation-versions/[id]/copilot/chat/route.ts",
           message: "Invoking buildWorkflowFromChat",
           data: {
             tenantId: session.tenantId,
             automationVersionId: params.id,
             messageCount: normalizedMessages.length,
-            hasIntakeNotes: Boolean(payload.intakeNotes ?? detail.version.intakeNotes),
+            hasIntakeNotes: Boolean(intakeNotes),
           },
           timestamp: Date.now(),
         });
-        // #endregion
 
         const {
           workflow: aiGeneratedWorkflow,
@@ -222,12 +235,12 @@ export async function POST(request: Request, { params }: { params: { id: string 
         } = await buildWorkflowFromChat({
           userMessage: userMessageContent,
           currentWorkflow,
-          currentBlueprint: currentWorkflow,
+          currentBlueprint,
           conversationHistory: normalizedMessages.map((message) => ({
             role: message.role,
             content: message.content,
           })),
-          requirementsText: workflow.requirementsText,
+          requirementsText: detail.version.requirementsText ?? undefined,
           memorySummary: analysisState.memory?.summary_compact ?? null,
           memoryFacts: analysisState.memory?.facts ?? {},
         });
@@ -271,7 +284,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
         responseMessage = nextFollowUp ? `${chatResponse} ${nextFollowUp}`.trim() : chatResponse;
 
-        copilotDebug("draft_workflow.llm_response", {
+        copilotDebug("copilot_chat.llm_response", {
           automationVersionId: params.id,
           chatResponse,
           followUpQuestion: trimmedFollowUp,
@@ -279,25 +292,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           taskCount: aiTasks.length,
           sanitizationSummary,
         });
-        logger.debug("[copilot:draft-workflow] raw assistant reply:", chatResponse);
-      } catch (error: any) {
-        // #region agent log
-        sendDevAgentLog({
-          sessionId: "debug-session",
-          runId: "draft-workflow",
-          hypothesisId: "B2",
-          location: "app/api/automation-versions/[id]/copilot/draft-workflow/route.ts",
-          message: "Workflow generation failed",
-          data: {
-            tenantId: session.tenantId,
-            automationVersionId: params.id,
-            error: error?.message ?? "unknown",
-            name: error?.name ?? "unknown",
-            stack: error?.stack ? String(error.stack).slice(0, 500) : "n/a",
-          },
-          timestamp: Date.now(),
-        });
-        // #endregion
+      } catch (error) {
         throw error;
       }
     }
@@ -318,8 +313,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       workflowJson: validatedWorkflow,
       updatedAt: new Date(),
     };
-    
-    // Update requirements text if AI provided an update (non-empty string)
+
     if (commandExecuted === false && typeof updatedRequirementsText === "string") {
       const trimmed = updatedRequirementsText.trim();
       if (trimmed.length > 0) {
@@ -347,7 +341,28 @@ export async function POST(request: Request, { params }: { params: { id: string 
       createdBy: null,
     });
 
-    copilotDebug("draft_workflow.persisted_message", {
+    if (clientMessageId) {
+      const runResult = await createCopilotRun({
+        tenantId: session.tenantId,
+        automationVersionId: params.id,
+        clientMessageId,
+        userMessageId: userMessage.id,
+        assistantMessageId: assistantMessage.id,
+      });
+
+      if (runResult && runResult.assistantMessageId !== assistantMessage.id) {
+        return NextResponse.json(
+          await buildIdempotentResponse({
+            run: runResult,
+            tenantId: session.tenantId,
+            automationVersionId: params.id,
+            detail,
+          })
+        );
+      }
+    }
+
+    copilotDebug("copilot_chat.persisted_message", {
       automationVersionId: params.id,
       messageId: assistantMessage.id,
       commandExecuted,
@@ -390,7 +405,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         latestUserMessage: latestUserMessage?.content ?? null,
       });
     } catch (error) {
-      copilotDebug("draft_workflow.progress_eval_failed", error instanceof Error ? error.message : error);
+      copilotDebug("copilot_chat.progress_eval_failed", error instanceof Error ? error.message : error);
     }
 
     if (progressSnapshot) {
@@ -399,6 +414,18 @@ export async function POST(request: Request, { params }: { params: { id: string 
         progress: progressSnapshot,
       };
     }
+
+    analysisState = {
+      ...analysisState,
+      stage: analysisState.memory?.stage ?? "requirements",
+      question_count: analysisState.memory?.question_count ?? 0,
+      asked_questions_normalized: analysisState.memory?.asked_questions_normalized ?? [],
+      facts: analysisState.memory?.facts ?? {},
+      assumptions: analysisState.assumptions ?? [],
+      lastUserMessageId: userMessage.id,
+      lastAssistantMessageId: assistantMessage.id,
+      workflowUpdatedAt: savedVersion.updatedAt?.toISOString ? savedVersion.updatedAt.toISOString() : new Date().toISOString(),
+    };
 
     let analysisPersistenceError = false;
     try {
@@ -413,19 +440,23 @@ export async function POST(request: Request, { params }: { params: { id: string 
       });
     } catch (analysisError) {
       analysisPersistenceError = true;
-      logger.error("[copilot:draft-workflow] Failed to persist copilot analysis", {
+      logger.error("[copilot:chat] Failed to persist copilot analysis", {
         automationVersionId: params.id,
         error: analysisError,
         stack: analysisError instanceof Error ? analysisError.stack : null,
       });
       copilotDebug(
-        "draft_workflow.progress_persist_failed",
+        "copilot_chat.progress_persist_failed",
         analysisError instanceof Error ? analysisError.message : analysisError
       );
     }
 
+    const updatedTasks = await fetchTasksForVersion(session.tenantId, params.id);
+
     return NextResponse.json({
-      ...withLegacyWorkflowAlias(validatedWorkflow),
+      workflow: withLegacyWorkflowAlias(validatedWorkflow),
+      message: assistantMessage,
+      tasks: updatedTasks,
       completion: completionState,
       progress: progressSnapshot,
       prompt: commandExecuted
@@ -436,14 +467,129 @@ export async function POST(request: Request, { params }: { params: { id: string 
             messageCount: normalizedMessages.length,
           },
       commandExecuted,
-      message: assistantMessage,
       thinkingSteps,
       conversationPhase,
       persistenceError: analysisPersistenceError,
     });
   } catch (error) {
+    if (error instanceof Error && error.message === "Automation version not found") {
+      return handleApiError(new ApiError(404, error.message));
+    }
     return handleApiError(error);
   }
+}
+
+type AutomationVersionDetail = NonNullable<Awaited<ReturnType<typeof getAutomationVersionDetail>>>;
+
+async function buildIdempotentResponse(params: {
+  run: CopilotRun;
+  tenantId: string;
+  automationVersionId: string;
+  detail: AutomationVersionDetail;
+}) {
+  const workflowRow = await db
+    .select({ workflowJson: automationVersions.workflowJson })
+    .from(automationVersions)
+    .where(and(eq(automationVersions.id, params.automationVersionId), eq(automationVersions.tenantId, params.tenantId)))
+    .limit(1);
+  const workflow =
+    workflowRow[0]?.workflowJson && typeof workflowRow[0].workflowJson === "object"
+      ? (workflowRow[0].workflowJson as Workflow)
+      : createEmptyWorkflowSpec();
+  const messages = await listCopilotMessages({
+    tenantId: params.tenantId,
+    automationVersionId: params.automationVersionId,
+  });
+  const normalizedMessages = normalizeMessages(
+    messages
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .map((message) => ({
+        role: message.role as "user" | "assistant",
+        content: message.role === "assistant" ? parseCopilotReply(message.content).displayText : message.content,
+      }))
+  );
+
+  const assistantMessage =
+    messages.find((message) => message.id === params.run.assistantMessageId) ??
+    (await fetchAssistantMessage({
+      tenantId: params.tenantId,
+      automationVersionId: params.automationVersionId,
+      assistantMessageId: params.run.assistantMessageId,
+    }));
+
+  if (!assistantMessage) {
+    throw new ApiError(500, "Existing Copilot response not found for provided clientMessageId.");
+  }
+
+  const latestUserMessage = [...normalizedMessages].reverse().find((message) => message.role === "user");
+  const completionState = getWorkflowCompletionState(workflow);
+
+  let progressSnapshot = null;
+  try {
+    progressSnapshot = await evaluateWorkflowProgress({
+      workflow,
+      completionState,
+      latestUserMessage: latestUserMessage?.content ?? null,
+    });
+  } catch (error) {
+    copilotDebug(
+      "copilot_chat.progress_eval_failed_replay",
+      error instanceof Error ? error.message : error
+    );
+  }
+
+  const commandExecuted = false;
+  const conversationPhase = determineConversationPhase(workflow, normalizedMessages);
+  const thinkingSteps = generateThinkingSteps(conversationPhase, latestUserMessage?.content, workflow);
+  const tasks = await fetchTasksForVersion(params.tenantId, params.automationVersionId);
+
+  return {
+    workflow: withLegacyWorkflowAlias(workflow),
+    message: assistantMessage,
+    tasks,
+    completion: completionState,
+    progress: progressSnapshot,
+    prompt: commandExecuted
+      ? null
+      : {
+          system: SYSTEM_PROMPT,
+          contextSummary: buildConversationSummary(
+            normalizedMessages,
+            params.detail.version.intakeNotes ?? null
+          ),
+          messageCount: normalizedMessages.length,
+        },
+    commandExecuted,
+    thinkingSteps,
+    conversationPhase,
+  };
+}
+
+async function fetchAssistantMessage(params: {
+  tenantId: string;
+  automationVersionId: string;
+  assistantMessageId: string;
+}) {
+  const [message] = await db
+    .select()
+    .from(copilotMessages)
+    .where(
+      and(
+        eq(copilotMessages.tenantId, params.tenantId),
+        eq(copilotMessages.automationVersionId, params.automationVersionId),
+        eq(copilotMessages.id, params.assistantMessageId)
+      )
+    )
+    .limit(1);
+
+  return message ?? null;
+}
+
+async function fetchTasksForVersion(tenantId: string, automationVersionId: string) {
+  return db
+    .select()
+    .from(tasksTable)
+    .where(and(eq(tasksTable.tenantId, tenantId), eq(tasksTable.automationVersionId, automationVersionId)));
 }
 
 function normalizeMessages(messages: CopilotMessage[]): CopilotMessage[] {
@@ -567,11 +713,7 @@ function refreshMemoryState({ previous, workflow, lastUserMessage, appliedFollow
   };
 }
 
-function mergeFacts(
-  existing: CopilotMemory["facts"],
-  workflow: Workflow,
-  lastUserMessage: string
-): CopilotMemory["facts"] {
+function mergeFacts(existing: CopilotMemory["facts"], workflow: Workflow, lastUserMessage: string): CopilotMemory["facts"] {
   const facts: CopilotMemory["facts"] = { ...(existing ?? {}) };
 
   const lower = lastUserMessage.toLowerCase();

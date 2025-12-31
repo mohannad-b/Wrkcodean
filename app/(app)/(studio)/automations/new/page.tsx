@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -41,6 +42,7 @@ import {
   SelectValue,
   SelectGroup,
 } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 
 type AutomationType = "starter" | "intermediate" | "advanced";
 const DEFAULT_AUTOMATION_TYPE: AutomationType = "intermediate";
@@ -939,6 +941,8 @@ export default function NewAutomationPage() {
   const [isLoadingUseCases, setIsLoadingUseCases] = useState(false);
   const [aiThinkingSeconds, setAiThinkingSeconds] = useState(0);
   const [expandingSeconds, setExpandingSeconds] = useState(0);
+  const [isCreating, setIsCreating] = useState(false);
+  const [creationStage, setCreationStage] = useState<"creating" | "booting" | null>(null);
 
   // Clear suggested use cases and show loading when selections change
   useEffect(() => {
@@ -1024,6 +1028,8 @@ export default function NewAutomationPage() {
     }
 
     setSubmitting(true);
+    setIsCreating(true);
+    setCreationStage("creating");
     setError(null);
     
     try {
@@ -1052,8 +1058,10 @@ export default function NewAutomationPage() {
         variant: "success",
       });
 
-      // Navigate to the workflow screen
-      router.push(`/automations/${automationId}?version=${versionId}&tab=Workflow`);
+      setCreationStage("booting");
+      // Navigate to the workflow screen with the seed prompt
+      const seedParam = encodeURIComponent(processDescription.trim());
+      router.push(`/automations/${automationId}?version=${versionId}&tab=blueprint&seed=${seedParam}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error");
       toast({
@@ -1063,6 +1071,8 @@ export default function NewAutomationPage() {
       });
     } finally {
       setSubmitting(false);
+      setIsCreating(false);
+      setCreationStage(null);
     }
   };
 
@@ -1680,6 +1690,65 @@ export default function NewAutomationPage() {
         </CardContent>
       </Card>
       </div>
+      <AnimatePresence>
+        {isCreating ? (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-white/80 backdrop-blur-lg"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className="w-full max-w-md rounded-2xl border border-gray-200 bg-white/95 shadow-2xl p-6 space-y-4"
+              initial={{ scale: 0.95, y: 12, opacity: 0.4 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.98, y: -8, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 180, damping: 20 }}
+            >
+              <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                <SparklesIcon className="h-4 w-4 text-[#E43632]" />
+                Standing up your automation
+              </div>
+              <p className="text-xs text-gray-500">
+                We’re creating your workspace and preparing Copilot to draft your blueprint.
+              </p>
+              <div className="space-y-3">
+                {[
+                  { id: "creating", label: "Creating workflow…" },
+                  { id: "booting", label: "Booting Copilot…" },
+                ].map((step) => {
+                  const isActive = creationStage === step.id || (step.id === "creating" && creationStage === "booting");
+                  const isComplete = creationStage === "booting" && step.id === "creating";
+                  return (
+                    <div
+                      key={step.id}
+                      className="flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2"
+                    >
+                      <div className="relative">
+                        {isComplete ? (
+                          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                        ) : isActive ? (
+                          <Loader2 className="h-4 w-4 text-[#E43632] animate-spin" />
+                        ) : (
+                          <div className="h-4 w-4 rounded-full border border-gray-300" />
+                        )}
+                      </div>
+                      <span
+                        className={cn(
+                          "text-sm font-medium",
+                          isComplete ? "text-emerald-700" : isActive ? "text-gray-900" : "text-gray-500"
+                        )}
+                      >
+                        {step.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }

@@ -78,6 +78,20 @@
       "when": 1765400000000,
       "tag": "rename_projects_to_submissions",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "0011",
+      "when": 1767060000000,
+      "tag": "add_copilot_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "0012",
+      "when": 1767150000000,
+      "tag": "expand_copilot_analyses",
+      "breakpoints": true
     }
   ]
 }

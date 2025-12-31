@@ -53,6 +53,14 @@ export interface CopilotReadiness {
   blockingTodos: string[];
 }
 
+export type CopilotAssumptionStatus = "assumed" | "confirmed" | "rejected";
+
+export interface CopilotAssumption {
+  text: string;
+  status: CopilotAssumptionStatus;
+  source?: string;
+}
+
 export interface CopilotAnalysisState {
   sections: CopilotSectionsSnapshot;
   todos: CopilotTodoItem[];
@@ -64,6 +72,14 @@ export interface CopilotAnalysisState {
   requirementsState?: RequirementsState;
   suggestedNextSteps?: SuggestedNextStep[];
   progress?: BlueprintProgressSnapshot | null;
+  stage?: CopilotStage;
+  question_count?: number;
+  asked_questions_normalized?: string[];
+  facts?: CopilotMemoryFacts;
+  assumptions?: CopilotAssumption[];
+  lastUserMessageId?: string | null;
+  lastAssistantMessageId?: string | null;
+  workflowUpdatedAt?: string | null;
 }
 
 export type CopilotStage = "requirements" | "objectives" | "success" | "systems" | "samples" | "done";
@@ -117,6 +133,14 @@ export function createEmptyCopilotAnalysisState(): CopilotAnalysisState {
     version: COPILOT_ANALYSIS_VERSION,
     lastUpdatedAt: new Date().toISOString(),
     progress: null,
+    stage: "requirements",
+    question_count: 0,
+    asked_questions_normalized: [],
+    facts: {},
+    assumptions: [],
+    lastUserMessageId: null,
+    lastAssistantMessageId: null,
+    workflowUpdatedAt: null,
   };
 }
 
@@ -172,6 +196,15 @@ export function cloneCopilotAnalysisState(state: CopilotAnalysisState): CopilotA
           sections: state.progress.sections.map((section) => ({ ...section })),
         }
       : null,
+    stage: state.stage ?? state.memory?.stage ?? "requirements",
+    question_count: state.question_count ?? state.memory?.question_count ?? 0,
+    asked_questions_normalized:
+      state.asked_questions_normalized ?? state.memory?.asked_questions_normalized ?? [],
+    facts: state.facts ?? state.memory?.facts ?? {},
+    assumptions: state.assumptions ? state.assumptions.map((a) => ({ ...a })) : [],
+    lastUserMessageId: state.lastUserMessageId ?? null,
+    lastAssistantMessageId: state.lastAssistantMessageId ?? null,
+    workflowUpdatedAt: state.workflowUpdatedAt ?? null,
   };
 }
 

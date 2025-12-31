@@ -18,6 +18,7 @@ DROP TABLE IF EXISTS file_versions CASCADE;
 DROP TABLE IF EXISTS files CASCADE;
 DROP TABLE IF EXISTS tasks CASCADE;
 DROP TABLE IF EXISTS messages CASCADE;
+DROP TABLE IF EXISTS copilot_runs CASCADE;
 DROP TABLE IF EXISTS copilot_analyses CASCADE;
 DROP TABLE IF EXISTS copilot_messages CASCADE;
 DROP TABLE IF EXISTS discount_offers CASCADE;
@@ -404,11 +405,35 @@ CREATE TABLE copilot_messages (
 
 -- Copilot Analyses
 CREATE TABLE copilot_analyses (
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   automation_version_id uuid PRIMARY KEY REFERENCES automation_versions(id) ON DELETE CASCADE,
   analysis_json jsonb NOT NULL,
   version text NOT NULL,
+  stage text,
+  question_count integer NOT NULL DEFAULT 0,
+  asked_questions_normalized jsonb NOT NULL DEFAULT '[]'::jsonb,
+  facts jsonb NOT NULL DEFAULT '{}'::jsonb,
+  assumptions jsonb NOT NULL DEFAULT '[]'::jsonb,
+  progress jsonb DEFAULT NULL,
+  last_user_message_id uuid REFERENCES copilot_messages(id) ON DELETE SET NULL,
+  last_assistant_message_id uuid REFERENCES copilot_messages(id) ON DELETE SET NULL,
+  workflow_updated_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT copilot_analyses_tenant_version_unique UNIQUE (tenant_id, automation_version_id)
+);
+
+-- Copilot Runs (idempotency)
+CREATE TABLE copilot_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  automation_version_id uuid NOT NULL REFERENCES automation_versions(id) ON DELETE CASCADE,
+  client_message_id text NOT NULL,
+  user_message_id uuid NOT NULL REFERENCES copilot_messages(id) ON DELETE CASCADE,
+  assistant_message_id uuid NOT NULL REFERENCES copilot_messages(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT copilot_runs_client_message_unique UNIQUE (tenant_id, automation_version_id, client_message_id)
 );
 
 -- Messages
@@ -565,6 +590,15 @@ CREATE INDEX discount_offers_version_idx ON discount_offers(automation_version_i
 CREATE INDEX copilot_messages_tenant_idx ON copilot_messages(tenant_id);
 CREATE INDEX copilot_messages_version_idx ON copilot_messages(automation_version_id);
 CREATE INDEX copilot_messages_version_created_at_idx ON copilot_messages(automation_version_id, created_at);
+
+-- Copilot Runs indexes
+CREATE INDEX copilot_runs_tenant_idx ON copilot_runs(tenant_id);
+CREATE INDEX copilot_runs_version_idx ON copilot_runs(automation_version_id);
+-- unique enforced by constraint: copilot_runs_client_message_unique
+
+-- Copilot Analyses indexes
+CREATE INDEX copilot_analyses_tenant_idx ON copilot_analyses(tenant_id);
+CREATE INDEX copilot_analyses_stage_idx ON copilot_analyses(stage);
 
 -- Messages indexes
 CREATE INDEX messages_tenant_idx ON messages(tenant_id);

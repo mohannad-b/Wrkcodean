@@ -1,19 +1,22 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Sparkles, AlertCircle, Paperclip, CheckCircle2, Lightbulb, Loader2, X, FileText, Image as ImageIcon } from "lucide-react";
+import { Send, Sparkles, Paperclip, Lightbulb, Loader2, X, FileText, Image as ImageIcon } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
-import { motion, AnimatePresence } from "motion/react";
+import { motion } from "motion/react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { WorkflowUpdates } from "@/lib/workflows/ai-updates";
 import type { Workflow } from "@/lib/workflows/types";
-import type { CopilotThinkingStep } from "@/types/copilot-thinking";
-import type { WorkflowProgressSnapshot } from "@/lib/workflows/copilot-analysis";
+import { workflowToNodes } from "@/lib/workflows/canvas-utils";
+import type { CopilotAnalysisState, WorkflowProgressSnapshot } from "@/lib/workflows/copilot-analysis";
+import type { Task } from "@/db/schema";
 import { logger } from "@/lib/logger";
 
 type ChatRole = "user" | "assistant" | "system";
+type RunPhase = "understanding" | "drafting" | "drawing" | "done" | "error";
 
 export interface CopilotMessage {
   id: string;
@@ -22,6 +25,17 @@ export interface CopilotMessage {
   createdAt: string;
   optimistic?: boolean;
   transient?: boolean;
+  kind?: "system_run";
+  runStatus?: {
+    phase: RunPhase;
+    events: string[];
+    stepCount?: number;
+    errorMessage?: string | null;
+    retryable?: boolean;
+    persistenceError?: boolean;
+    debugDetails?: Record<string, unknown> | null;
+    collapsed?: boolean;
+  };
 }
 
 interface StudioChatProps {
@@ -32,12 +46,17 @@ interface StudioChatProps {
   onWorkflowUpdates?: (updates: WorkflowUpdates | Workflow) => void;
   onWorkflowRefresh?: () => Promise<void> | void;
   onProgressUpdate?: (progress: WorkflowProgressSnapshot | null) => void;
+  onTasksUpdate?: (tasks: Task[]) => void;
   injectedMessage?: CopilotMessage | null;
   onInjectedMessageConsumed?: () => void;
   onSuggestNextSteps?: () => void;
   isRequestingSuggestions?: boolean;
   suggestionStatus?: string | null;
   onWorkflowUpdatingChange?: (isUpdating: boolean) => void;
+  analysis?: CopilotAnalysisState | null;
+  analysisLoading?: boolean;
+  onRefreshAnalysis?: () => void | Promise<void>;
+  analysisUnavailable?: boolean;
 }
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
@@ -56,13 +75,6 @@ type ApiCopilotMessage = {
   createdAt: string;
 };
 
-const DEFAULT_USER_FACING_THINKING_STEPS: CopilotThinkingStep[] = [
-  { id: "thinking-default-1", label: "Digesting what you're trying to accomplish" },
-  { id: "thinking-default-2", label: "Mapping how the systems should connect" },
-  { id: "thinking-default-3", label: "Drafting the next workflow updates" },
-];
-const MAX_FOLLOWUP_QUESTIONS = 10;
-
 const formatTimestamp = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 
@@ -72,36 +84,38 @@ export function StudioChat({
   disabled = false,
   onConversationChange,
   onWorkflowUpdates,
-  onWorkflowRefresh,
+  onWorkflowRefresh: _onWorkflowRefresh,
   onProgressUpdate,
+  onTasksUpdate,
   injectedMessage = null,
   onInjectedMessageConsumed,
   onSuggestNextSteps,
   isRequestingSuggestions = false,
   suggestionStatus = null,
   onWorkflowUpdatingChange,
+  onRefreshAnalysis,
 }: StudioChatProps) {
   const { profile } = useUserProfile();
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [threadError, setThreadError] = useState<string | null>(null);
-  const [assistantError, setAssistantError] = useState<string | null>(null);
   const [isLoadingThread, setIsLoadingThread] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isAwaitingReply, setIsAwaitingReply] = useState(false);
-  const [thinkingSteps, setThinkingSteps] = useState<CopilotThinkingStep[]>([]);
-  const [showThinkingBubble, setShowThinkingBubble] = useState(false);
-  const [currentThinkingIndex, setCurrentThinkingIndex] = useState(0);
-  const [thinkingTextProgress, setThinkingTextProgress] = useState<Record<string, number>>({});
-  const typingIntervalRef = useRef<number | null>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const prevWorkflowEmptyRef = useRef<boolean>(workflowEmpty);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingRequestIdRef = useRef<number>(0);
+  const injectedMessageRunSetRef = useRef<Set<string>>(new Set());
   const actionButtonsDisabled = disabled || !automationVersionId;
   const [attachedFiles, setAttachedFiles] = useState<Array<{ id: string; filename: string; url: string; type: string }>>([]);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const lastSentContentRef = useRef<string | null>(null);
+  const zeroStepLogGuardRef = useRef<Set<number>>(new Set());
+  const injectedFailureRef = useRef<{ id: string; at: number } | null>(null);
+  const runContentRef = useRef<Map<string, string>>(new Map());
+  const runCollapseTimersRef = useRef<Map<string, number>>(new Map());
+  const analysisRefreshRef = useRef<Map<string, number>>(new Map());
 
   const getUserInitials = () => {
     if (!profile) return "ME";
@@ -140,8 +154,6 @@ export function StudioChat({
   useEffect(() => {
     if (!automationVersionId) {
       setMessages([INITIAL_AI_MESSAGE]);
-      setThreadError("Select an automation version to start chatting.");
-      setAssistantError(null);
       setIsLoadingThread(false);
       return;
     }
@@ -149,8 +161,6 @@ export function StudioChat({
     let cancelled = false;
     const loadMessages = async () => {
       setIsLoadingThread(true);
-      setThreadError(null);
-      setAssistantError(null);
       try {
         const response = await fetch(`/api/automation-versions/${automationVersionId}/messages`, { cache: "no-store" });
         if (!response.ok) {
@@ -160,9 +170,9 @@ export function StudioChat({
         if (cancelled) return;
         const mapped = data.messages.map(mapApiMessage);
         setMessages(mapped.length > 0 ? mapped : [INITIAL_AI_MESSAGE]);
-      } catch {
+      } catch (error) {
+        logger.error("[STUDIO-CHAT] Failed to load messages", error);
         if (cancelled) return;
-        setThreadError("Unable to load conversation.");
         setMessages([INITIAL_AI_MESSAGE]);
       } finally {
         if (!cancelled) {
@@ -196,230 +206,16 @@ export function StudioChat({
   const durableMessages = useMemo(() => dropTransientMessages(messages), [messages, dropTransientMessages]);
 
   useEffect(() => {
-    setShowThinkingBubble(false);
-    setThinkingSteps([]);
-    setCurrentThinkingIndex(0);
-  }, [automationVersionId]);
-
-useEffect(() => {
-  if (!showThinkingBubble || thinkingSteps.length === 0) {
-    setCurrentThinkingIndex(0);
-    setThinkingTextProgress({});
-    if (typingIntervalRef.current) {
-      window.clearInterval(typingIntervalRef.current);
-      typingIntervalRef.current = null;
-    }
-    return;
-  }
-
-  // Reset state
-  setCurrentThinkingIndex(0);
-  setThinkingTextProgress({});
-  
-  const displayedSteps = (thinkingSteps.length > 0 ? thinkingSteps : DEFAULT_USER_FACING_THINKING_STEPS).slice(0, 3);
-  let currentStepIndex = 0;
-  let currentCharIndex = 0;
-  const progress: Record<string, number> = {};
-  
-  if (typingIntervalRef.current) {
-    window.clearInterval(typingIntervalRef.current);
-  }
-  
-  typingIntervalRef.current = window.setInterval(() => {
-    if (currentStepIndex >= displayedSteps.length) {
-      if (typingIntervalRef.current) {
-        window.clearInterval(typingIntervalRef.current);
-        typingIntervalRef.current = null;
-      }
-      return;
-    }
-    
-    const currentStep = displayedSteps[currentStepIndex];
-    const fullText = currentStep.label;
-    
-    if (currentCharIndex <= fullText.length) {
-      progress[currentStep.id] = currentCharIndex;
-      setThinkingTextProgress({ ...progress });
-      setCurrentThinkingIndex(currentStepIndex);
-      currentCharIndex += 4; // Type 4 chars at a time
-    } else {
-      // Finished current step, move to next
-      currentStepIndex++;
-      currentCharIndex = 0;
-      if (currentStepIndex < displayedSteps.length) {
-        setCurrentThinkingIndex(currentStepIndex);
-      }
-    }
-  }, 35); // Update every 35ms for smooth typing
-  
-  return () => {
-    if (typingIntervalRef.current) {
-      window.clearInterval(typingIntervalRef.current);
-      typingIntervalRef.current = null;
-    }
-  };
-}, [showThinkingBubble, thinkingSteps]);
-
-  useEffect(() => {
     onConversationChange?.(durableMessages);
   }, [durableMessages, onConversationChange]);
 
-  // Accept externally injected messages (e.g., system notices)
-  useEffect(() => {
-    if (!injectedMessage) return;
-    setMessages((prev) => [...prev, injectedMessage]);
-    onInjectedMessageConsumed?.();
-  }, [injectedMessage, onInjectedMessageConsumed]);
-
-  // Auto-trigger workflow generation if there's a user message but no assistant response
-  useEffect(() => {
-    if (!automationVersionId || isSending || isAwaitingReply || isLoadingThread || disabled) {
-      return;
-    }
-
-    const userMessages = durableMessages.filter((m) => m.role === "user");
-    const assistantMessages = durableMessages.filter((m) => m.role === "assistant");
-    const assistantCount = assistantMessages.length;
-    
-    // If there's at least one user message but no assistant response, auto-trigger
-    if (userMessages.length > 0 && assistantMessages.length === 0 && workflowEmpty) {
-      if (assistantCount >= MAX_FOLLOWUP_QUESTIONS) {
-        return;
-      }
-      const draftMessages = durableMessages
-        .filter(
-          (message) =>
-            (message.role === "user" || message.role === "assistant") && message.content.trim().length > 0
-        )
-        .map((message) => ({
-          role: message.role,
-          content: message.content,
-        }));
-
-      if (draftMessages.length > 0) {
-        setIsAwaitingReply(true);
-        setShowThinkingBubble(true);
-        setThinkingSteps(DEFAULT_USER_FACING_THINKING_STEPS);
-        setCurrentThinkingIndex(0);
-        setAssistantError(null);
-
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: "debug-session",
-            runId: "draft-pre",
-            hypothesisId: "A",
-            location: "StudioChat.tsx:306",
-            message: "Requesting draft-workflow (auto-trigger)",
-            data: { automationVersionId, draftCount: draftMessages.length },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
-
-        fetch(`/api/automation-versions/${automationVersionId}/copilot/draft-workflow`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: draftMessages }),
-        })
-          .then(async (response) => {
-            // #region agent log
-            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                sessionId: "debug-session",
-                runId: "draft-pre",
-                hypothesisId: "A",
-                location: "StudioChat.tsx:312",
-                message: "Draft-workflow response",
-                data: { status: response.status },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-            // #endregion
-            if (!response.ok) {
-              const errorData = await response.json().catch(() => ({}));
-              throw new Error(errorData.error ?? "Failed to generate workflow");
-            }
-            return response.json();
-          })
-          .then(async (data: {
-            workflow?: Workflow | null;
-            message?: ApiCopilotMessage;
-            thinkingSteps?: CopilotThinkingStep[];
-            progress?: WorkflowProgressSnapshot | null;
-          }) => {
-            if (data.message) {
-              const assistantMessage = mapApiMessage(data.message);
-              setMessages((prev) => {
-                const updated = [...prev, assistantMessage].sort(
-                  (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-                );
-                return updated;
-              });
-            }
-            const runWorkflowUpdate = async () => {
-              if (data.workflow) {
-                onWorkflowUpdatingChange?.(true);
-                try {
-                  onWorkflowUpdates?.(data.workflow);
-                  await onWorkflowRefresh?.();
-                } finally {
-                  onWorkflowUpdatingChange?.(false);
-                }
-              }
-              if (data.progress) {
-                onProgressUpdate?.(data.progress);
-              }
-            };
-            void runWorkflowUpdate();
-            if (data.thinkingSteps && data.thinkingSteps.length > 0) {
-              setThinkingSteps(data.thinkingSteps);
-            }
-          })
-          .catch((error) => {
-            setAssistantError(error instanceof Error ? error.message : "Failed to generate workflow");
-          })
-          .finally(() => {
-            setIsAwaitingReply(false);
-            setShowThinkingBubble(false);
-          });
-      }
-    }
-  }, [
-    automationVersionId,
-    durableMessages,
-    workflowEmpty,
-    isSending,
-    isAwaitingReply,
-    isLoadingThread,
-    disabled,
-    mapApiMessage,
-    onWorkflowUpdates,
-    onWorkflowRefresh,
-    onProgressUpdate,
-    onWorkflowUpdatingChange,
-  ]);
-
-  const displayedThinkingSteps = useMemo(
-    () => (thinkingSteps.length > 0 ? thinkingSteps : DEFAULT_USER_FACING_THINKING_STEPS).slice(0, 3),
-    [thinkingSteps]
-  );
-  const visibleThinkingSteps = displayedThinkingSteps.slice(
-    0,
-    Math.min(currentThinkingIndex + 1, displayedThinkingSteps.length)
-  );
-  const activeThinkingIndex = visibleThinkingSteps.length > 0 ? visibleThinkingSteps.length - 1 : -1;
+  // Auto-trigger pipeline disabled by default; reserved for future use.
 
   const handleFileSelect = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0 || !automationVersionId) return;
 
     setIsUploadingFile(true);
-    setLocalError(null);
 
     try {
       const uploadPromises = Array.from(files).map(async (file) => {
@@ -450,8 +246,8 @@ useEffect(() => {
 
       const uploadedFiles = await Promise.all(uploadPromises);
       setAttachedFiles((prev) => [...prev, ...uploadedFiles]);
-    } catch (error) {
-      setLocalError(error instanceof Error ? error.message : "Failed to upload file");
+    } catch {
+      // swallow upload error; input UI will keep state
     } finally {
       setIsUploadingFile(false);
       if (fileInputRef.current) {
@@ -468,235 +264,369 @@ useEffect(() => {
     return mimeType.startsWith("image/");
   };
 
+  const sendMessage = useCallback(
+    async (
+      messageContent: string,
+      source: "manual" | "seed",
+      options?: { reuseRunId?: string }
+    ) => {
+      const trimmed = messageContent.trim();
+      if (!trimmed) return { ok: false as const };
+      if (!automationVersionId) {
+        return { ok: false as const };
+      }
+      if (disabled || isSending || isAwaitingReply) {
+        return { ok: false as const };
+      }
+
+      const isRetry = Boolean(options?.reuseRunId);
+      const optimisticMessageId = isRetry ? null : `temp-${Date.now()}`;
+      const requestId = pendingRequestIdRef.current + 1;
+      pendingRequestIdRef.current = requestId;
+      const runId = options?.reuseRunId ?? `run-${optimisticMessageId ?? Date.now()}`;
+      const clientMessageId = isRetry ? `${runId}-retry-${Date.now()}` : optimisticMessageId ?? `msg-${Date.now()}`;
+      const initialEvent =
+        source === "seed" ? "Seed received" : isRetry ? "Retrying..." : "Processing your prompt";
+
+      lastSentContentRef.current = trimmed;
+      runContentRef.current.set(runId, trimmed);
+      if (runCollapseTimersRef.current.has(runId)) {
+        const timer = runCollapseTimersRef.current.get(runId);
+        if (timer) {
+          window.clearTimeout(timer);
+        }
+        runCollapseTimersRef.current.delete(runId);
+      }
+
+      const optimisticMessage: CopilotMessage | null = isRetry
+        ? null
+        : {
+            id: optimisticMessageId!,
+            role: "user",
+            content: trimmed,
+            createdAt: new Date().toISOString(),
+            optimistic: true,
+          };
+
+      const baseRunStatus: CopilotMessage["runStatus"] = {
+        phase: "understanding",
+        events: [initialEvent],
+        errorMessage: null,
+        retryable: false,
+        persistenceError: false,
+        debugDetails: null,
+        collapsed: false,
+      };
+
+      setMessages((prev) => {
+        const durable = dropTransientMessages(prev);
+        const next: CopilotMessage[] = [];
+        const runIndex = durable.findIndex((msg) => msg.id === runId);
+        durable.forEach((msg) => {
+          next.push(msg);
+        });
+        if (optimisticMessage) {
+          next.push(optimisticMessage);
+        }
+        if (runIndex >= 0) {
+          next[runIndex] = {
+            ...next[runIndex],
+            kind: "system_run",
+            role: "assistant",
+            runStatus: baseRunStatus,
+          };
+        } else {
+          next.push({
+            id: runId,
+            role: "assistant",
+            kind: "system_run",
+            content: "",
+            createdAt: new Date().toISOString(),
+            runStatus: baseRunStatus,
+          });
+        }
+        return next;
+      });
+
+      const updateRunMessage = (updater: (status: NonNullable<CopilotMessage["runStatus"]>) => CopilotMessage["runStatus"]) => {
+        setMessages((prev) => {
+          const next = dropTransientMessages(prev).map((msg) => {
+            if (msg.id !== runId || msg.kind !== "system_run") return msg;
+            const currentStatus: NonNullable<CopilotMessage["runStatus"]> =
+              msg.runStatus ?? {
+                phase: "understanding",
+                events: [],
+                errorMessage: null,
+                retryable: false,
+                persistenceError: false,
+                debugDetails: null,
+                collapsed: false,
+              };
+            return { ...msg, runStatus: updater(currentStatus) };
+          });
+          return next;
+        });
+      };
+
+      setIsSending(true);
+      setIsAwaitingReply(true);
+      onWorkflowUpdatingChange?.(true);
+
+      let stepCount = 0;
+      let nodeCount: number | null = null;
+      let persistenceError = false;
+
+      try {
+        updateRunMessage((status) => ({
+          ...status,
+          phase: "drafting",
+          events: [...status.events, "Calling Copilot"],
+          errorMessage: null,
+          retryable: false,
+          persistenceError: false,
+          debugDetails: null,
+          collapsed: false,
+        }));
+
+        const chatResponse = await fetch(`/api/automation-versions/${automationVersionId}/copilot/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content: trimmed,
+            clientMessageId,
+          }),
+        });
+
+        if (!chatResponse.ok) {
+          const errorData = await chatResponse.json().catch(() => ({}));
+          throw new Error(errorData.error ?? "Failed to update workflow");
+        }
+
+        const data: {
+          workflow?: Workflow | null;
+          message?: ApiCopilotMessage;
+          progress?: WorkflowProgressSnapshot | null;
+          tasks?: Task[];
+          persistenceError?: boolean;
+        } = await chatResponse.json();
+
+        const isLatest = requestId === pendingRequestIdRef.current;
+
+        if (data.workflow && onWorkflowUpdates && isLatest) {
+          stepCount = data.workflow.steps?.length ?? 0;
+          if (stepCount === 0) {
+            updateRunMessage((status) => ({
+              ...status,
+              phase: "error",
+              events: [...status.events, "No steps generated"],
+              errorMessage: "No steps generated — retry",
+              retryable: true,
+              stepCount,
+              collapsed: false,
+            }));
+            if (!zeroStepLogGuardRef.current.has(requestId)) {
+              zeroStepLogGuardRef.current.add(requestId);
+              logger.error("[STUDIO-CHAT] Workflow returned zero steps; logging raw model output", {
+                requestId,
+                rawWorkflow: data.workflow,
+              });
+            }
+          } else {
+            const nodes = workflowToNodes(data.workflow, new Map());
+            nodeCount = nodes.length;
+            if (nodeCount === 0) {
+              logger.error("[STUDIO-CHAT] Workflow has steps but no nodes derived", {
+                stepCount,
+                steps: data.workflow.steps,
+                edges: data.workflow.steps?.flatMap((s) => s.nextStepIds ?? []),
+              });
+            }
+            onWorkflowUpdates(data.workflow);
+            updateRunMessage((status) => ({
+              ...status,
+              phase: "drawing",
+              events: [...status.events, `Validated workflow (${stepCount} steps)`],
+              stepCount,
+              errorMessage: null,
+              retryable: false,
+            }));
+            logger.debug("[STUDIO-CHAT] Copilot chat workflow applied", {
+              stepCount,
+              nodeCount,
+              sectionCount: data.workflow.sections?.length ?? 0,
+            });
+          }
+        }
+
+        if (data.message && isLatest && stepCount !== 0) {
+          const assistantMessage = mapApiMessage(data.message);
+          setMessages((prev) => {
+            const durable = dropTransientMessages(prev);
+            const merged = [...durable, assistantMessage].sort(
+              (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+            );
+            return merged;
+          });
+        } else {
+          setMessages((prev) => dropTransientMessages(prev));
+        }
+
+        if (data.tasks && isLatest) {
+          onTasksUpdate?.(data.tasks);
+          logger.debug("[STUDIO-CHAT] Copilot chat tasks applied", { taskCount: data.tasks.length });
+        }
+
+        persistenceError = Boolean(data.persistenceError);
+        if (persistenceError) {
+          updateRunMessage((status) => ({
+            ...status,
+            persistenceError: true,
+            debugDetails: {
+              automationVersionId,
+              requestId,
+              clientMessageId,
+              source,
+            },
+            events: [...status.events, "Analysis save failed"],
+          }));
+        }
+
+        if (typeof onProgressUpdate === "function") {
+          onProgressUpdate(data.progress ?? null);
+        }
+
+        if (isLatest && onRefreshAnalysis && !persistenceError && automationVersionId) {
+          const last = analysisRefreshRef.current.get(automationVersionId) ?? 0;
+          if (Date.now() - last >= 10_000) {
+            analysisRefreshRef.current.set(automationVersionId, Date.now());
+            void onRefreshAnalysis();
+          }
+        }
+
+        const finalPhase: RunPhase = stepCount === 0 ? "error" : "done";
+        updateRunMessage((status) => ({
+          ...status,
+          phase: finalPhase,
+          events:
+            finalPhase === "done"
+              ? [...status.events, `Flow updated (${stepCount} steps)`]
+              : status.events,
+          errorMessage: finalPhase === "error" ? status.errorMessage ?? "Run failed" : null,
+          retryable: finalPhase === "error",
+          stepCount: stepCount || status.stepCount,
+          collapsed: false,
+        }));
+
+        if (finalPhase === "done") {
+          const timer = window.setTimeout(() => {
+            setMessages((prev) =>
+              dropTransientMessages(prev).map((msg) =>
+                msg.id === runId && msg.kind === "system_run"
+                  ? {
+                      ...msg,
+                      runStatus: msg.runStatus ? { ...msg.runStatus, collapsed: true } : msg.runStatus,
+                    }
+                  : msg
+              )
+            );
+            runCollapseTimersRef.current.delete(runId);
+          }, 2000);
+          runCollapseTimersRef.current.set(runId, timer);
+        }
+
+        setIsAwaitingReply(false);
+        logger.debug("[STUDIO-CHAT] Run complete", {
+          stepCount,
+          nodeCount,
+          analysisSaved: !persistenceError,
+        });
+        return { ok: true as const, stepCount, nodeCount, persistenceError, runId };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to send message. Try again.";
+        logger.error("[STUDIO-CHAT] Failed to process message:", error);
+        updateRunMessage((status) => ({
+          ...status,
+          phase: "error",
+          events: [...status.events, `Error: ${message}`],
+          errorMessage: message,
+          retryable: true,
+          collapsed: false,
+        }));
+        return { ok: false as const };
+      } finally {
+        setIsSending(false);
+        setIsAwaitingReply(false);
+        onWorkflowUpdatingChange?.(false);
+      }
+    },
+    [
+      automationVersionId,
+      disabled,
+      dropTransientMessages,
+      isAwaitingReply,
+      isSending,
+      mapApiMessage,
+      onProgressUpdate,
+      onRefreshAnalysis,
+      onTasksUpdate,
+      onWorkflowUpdates,
+      onWorkflowUpdatingChange,
+      runCollapseTimersRef,
+      runContentRef,
+      zeroStepLogGuardRef,
+    ]
+  );
+
   const handleSend = useCallback(async () => {
     const content = input.trim();
     if (!content && attachedFiles.length === 0) return;
-    if (!automationVersionId) {
-      setLocalError("Select an automation version to chat.");
-      return;
-    }
-    if (disabled || isSending || isAwaitingReply) {
-      return;
-    }
 
-    // Build message content with file references
     let messageContent = content;
     if (attachedFiles.length > 0) {
       const fileReferences = attachedFiles.map((f) => `[File: ${f.filename}]`).join(" ");
       messageContent = content ? `${content}\n\n${fileReferences}` : fileReferences;
     }
 
-    const optimisticMessage: CopilotMessage = {
-      id: `temp-${Date.now()}`,
-      role: "user",
-      content: messageContent,
-      createdAt: new Date().toISOString(),
-      optimistic: true,
-    };
-
-    setMessages((prev) => [...dropTransientMessages(prev), optimisticMessage]);
     setInput("");
     setAttachedFiles([]);
-    setLocalError(null);
-    setAssistantError(null);
-    setIsSending(true);
+    await sendMessage(messageContent, "manual");
+  }, [attachedFiles, input, sendMessage]);
 
-    let conversationAfterUser: CopilotMessage[] | null = null;
+  const handleRunRetry = useCallback(
+    (runId: string) => {
+      const content = runContentRef.current.get(runId) ?? lastSentContentRef.current;
+      if (!content) return;
+      void sendMessage(content, "manual", { reuseRunId: runId });
+    },
+    [sendMessage]
+  );
 
-    try {
-      const messageResponse = await fetch(`/api/automation-versions/${automationVersionId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: messageContent, role: "user" }),
-      });
-      if (!messageResponse.ok) {
-        throw new Error("Failed to send message");
-      }
-
-      const data: { message: ApiCopilotMessage } = await messageResponse.json();
-      const serverMessage = mapApiMessage(data.message);
-      conversationAfterUser = [...durableMessages, serverMessage].sort(
-        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-      );
-      setMessages(conversationAfterUser);
-
-      const assistantCount = countAssistantMessages(conversationAfterUser);
-      if (assistantCount >= MAX_FOLLOWUP_QUESTIONS) {
-        const limitMessage: CopilotMessage = {
-          id: `limit-${Date.now()}`,
-          role: "assistant",
-          content: "I have enough to propose the workflow. Want me to finalize the flowchart or adjust anything else?",
-          createdAt: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, limitMessage]);
-        setShowThinkingBubble(false);
-        setThinkingSteps([]);
-        setCurrentThinkingIndex(0);
-        setIsAwaitingReply(false);
-        setAssistantError(null);
-        setIsSending(false);
-        return;
-      }
-
-      const draftMessages = conversationAfterUser
-        .filter(
-          (message) =>
-            (message.role === "user" || message.role === "assistant") && message.content.trim().length > 0
-        )
-        .map((message) => ({
-          role: message.role,
-          content: message.content,
-        }));
-
-      if (draftMessages.length === 0) {
-        setAssistantError("Describe the workflow so Copilot can draft a workflow.");
-        setShowThinkingBubble(false);
-        setThinkingSteps([]);
-        setCurrentThinkingIndex(0);
-        setIsAwaitingReply(false);
-        return;
-      }
-
-      setIsAwaitingReply(true);
-      setShowThinkingBubble(true);
-      setThinkingSteps(DEFAULT_USER_FACING_THINKING_STEPS);
-      setCurrentThinkingIndex(0);
-
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: "debug-session",
-          runId: "draft-pre",
-          hypothesisId: "A",
-          location: "StudioChat.tsx:565",
-          message: "Requesting draft-workflow (user submit)",
-          data: { automationVersionId, draftCount: draftMessages.length },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
-
-      const draftResponse = await fetch(
-        `/api/automation-versions/${automationVersionId}/copilot/draft-workflow`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: draftMessages }),
-        }
-      );
-
-      if (!draftResponse.ok) {
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: "debug-session",
-            runId: "draft-pre",
-            hypothesisId: "A",
-            location: "StudioChat.tsx:574",
-            message: "Draft-workflow failed",
-            data: { status: draftResponse.status },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
-        throw new Error("Failed to update workflow");
-      }
-
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: "debug-session",
-          runId: "draft-pre",
-          hypothesisId: "A",
-          location: "StudioChat.tsx:579",
-          message: "Draft-workflow succeeded",
-          data: { status: draftResponse.status },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
-
-      const draftData: {
-        workflow?: Workflow | null;
-        message?: ApiCopilotMessage;
-        thinkingSteps?: CopilotThinkingStep[];
-        progress?: WorkflowProgressSnapshot | null;
-      } = await draftResponse.json();
-
-      if (draftData.message) {
-        const assistantMessage = mapApiMessage(draftData.message);
-        setMessages((prev) => {
-          const durable = dropTransientMessages(prev);
-          const merged = [...durable, assistantMessage].sort(
-            (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-          );
-          return merged;
-        });
-      }
-
-      const runWorkflowUpdate = async () => {
-        const progressValue = draftData.progress ?? null;
-        if (draftData.workflow && onWorkflowUpdates) {
-          onWorkflowUpdatingChange?.(true);
-          try {
-            onWorkflowUpdates(mapWorkflowToUpdates(draftData.workflow));
-            await onWorkflowRefresh?.();
-          } finally {
-            onWorkflowUpdatingChange?.(false);
-          }
-        }
-        if (typeof onProgressUpdate === "function") {
-          onProgressUpdate(progressValue);
-        }
-      };
-      void runWorkflowUpdate();
-
-      if (draftData.thinkingSteps && draftData.thinkingSteps.length > 0) {
-        setThinkingSteps(draftData.thinkingSteps);
-      } else {
-        setThinkingSteps([]);
-      }
-
-      setShowThinkingBubble(false);
-      setCurrentThinkingIndex(0);
-      setIsAwaitingReply(false);
-      setAssistantError(null);
-    } catch (error) {
-      logger.error("[STUDIO-CHAT] Failed to process message:", error);
-      if (!conversationAfterUser) {
-        setMessages((prev) => prev.filter((msg) => msg.id !== optimisticMessage.id));
-        setLocalError("Failed to send message. Try again.");
-      } else {
-        setAssistantError("Failed to update workflow. Try again.");
-      }
-      setThinkingSteps([]);
-      setShowThinkingBubble(false);
-      setCurrentThinkingIndex(0);
-      setIsAwaitingReply(false);
-    } finally {
-      setIsSending(false);
+  useEffect(() => {
+    if (!injectedMessage || !automationVersionId) return;
+    const lastFailure =
+      injectedFailureRef.current && injectedFailureRef.current.id === injectedMessage.id
+        ? injectedFailureRef.current
+        : null;
+    if (lastFailure && Date.now() - lastFailure.at < 750) {
+      return;
     }
-  }, [
-    automationVersionId,
-    disabled,
-    dropTransientMessages,
-    durableMessages,
-    input,
-    attachedFiles,
-    isAwaitingReply,
-    isSending,
-    mapApiMessage,
-    onWorkflowRefresh,
-    onWorkflowUpdates,
-    onWorkflowUpdatingChange,
-    onProgressUpdate,
-  ]);
+    if (injectedMessageRunSetRef.current.has(injectedMessage.id)) return;
+    injectedMessageRunSetRef.current.add(injectedMessage.id);
+    void (async () => {
+      const result = await sendMessage(injectedMessage.content, "seed");
+      logger.debug("Injected message auto-sent", {
+        id: injectedMessage.id,
+        preview: injectedMessage.content.slice(0, 80),
+        ok: result?.ok ?? false,
+      });
+      if (result?.ok) {
+        onInjectedMessageConsumed?.();
+      } else {
+        injectedMessageRunSetRef.current.delete(injectedMessage.id);
+        injectedFailureRef.current = { id: injectedMessage.id, at: Date.now() };
+      }
+    })();
+  }, [automationVersionId, injectedMessage, onInjectedMessageConsumed, sendMessage]);
 
 
   return (
@@ -711,22 +641,6 @@ useEffect(() => {
             <span className="font-bold text-sm text-[#0A0A0A] block leading-none">WRK Copilot</span>
             <span className="text-[10px] text-gray-400 font-medium">AI Assistant</span>
           </div>
-        </div>
-
-        {/* Quick Actions Row */}
-        <div className="flex flex-col gap-2">
-          {(localError || threadError || assistantError) && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 flex items-center gap-1">
-              <AlertCircle size={12} />
-              {localError || threadError || assistantError}
-            </div>
-          )}
-          {isLoadingThread && (
-            <div className="text-[11px] text-gray-400 flex items-center gap-2">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Loading conversation…
-            </div>
-          )}
         </div>
       </div>
 
@@ -762,98 +676,29 @@ useEffect(() => {
               )}
 
               <div className={`max-w-[85%] space-y-2 ${msg.role === "user" ? "items-end flex flex-col" : ""}`}>
-                <div
-                  className={`p-4 text-sm shadow-sm relative leading-relaxed ${
-                    msg.role === "user"
-                      ? "bg-white text-[#0A0A0A] rounded-2xl rounded-tr-sm border border-gray-200"
-                      : "bg-[#F3F4F6] text-[#0A0A0A] rounded-2xl rounded-tl-sm border border-transparent"
-                  }`}
-                >
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
-                </div>
-                <span className="text-[10px] text-gray-400 px-1 block">
-                  {msg.optimistic ? "Sending…" : formatTimestamp(msg.createdAt)}
-                </span>
+                {msg.kind === "system_run" ? (
+                  <RunBubble message={msg} onRetry={() => handleRunRetry(msg.id)} />
+                ) : (
+                  <>
+                    <div
+                      className={`p-4 text-sm shadow-sm relative leading-relaxed ${
+                        msg.role === "user"
+                          ? "bg-white text-[#0A0A0A] rounded-2xl rounded-tr-sm border border-gray-200"
+                          : "bg-[#F3F4F6] text-[#0A0A0A] rounded-2xl rounded-tl-sm border border-transparent"
+                      }`}
+                    >
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                    </div>
+                    <span className="text-[10px] text-gray-400 px-1 block">
+                      {msg.optimistic ? "Sending…" : formatTimestamp(msg.createdAt)}
+                    </span>
+                  </>
+                )}
               </div>
             </motion.div>
               ))}
             </>
           )}
-          <AnimatePresence>
-            {showThinkingBubble ? (
-              <motion.div
-                key="thinking-bubble"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="flex items-start gap-3 mb-4"
-                data-testid="thinking-bubble"
-              >
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center">
-                    <Sparkles className="w-4 h-4 text-[#E43632]" />
-                  </div>
-                </div>
-                <div className="flex-1 bg-white rounded-2xl rounded-tl-none shadow-sm border border-gray-100 p-4">
-                  <div className="flex items-center gap-2 mb-3">
-                    <span className="text-sm font-semibold text-gray-900">WrkCoPilot is thinking...</span>
-                  </div>
-                  <div className="space-y-3">
-                    {visibleThinkingSteps.map((step, index) => {
-                      const isActive = index === activeThinkingIndex;
-                      const isComplete = activeThinkingIndex > 0 && index < activeThinkingIndex;
-                      const textProgress = thinkingTextProgress[step.id] ?? 0;
-                      const displayedText = isActive && textProgress > 0
-                        ? step.label.slice(0, textProgress)
-                        : isComplete
-                        ? step.label
-                        : "";
-                      
-                      const textClass = isActive
-                        ? "text-sm leading-relaxed text-gray-900 font-normal"
-                        : isComplete
-                        ? "text-sm leading-relaxed text-gray-500 font-normal"
-                        : "text-sm leading-relaxed text-gray-400 font-normal";
-
-                      // Only show step if it's been started or is complete
-                      if (!isActive && !isComplete) {
-                        return null;
-                      }
-
-                      return (
-                        <motion.div
-                          key={step.id}
-                          initial={{ opacity: 0, x: -10 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: index * 0.05 }}
-                          className="flex items-start gap-3"
-                        >
-                          {isComplete ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
-                          ) : isActive ? (
-                            <div className="relative w-4 h-4 flex-shrink-0 mt-0.5">
-                              <span className="absolute w-full h-full bg-[#E43632] rounded-full animate-ping opacity-60" />
-                              <span className="relative inline-flex rounded-full w-4 h-4 bg-[#E43632]" />
-                            </div>
-                          ) : (
-                            <div className="w-4 h-4 rounded-full border-2 border-gray-200 flex-shrink-0 mt-0.5" />
-                          )}
-                          <div className="flex-1">
-                            <span className={textClass}>
-                              {displayedText}
-                              {isActive && textProgress < step.label.length && (
-                                <span className="inline-block w-0.5 h-4 bg-[#E43632] ml-1 animate-pulse" />
-                              )}
-                            </span>
-                          </div>
-                        </motion.div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
           {!isLoadingThread && <div ref={scrollEndRef} />}
         </div>
       </ScrollArea>
@@ -977,36 +822,84 @@ function stripWorkflowBlocks(content: string): string {
     .trim();
 }
 
-function countAssistantMessages(messages: CopilotMessage[]): number {
-  return messages.filter((message) => message.role === "assistant").length;
-}
+function RunBubble({ message, onRetry }: { message: CopilotMessage; onRetry: () => void }) {
+  const status = message.runStatus;
+  const [showDebug, setShowDebug] = useState(false);
 
-function mapWorkflowToUpdates(workflow: Workflow): WorkflowUpdates {
-  const sections: NonNullable<WorkflowUpdates["sections"]> = {};
-  workflow.sections.forEach((section) => {
-    const content = section.content?.trim();
-    if (content) {
-      sections[section.key] = content;
-    }
-  });
+  if (!status) return null;
 
-  const updates: WorkflowUpdates = {
-    summary: workflow.summary,
-    steps: workflow.steps.map((step) => ({
-      id: step.id,
-      title: step.name,
-      type: step.type,
-      summary: step.summary,
-      goal: step.goalOutcome,
-      systemsInvolved: step.systemsInvolved,
-      dependsOnIds: step.nextStepIds,
-    })),
-  };
+  const isError = status.phase === "error";
+  const events = status.collapsed && status.events.length > 0 ? [status.events[status.events.length - 1]] : status.events;
+  const lastEvent = events[events.length - 1];
 
-  if (Object.keys(sections).length > 0) {
-    updates.sections = sections;
-  }
+  return (
+    <div className="w-full">
+      <div
+        className={cn(
+          "p-4 text-sm shadow-sm relative leading-relaxed rounded-2xl rounded-tl-sm border",
+          isError
+            ? "bg-red-50 border-red-200 text-red-900"
+            : status.persistenceError
+            ? "bg-amber-50 border-amber-200 text-amber-900"
+            : "bg-[#F3F4F6] border-transparent text-[#0A0A0A]"
+        )}
+      >
+        <div className="flex items-center justify-between text-xs font-semibold mb-1">
+          <span className="text-gray-900">Copilot run</span>
+          <span className="uppercase tracking-wide text-gray-500">{status.phase}</span>
+        </div>
+        <div className="text-xs text-gray-700 space-y-1">
+          {events.map((event, idx) => (
+            <div key={`${event}-${idx}`} className="flex items-start gap-2">
+              <span className="mt-1 block h-1.5 w-1.5 rounded-full bg-gray-400" />
+              <span className={cn(idx === events.length - 1 ? "font-medium" : "text-gray-600")}>{event}</span>
+            </div>
+          ))}
+        </div>
 
-  return updates;
+        {status.phase === "done" && status.stepCount !== undefined ? (
+          <div className="mt-2 text-xs font-semibold text-emerald-700">Flow updated ({status.stepCount} steps)</div>
+        ) : null}
+
+        {status.persistenceError ? (
+          <div className="mt-2 rounded-md border border-amber-200 bg-white/60 text-amber-800 p-2 text-[11px] space-y-1">
+            <div className="flex items-center justify-between">
+              <span>Analysis save failed.</span>
+              <button
+                type="button"
+                className="text-[11px] font-semibold underline"
+                onClick={() => setShowDebug((prev) => !prev)}
+              >
+                {showDebug ? "Hide debug" : "Debug details"}
+              </button>
+            </div>
+            {showDebug ? (
+              <pre className="text-[10px] bg-amber-50 border border-amber-200 rounded-md p-2 overflow-x-auto">
+                {JSON.stringify(status.debugDetails ?? {}, null, 2)}
+              </pre>
+            ) : null}
+          </div>
+        ) : null}
+
+        {isError && (
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-red-800">
+              {status.errorMessage ?? "Run failed. Retry?"}
+            </span>
+            {status.retryable ? (
+              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={onRetry}>
+                Retry
+              </Button>
+            ) : null}
+          </div>
+        )}
+
+        {lastEvent && status.phase !== "error" ? (
+          <div className="mt-2 text-[10px] text-gray-400">{lastEvent}</div>
+        ) : null}
+      </div>
+      <span className="text-[10px] text-gray-400 px-1 block mt-1">{formatTimestamp(message.createdAt)}</span>
+    </div>
+  );
 }
 

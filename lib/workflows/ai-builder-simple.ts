@@ -197,7 +197,13 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     const preservedWorkflow = preserveEssentialData(currentBlueprint, normalizedSteps, normalizedBranches, normalizedSections);
     
     const numberedBlueprint = applyStepNumbers(preservedWorkflow.blueprint);
-    const { blueprint: sanitizedBlueprint, summary: sanitizationSummary } = sanitizeBlueprintTopology(numberedBlueprint);
+    const { blueprint: sanitizedBlueprintRaw, summary: sanitizationSummary } = sanitizeBlueprintTopology(numberedBlueprint);
+
+    // Fallback: if no steps survived parsing/sanitization, seed a minimal draft (multi-step) so UI is never blank
+    const sanitizedBlueprint =
+      sanitizedBlueprintRaw.steps.length > 0
+        ? sanitizedBlueprintRaw
+        : buildFallbackBlueprint(sanitizedBlueprintRaw);
 
     const chatResponse = normalizeChatResponse(aiResponse.chatResponse);
     const followUpQuestion =
@@ -209,6 +215,9 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       stepCount: sanitizedBlueprint.steps.length,
       taskCount: normalizedTasks.length,
       hasRequirementsUpdate: updatedRequirementsText !== undefined,
+      rawStepCount: normalizedSteps.length,
+      sanitizedStepCount: sanitizedBlueprintRaw.steps.length,
+      fallbackApplied: sanitizedBlueprintRaw.steps.length === 0,
     });
 
     return {
@@ -387,6 +396,75 @@ function preserveEssentialData(
       updatedAt: new Date().toISOString(),
       metadata: preservedMetadata,
     },
+  };
+}
+
+function buildFallbackBlueprint(base: Blueprint): Blueprint {
+  const step1Id = randomUUID();
+  const step2Id = randomUUID();
+  const step3Id = randomUUID();
+  const step4Id = randomUUID();
+  return {
+    ...base,
+    steps: [
+      {
+        id: step1Id,
+        stepNumber: "1",
+        type: "Trigger",
+        name: "Workflow requested",
+        summary: "Start drafting the workflow",
+        description: "User requested a workflow draft.",
+        goalOutcome: "Capture intent",
+        responsibility: "Automated",
+        systemsInvolved: [],
+        notifications: [],
+        nextStepIds: [step2Id],
+        taskIds: [],
+      },
+      {
+        id: step2Id,
+        stepNumber: "2",
+        type: "Action",
+        name: "Process request",
+        summary: "Build draft steps",
+        description: "Prepare draft flow steps based on user context.",
+        goalOutcome: "Draft flow prepared",
+        responsibility: "Automated",
+        systemsInvolved: [],
+        notifications: [],
+        nextStepIds: [step3Id],
+        taskIds: [],
+      },
+      {
+        id: step3Id,
+        stepNumber: "3",
+        type: "Action",
+        name: "Send summary email",
+        summary: "Notify user with draft summary",
+        description: "Email draft summary and next actions.",
+        goalOutcome: "User notified",
+        responsibility: "Automated",
+        systemsInvolved: [],
+        notifications: [],
+        nextStepIds: [step4Id],
+        taskIds: [],
+      },
+      {
+        id: step4Id,
+        stepNumber: "4",
+        type: "Action",
+        name: "Send SMS/Alert",
+        summary: "Optional SMS/PagerDuty alert",
+        description: "Send SMS or PagerDuty alert as requested.",
+        goalOutcome: "User alerted",
+        responsibility: "Automated",
+        systemsInvolved: [],
+        notifications: [],
+        nextStepIds: [],
+        taskIds: [],
+      },
+    ],
+    branches: [],
   };
 }
 

@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import type { Connection, Node, Edge, EdgeChange, NodeChange } from "reactflow";
 import { StudioChat, type CopilotMessage } from "@/components/automations/StudioChat";
+import type { CopilotAnalysisState } from "@/lib/workflows/copilot-analysis";
 import type { StudioCanvasProps } from "@/components/StudioCanvas";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 import { EdgeInspector } from "@/components/automations/EdgeInspector";
@@ -348,6 +349,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [notes, setNotes] = useState("");
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [versionTasks, setVersionTasks] = useState<VersionTask[]>([]);
+  const [tasksLoadState, setTasksLoadState] = useState<"loading" | "ready" | "empty" | "error">("loading");
   const [recentActivityEntries, setRecentActivityEntries] = useState<ActivityEntry[]>([]);
   const [recentActivityLoading, setRecentActivityLoading] = useState(false);
   const [recentActivityError, setRecentActivityError] = useState<string | null>(null);
@@ -371,12 +373,20 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [archivingVersionId, setArchivingVersionId] = useState<string | null>(null);
   const [deletingVersionId, setDeletingVersionId] = useState<string | null>(null);
   const [savingMetricConfig, setSavingMetricConfig] = useState(false);
+  const [copilotAnalysis, setCopilotAnalysis] = useState<CopilotAnalysisState | null>(null);
+  const [copilotAnalysisLoading, setCopilotAnalysisLoading] = useState(false);
   
   // Read tab from URL params, default to "Overview"
-  const urlTab = searchParams?.get("tab");
-  const initialTab = (urlTab && AUTOMATION_TABS.includes(urlTab as AutomationTab)) 
-    ? (urlTab as AutomationTab) 
-    : "Overview";
+  const normalizeTabFromUrl = (value: string | null): AutomationTab => {
+    if (!value) return "Overview";
+    const lower = value.toLowerCase();
+    if (lower === "blueprint") return "Workflow";
+    const match = AUTOMATION_TABS.find((tab) => tab.toLowerCase() === lower);
+    return (match ?? "Overview") as AutomationTab;
+  };
+
+  const urlTab = searchParams?.get("tab") ?? null;
+  const initialTab = normalizeTabFromUrl(urlTab);
   const [activeTab, setActiveTab] = useState<AutomationTab>(initialTab);
   const [canvasViewMode, setCanvasViewMode] = useState<"requirements" | "flowchart" | "tasks">("flowchart");
   const [requirementsText, setRequirementsText] = useState("");
@@ -387,14 +397,90 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [injectedChatMessage, setInjectedChatMessage] = useState<CopilotMessage | null>(null);
   const [selectedTask, setSelectedTask] = useState<VersionTask | null>(null);
   const [savingTask, setSavingTask] = useState(false);
+  const seedInjectedRef = useRef(false);
+  const [copilotAnalysisError, setCopilotAnalysisError] = useState(false);
+
+  const seededPrompt = useMemo(() => {
+    const raw = searchParams?.get("seed") ?? null;
+    if (!raw) return { value: null as string | null, tooLong: false, decodeError: false };
+    try {
+      const decoded = decodeURIComponent(raw);
+      if (decoded.length > 4000) {
+        return { value: null, tooLong: true, decodeError: false };
+      }
+      return { value: decoded, tooLong: false, decodeError: false };
+    } catch (error) {
+      logger.warn("[AUTOMATION-DETAIL] Failed to decode seed param", { error });
+      return { value: null, tooLong: false, decodeError: true };
+    }
+  }, [searchParams]);
   
   // Sync activeTab with URL params when they change
   useEffect(() => {
-    const tabFromUrl = searchParams?.get("tab");
-    if (tabFromUrl && AUTOMATION_TABS.includes(tabFromUrl as AutomationTab)) {
-      setActiveTab(tabFromUrl as AutomationTab);
-    }
+    setActiveTab(normalizeTabFromUrl(searchParams?.get("tab") ?? null));
   }, [searchParams]);
+  useEffect(() => {
+    seedInjectedRef.current = false;
+  }, [selectedVersionId]);
+
+  useEffect(() => {
+    const { value: seedValue, tooLong, decodeError } = seededPrompt;
+    const clearSeedParam = () => {
+      try {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete("seed");
+        router.replace(`${nextUrl.pathname}${nextUrl.search}`);
+      } catch {
+        // no-op if URL parsing fails
+      }
+    };
+    if (decodeError) {
+      toast({
+        title: "Could not read seed",
+        description: "The seed query param could not be decoded.",
+        variant: "error",
+      });
+      clearSeedParam();
+      return;
+    }
+    if (tooLong) {
+      toast({
+        title: "Seed too long",
+        description: "We skipped a seed because it exceeded 4000 characters.",
+        variant: "warning",
+      });
+      clearSeedParam();
+      return;
+    }
+    if (!seedValue || seedInjectedRef.current) {
+      return;
+    }
+
+    const message: CopilotMessage = {
+      id: `seed-${Date.now()}`,
+      role: "user",
+      content: seedValue,
+      createdAt: new Date().toISOString(),
+    };
+
+    seedInjectedRef.current = true;
+    setInjectedChatMessage(message);
+
+    // Normalize tab only after the injected message is queued to avoid racing with tab state
+    requestAnimationFrame(() => {
+      try {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete("seed");
+        const tabParam = nextUrl.searchParams.get("tab");
+        if (tabParam && tabParam.toLowerCase() === "blueprint") {
+          nextUrl.searchParams.set("tab", "Workflow");
+        }
+        router.replace(`${nextUrl.pathname}${nextUrl.search}`);
+      } catch {
+        // no-op if URL parsing fails
+      }
+    });
+  }, [router, seededPrompt, toast]);
   const [hasSelectedStep, setHasSelectedStep] = useState(false);
   const [showStepHelper, setShowStepHelper] = useState(false);
   const [proceedingToBuild, setProceedingToBuild] = useState(false);
@@ -432,6 +518,22 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       preserveSelectionRef.current = shouldPreserveSelection;
       setLoading(true);
       setError(null);
+      setTasksLoadState("loading");
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "debug-session",
+          runId: "pre-fix",
+          hypothesisId: "H1",
+          location: "AutomationDetailPageClient.tsx:434",
+          message: "Workflow fetch start",
+          data: { automationId: params.automationId, selectedVersionId },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
       try {
         const response = await fetch(`/api/automations/${params.automationId}`, { cache: "no-store" });
         if (!response.ok) {
@@ -493,6 +595,27 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         // #endregion
         const workflow = version?.workflowJson ? cloneWorkflow(version.workflowJson) : createEmptyWorkflowSpec();
         // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: "pre-fix",
+            hypothesisId: "H1",
+            location: "AutomationDetailPageClient.tsx:494",
+            message: "Workflow fetch success",
+            data: {
+              automationId: params.automationId,
+              versionId: version?.id,
+              stepCount: version?.workflowJson?.steps?.length ?? 0,
+              hasWorkflow: Boolean(version?.workflowJson),
+              taskCount: version?.tasks?.length ?? 0,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+        // #region agent log
         sendDevAgentLog({
           location: "page.tsx:400",
           message: "Workflow after clone",
@@ -524,6 +647,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unexpected error");
+        setTasksLoadState("error");
       } finally {
         setLoading(false);
       }
@@ -602,12 +726,14 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   }, [fetchAutomation]);
 
   useEffect(() => {
+    if (activeTab !== "Overview") return;
     void fetchRecentActivity(selectedVersionId);
-  }, [fetchRecentActivity, selectedVersionId]);
+  }, [activeTab, fetchRecentActivity, selectedVersionId]);
 
   useEffect(() => {
+    if (activeTab !== "Overview") return;
     void fetchVersionMetrics(selectedVersionId);
-  }, [fetchVersionMetrics, selectedVersionId]);
+  }, [activeTab, fetchVersionMetrics, selectedVersionId]);
 
   useEffect(() => {
     if (isSwitchingVersion && !metricsLoading && !recentActivityLoading) {
@@ -621,6 +747,38 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     }
     return automation.versions.find((version) => version.id === selectedVersionId) ?? automation.versions[0] ?? null;
   }, [automation, selectedVersionId]);
+
+  const refreshAnalysis = useCallback(
+    async (versionId?: string | null) => {
+      if (!versionId) {
+        setCopilotAnalysis(null);
+        setCopilotAnalysisError(false);
+        return;
+      }
+      setCopilotAnalysisLoading(true);
+      setCopilotAnalysisError(false);
+      try {
+        const res = await fetch(`/api/automation-versions/${versionId}/copilot/analysis`, { cache: "no-store" });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? "Failed to load copilot analysis");
+        }
+        const json = await res.json();
+        setCopilotAnalysis(json.analysis ?? null);
+      } catch (err) {
+        logger.error("[STUDIO] Failed to load copilot analysis", err);
+        setCopilotAnalysisError(true);
+      } finally {
+        setCopilotAnalysisLoading(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (activeTab !== "Workflow") return;
+    void refreshAnalysis(selectedVersion?.id ?? null);
+  }, [activeTab, refreshAnalysis, selectedVersion?.id]);
 
 
   useEffect(() => {
@@ -694,10 +852,38 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   }, [selectedVersion?.id, selectedVersion?.workflowJson?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    setVersionTasks(selectedVersion?.tasks ?? []);
-    setRequirementsText(selectedVersion?.requirementsText ?? "");
-    previousRequirementsRef.current = selectedVersion?.requirementsText ?? "";
-  }, [selectedVersion?.id, selectedVersion?.tasks, selectedVersion?.requirementsText]);
+    if (!selectedVersion) {
+      setVersionTasks([]);
+      setTasksLoadState(loading ? "loading" : "empty");
+      return;
+    }
+
+    const nextTasks = selectedVersion.tasks ?? [];
+    setVersionTasks(nextTasks);
+    setTasksLoadState(nextTasks.length === 0 ? "empty" : "ready");
+    setRequirementsText(selectedVersion.requirementsText ?? "");
+    previousRequirementsRef.current = selectedVersion.requirementsText ?? "";
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "pre-fix",
+        hypothesisId: "H3",
+        location: "AutomationDetailPageClient.tsx:697",
+        message: "Version tasks set",
+        data: {
+          automationId: automation?.id,
+          versionId: selectedVersion.id,
+          taskCount: nextTasks.length,
+          taskIds: nextTasks.map((t) => t.id),
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+  }, [automation?.id, loading, selectedVersion]);
 
   const taskGroups = useMemo(() => {
     const groups: Record<"blocker" | "important" | "optional", VersionTask[]> = {
@@ -1052,6 +1238,25 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       });
     },
     [applyWorkflowUpdate]
+  );
+
+  const handleTasksUpdate = useCallback(
+    (tasks: VersionTask[]) => {
+      setVersionTasks(tasks);
+      setTasksLoadState(tasks.length === 0 ? "empty" : "ready");
+      setAutomation((prev) => {
+        if (!prev) return prev;
+        const activeVersionId = selectedVersionId ?? selectedVersion?.id;
+        if (!activeVersionId) return prev;
+        return {
+          ...prev,
+          versions: prev.versions.map((version) =>
+            version.id === activeVersionId ? { ...version, tasks } : version
+          ),
+        };
+      });
+    },
+    [selectedVersion?.id, selectedVersionId]
   );
 
   useEffect(() => {
@@ -1411,9 +1616,46 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       hypothesisId: "E",
     });
     // #endregion
+    if ((workflow?.steps?.length ?? 0) > 0 && nodes.length === 0) {
+      logger.error("[AUTOMATION] Workflow steps present but rendered nodes are zero", {
+        stepCount: workflow?.steps?.length ?? 0,
+        steps: workflow?.steps,
+        edgeCount: workflow ? workflowToEdges(workflow).length : 0,
+        nodePositions: nodes.map((node) => ({ id: node.id, position: node.position })),
+      });
+    }
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "pre-fix",
+        hypothesisId: "H2",
+        location: "AutomationDetailPageClient.tsx:1400",
+        message: "Derived canvas nodes",
+        data: {
+          stepCount: workflow?.steps?.length ?? 0,
+          nodeCount: nodes.length,
+          edgeCount: workflow ? workflowToEdges(workflow).length : 0,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
     return nodes;
   }, [workflow, taskLookup]);
   
+  const canvasState = useMemo<"loading" | "ready" | "empty" | "error">(() => {
+    if (loading || isSwitchingVersion) return "loading";
+    if (workflowError || error) return "error";
+    const stepCount = workflow?.steps?.length ?? 0;
+    if (stepCount === 0) return "empty";
+    const nodeCount = flowNodes.length;
+    if (nodeCount === 0) return "error";
+    return "ready";
+  }, [loading, isSwitchingVersion, workflowError, error, workflow?.steps?.length, flowNodes.length]);
+
   const branchLetters = useMemo(() => {
     const map = new Map<string, string>();
     if (!workflow?.steps) return map;
@@ -1977,12 +2219,17 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             workflowEmpty={workflowIsEmpty}
             onWorkflowUpdates={handleWorkflowAIUpdates}
             onWorkflowRefresh={refreshAutomationPreservingSelection}
+            onTasksUpdate={(tasks) => handleTasksUpdate(tasks as unknown as VersionTask[])}
             injectedMessage={injectedChatMessage}
             onInjectedMessageConsumed={() => setInjectedChatMessage(null)}
             onSuggestNextSteps={handleSuggestNextSteps}
             isRequestingSuggestions={isRequestingSuggestions}
             suggestionStatus={suggestionStatus}
             onWorkflowUpdatingChange={setIsSynthesizingWorkflow}
+            analysis={copilotAnalysis}
+            analysisLoading={copilotAnalysisLoading}
+            analysisUnavailable={copilotAnalysisError}
+            onRefreshAnalysis={() => refreshAnalysis(selectedVersion?.id ?? null)}
           />
         </div>
 
@@ -2071,9 +2318,27 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
               blockersRemaining={blockersRemaining}
               onViewStep={handleViewTaskStep}
               onViewTask={handleViewTask}
+              loadState={tasksLoadState}
+              onRetry={fetchAutomation}
             />
           ) : (
             <div className="flex-1 relative h-full">
+              {canvasState === "loading" ? (
+                <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-white/80 backdrop-blur-sm">
+                  <Loader2 className="h-8 w-8 animate-spin text-gray-500 mb-2" />
+                  <p className="text-sm font-semibold text-gray-600">Loading workflow…</p>
+                </div>
+              ) : null}
+              {canvasState === "error" ? (
+                <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-white/85 backdrop-blur-sm px-6 text-center">
+                  <AlertTriangle className="h-10 w-10 text-amber-500 mb-3" />
+                  <p className="text-sm font-semibold text-gray-800">Couldn’t render workflow</p>
+                  <p className="text-xs text-gray-500 mb-3">Try reloading the version.</p>
+                  <Button size="sm" onClick={() => fetchAutomation()} className="px-4">
+                    Retry
+                  </Button>
+                </div>
+              ) : null}
               <StudioCanvas
                 nodes={flowNodes}
                 edges={flowEdges}
@@ -2085,15 +2350,17 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 onEdgeClick={handleEdgeClick}
                 isSynthesizing={isSynthesizingWorkflow}
                 emptyState={
-                  workflowIsEmpty ? (
-                    <div className="text-center max-w-md mx-auto space-y-2">
-                      <Sparkles className="w-12 h-12 text-gray-300 mx-auto mb-2" />
-                      <p className="text-sm font-semibold text-gray-600">Workflow Canvas</p>
-                      <p className="text-xs text-gray-500 leading-relaxed">
-                        Chat with the copilot to build your automation. Steps will appear here as you describe your workflow.
-                      </p>
-                    </div>
-                  ) : null
+                  canvasState === "empty"
+                    ? (
+                      <div className="text-center max-w-md mx-auto space-y-2">
+                        <Sparkles className="w-12 h-12 text-gray-300 mx-auto mb-2" />
+                        <p className="text-sm font-semibold text-gray-600">Workflow Canvas</p>
+                        <p className="text-xs text-gray-500 leading-relaxed">
+                          Describe your workflow in chat and steps will appear here.
+                        </p>
+                      </div>
+                    )
+                    : null
                 }
               />
 
@@ -2257,7 +2524,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 latestQuote={selectedVersion?.latestQuote}
                 lastUpdated={selectedVersion?.updatedAt ?? null}
                 versionLabel={selectedVersion?.versionLabel ?? ""}
-                tasks={selectedVersion?.tasks ?? []}
+                tasks={versionTasks}
                 onViewTasks={goToTasksView}
                 automationVersionId={selectedVersion?.id}
                 onPricingRefresh={() => fetchAutomation({ preserveSelection: true })}
@@ -2763,21 +3030,53 @@ interface TasksViewCanvasProps {
   blockersRemaining: number;
   onViewStep: (stepId: string) => void;
   onViewTask: (task: VersionTask) => void;
+  loadState: "loading" | "ready" | "empty" | "error";
+  onRetry: () => void;
 }
 
-function TasksViewCanvas({ tasks, blockersRemaining, onViewStep, onViewTask }: TasksViewCanvasProps) {
+function TasksViewCanvas({ tasks, blockersRemaining, onViewStep, onViewTask, loadState, onRetry }: TasksViewCanvasProps) {
   return (
     <div className="flex-1 flex flex-col h-full bg-white overflow-hidden">
-      <div className="flex-1 overflow-y-auto pt-[100px]">
-        <div className="w-[90%] mx-auto">
-          <AutomationTasksTab
-            tasks={tasks}
-            blockersRemaining={blockersRemaining}
-            onViewStep={onViewStep}
-            onViewTask={onViewTask}
-          />
+      {loadState === "loading" ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3 text-sm text-gray-600">
+            <Loader2 className="h-6 w-6 animate-spin text-gray-500" />
+            <span>Loading tasks…</span>
+          </div>
         </div>
-      </div>
+      ) : loadState === "error" ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center space-y-3">
+            <AlertTriangle className="h-8 w-8 text-amber-500 mx-auto" />
+            <p className="text-sm font-semibold text-gray-800">Couldn’t load tasks</p>
+            <p className="text-xs text-gray-500">Check your connection and retry.</p>
+            <Button size="sm" onClick={onRetry}>
+              Retry
+            </Button>
+          </div>
+        </div>
+      ) : loadState === "empty" ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center space-y-2 max-w-sm">
+            <CheckCircle2 className="h-10 w-10 text-gray-300 mx-auto" />
+            <p className="text-sm font-semibold text-gray-700">No tasks yet</p>
+            <p className="text-xs text-gray-500">
+              Tasks will appear here when the workflow needs information or approvals.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto pt-[100px]">
+          <div className="w-[90%] mx-auto">
+            <AutomationTasksTab
+              tasks={tasks}
+              blockersRemaining={blockersRemaining}
+              onViewStep={onViewStep}
+              onViewTask={onViewTask}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
