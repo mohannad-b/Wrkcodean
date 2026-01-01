@@ -246,6 +246,28 @@ export async function POST(request: Request, { params }: { params: { id: string 
         });
         updatedRequirementsText = newRequirementsText;
 
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: "copilot-chat",
+            hypothesisId: "A",
+            location: "copilot/chat/route.ts:post-buildWorkflowFromChat",
+            message: "Post-buildWorkflowFromChat step counts",
+            data: {
+              automationVersionId: params.id,
+              userMessagePreview: userMessageContent.slice(0, 200),
+              aiGeneratedStepCount: aiGeneratedWorkflow.steps?.length ?? 0,
+              sanitizedSummary: sanitizationSummary,
+              tasksReturned: generatedTasks.length,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+
         const numberedWorkflow = applyStepNumbers(aiGeneratedWorkflow);
         aiTasks = generatedTasks;
 
@@ -256,6 +278,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           blueprint: numberedWorkflow,
           workflow: numberedWorkflow,
         });
+
 
         workflowWithTasks = {
           ...numberedWorkflow,
@@ -308,6 +331,26 @@ export async function POST(request: Request, { params }: { params: { id: string 
           status: "Draft",
           updatedAt: new Date().toISOString(),
         });
+
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "copilot-chat",
+        hypothesisId: "C",
+        location: "copilot/chat/route.ts:validatedWorkflow",
+        message: "Validated workflow ready for response",
+        data: {
+          automationVersionId: params.id,
+          stepCount: validatedWorkflow.steps?.length ?? 0,
+          sectionCount: validatedWorkflow.sections?.length ?? 0,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
 
     const updatePayload: { workflowJson: Workflow; requirementsText?: string | null; updatedAt: Date } = {
       workflowJson: validatedWorkflow,

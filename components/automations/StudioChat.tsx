@@ -28,13 +28,14 @@ export interface CopilotMessage {
   kind?: "system_run";
   runStatus?: {
     phase: RunPhase;
-    events: string[];
+    text: string;
     stepCount?: number;
     errorMessage?: string | null;
     retryable?: boolean;
     persistenceError?: boolean;
     debugDetails?: Record<string, unknown> | null;
     collapsed?: boolean;
+    debugLines?: string[];
   };
 }
 
@@ -116,6 +117,10 @@ export function StudioChat({
   const runContentRef = useRef<Map<string, string>>(new Map());
   const runCollapseTimersRef = useRef<Map<string, number>>(new Map());
   const analysisRefreshRef = useRef<Map<string, number>>(new Map());
+  const runHeartbeatTimersRef = useRef<Map<
+    string,
+    { slow?: number; slower?: number; slowest?: number }
+  >>(new Map());
 
   const getUserInitials = () => {
     if (!profile) return "ME";
@@ -284,9 +289,9 @@ export function StudioChat({
       const requestId = pendingRequestIdRef.current + 1;
       pendingRequestIdRef.current = requestId;
       const runId = options?.reuseRunId ?? `run-${optimisticMessageId ?? Date.now()}`;
-      const clientMessageId = isRetry ? `${runId}-retry-${Date.now()}` : optimisticMessageId ?? `msg-${Date.now()}`;
-      const initialEvent =
-        source === "seed" ? "Seed received" : isRetry ? "Retrying..." : "Processing your prompt";
+      const clientMessageId =
+        options?.reuseRunId && isRetry ? `${runId}-retry-${Date.now()}` : optimisticMessageId ?? `msg-${Date.now()}`;
+      const initialText = source === "seed" ? "Understanding…" : isRetry ? "Understanding…" : "Understanding…";
 
       lastSentContentRef.current = trimmed;
       runContentRef.current.set(runId, trimmed);
@@ -310,30 +315,29 @@ export function StudioChat({
 
       const baseRunStatus: CopilotMessage["runStatus"] = {
         phase: "understanding",
-        events: [initialEvent],
+        text: initialText,
         errorMessage: null,
         retryable: false,
         persistenceError: false,
         debugDetails: null,
         collapsed: false,
+        debugLines: [],
       };
 
       setMessages((prev) => {
         const durable = dropTransientMessages(prev);
-        const next: CopilotMessage[] = [];
-        const runIndex = durable.findIndex((msg) => msg.id === runId);
-        durable.forEach((msg) => {
-          next.push(msg);
-        });
+        const existingIndex = durable.findIndex((msg) => msg.id === runId && msg.kind === "system_run");
+        const next: CopilotMessage[] = [...durable];
         if (optimisticMessage) {
           next.push(optimisticMessage);
         }
-        if (runIndex >= 0) {
-          next[runIndex] = {
-            ...next[runIndex],
+        if (existingIndex >= 0) {
+          next[existingIndex] = {
+            ...next[existingIndex],
             kind: "system_run",
             role: "assistant",
             runStatus: baseRunStatus,
+            createdAt: next[existingIndex].createdAt,
           };
         } else {
           next.push({
@@ -348,19 +352,22 @@ export function StudioChat({
         return next;
       });
 
-      const updateRunMessage = (updater: (status: NonNullable<CopilotMessage["runStatus"]>) => CopilotMessage["runStatus"]) => {
+      const updateRunMessage = (
+        updater: (status: NonNullable<CopilotMessage["runStatus"]>) => CopilotMessage["runStatus"]
+      ) => {
         setMessages((prev) => {
           const next = dropTransientMessages(prev).map((msg) => {
             if (msg.id !== runId || msg.kind !== "system_run") return msg;
             const currentStatus: NonNullable<CopilotMessage["runStatus"]> =
               msg.runStatus ?? {
                 phase: "understanding",
-                events: [],
+                text: "Understanding…",
                 errorMessage: null,
                 retryable: false,
                 persistenceError: false,
                 debugDetails: null,
                 collapsed: false,
+                debugLines: [],
               };
             return { ...msg, runStatus: updater(currentStatus) };
           });
@@ -370,7 +377,6 @@ export function StudioChat({
 
       setIsSending(true);
       setIsAwaitingReply(true);
-      onWorkflowUpdatingChange?.(true);
 
       let stepCount = 0;
       let nodeCount: number | null = null;
@@ -380,13 +386,33 @@ export function StudioChat({
         updateRunMessage((status) => ({
           ...status,
           phase: "drafting",
-          events: [...status.events, "Calling Copilot"],
+          text: "Drafting workflow…",
           errorMessage: null,
           retryable: false,
           persistenceError: false,
           debugDetails: null,
           collapsed: false,
         }));
+
+        const slowTimer = window.setTimeout(() => {
+          updateRunMessage((status) => ({
+            ...status,
+            text: status.phase === "done" || status.phase === "error" ? status.text : "Still working…",
+          }));
+        }, 800);
+        const slowerTimer = window.setTimeout(() => {
+          updateRunMessage((status) => ({
+            ...status,
+            text: status.phase === "done" || status.phase === "error" ? status.text : "Pulling systems + edge cases…",
+          }));
+        }, 3000);
+        const slowestTimer = window.setTimeout(() => {
+          updateRunMessage((status) => ({
+            ...status,
+            text: status.phase === "done" || status.phase === "error" ? status.text : "Almost there…",
+          }));
+        }, 8000);
+        runHeartbeatTimersRef.current.set(runId, { slow: slowTimer, slower: slowerTimer, slowest: slowestTimer });
 
         const chatResponse = await fetch(`/api/automation-versions/${automationVersionId}/copilot/chat`, {
           method: "POST",
@@ -402,15 +428,32 @@ export function StudioChat({
           throw new Error(errorData.error ?? "Failed to update workflow");
         }
 
-        const data: {
-          workflow?: Workflow | null;
+        const rawData: {
+          workflow?: Workflow | { workflowSpec?: Workflow };
           message?: ApiCopilotMessage;
           progress?: WorkflowProgressSnapshot | null;
           tasks?: Task[];
           persistenceError?: boolean;
         } = await chatResponse.json();
 
+
+        // Accept legacy alias where workflow lives under workflowSpec
+        const normalizedWorkflow =
+          rawData.workflow && "workflowJson" in rawData.workflow && rawData.workflow.workflowJson
+            ? (rawData.workflow.workflowJson as Workflow)
+            : rawData.workflow && "workflowSpec" in rawData.workflow && rawData.workflow.workflowSpec
+            ? (rawData.workflow.workflowSpec as Workflow)
+            : rawData.workflow && "blueprintJson" in rawData.workflow && rawData.workflow.blueprintJson
+            ? (rawData.workflow.blueprintJson as Workflow)
+            : (rawData.workflow as Workflow | null | undefined);
+
+        const data = {
+          ...rawData,
+          workflow: normalizedWorkflow,
+        };
+
         const isLatest = requestId === pendingRequestIdRef.current;
+
 
         if (data.workflow && onWorkflowUpdates && isLatest) {
           stepCount = data.workflow.steps?.length ?? 0;
@@ -418,7 +461,7 @@ export function StudioChat({
             updateRunMessage((status) => ({
               ...status,
               phase: "error",
-              events: [...status.events, "No steps generated"],
+              text: "No steps generated — retry",
               errorMessage: "No steps generated — retry",
               retryable: true,
               stepCount,
@@ -441,11 +484,12 @@ export function StudioChat({
                 edges: data.workflow.steps?.flatMap((s) => s.nextStepIds ?? []),
               });
             }
+            onWorkflowUpdatingChange?.(true);
             onWorkflowUpdates(data.workflow);
             updateRunMessage((status) => ({
               ...status,
               phase: "drawing",
-              events: [...status.events, `Validated workflow (${stepCount} steps)`],
+              text: "Drawing flowchart…",
               stepCount,
               errorMessage: null,
               retryable: false,
@@ -487,7 +531,6 @@ export function StudioChat({
               clientMessageId,
               source,
             },
-            events: [...status.events, "Analysis save failed"],
           }));
         }
 
@@ -507,10 +550,7 @@ export function StudioChat({
         updateRunMessage((status) => ({
           ...status,
           phase: finalPhase,
-          events:
-            finalPhase === "done"
-              ? [...status.events, `Flow updated (${stepCount} steps)`]
-              : status.events,
+          text: finalPhase === "done" ? `Flow updated (${stepCount} steps)` : status.text,
           errorMessage: finalPhase === "error" ? status.errorMessage ?? "Run failed" : null,
           retryable: finalPhase === "error",
           stepCount: stepCount || status.stepCount,
@@ -547,13 +587,20 @@ export function StudioChat({
         updateRunMessage((status) => ({
           ...status,
           phase: "error",
-          events: [...status.events, `Error: ${message}`],
+          text: "Error — retry",
           errorMessage: message,
           retryable: true,
           collapsed: false,
         }));
         return { ok: false as const };
       } finally {
+        const timers = runHeartbeatTimersRef.current.get(runId);
+        if (timers) {
+          if (timers.slow) window.clearTimeout(timers.slow);
+          if (timers.slower) window.clearTimeout(timers.slower);
+          if (timers.slowest) window.clearTimeout(timers.slowest);
+          runHeartbeatTimersRef.current.delete(runId);
+        }
         setIsSending(false);
         setIsAwaitingReply(false);
         onWorkflowUpdatingChange?.(false);
@@ -829,8 +876,8 @@ function RunBubble({ message, onRetry }: { message: CopilotMessage; onRetry: () 
   if (!status) return null;
 
   const isError = status.phase === "error";
-  const events = status.collapsed && status.events.length > 0 ? [status.events[status.events.length - 1]] : status.events;
-  const lastEvent = events[events.length - 1];
+  const lastEvent = status.text;
+  const showErrorLine = isError && status.errorMessage && status.errorMessage !== status.text;
 
   return (
     <div className="w-full">
@@ -849,12 +896,10 @@ function RunBubble({ message, onRetry }: { message: CopilotMessage; onRetry: () 
           <span className="uppercase tracking-wide text-gray-500">{status.phase}</span>
         </div>
         <div className="text-xs text-gray-700 space-y-1">
-          {events.map((event, idx) => (
-            <div key={`${event}-${idx}`} className="flex items-start gap-2">
-              <span className="mt-1 block h-1.5 w-1.5 rounded-full bg-gray-400" />
-              <span className={cn(idx === events.length - 1 ? "font-medium" : "text-gray-600")}>{event}</span>
-            </div>
-          ))}
+          <div className="flex items-start gap-2">
+            <span className="mt-1 block h-1.5 w-1.5 rounded-full bg-gray-400" />
+            <span className="font-medium">{status.text}</span>
+          </div>
         </div>
 
         {status.phase === "done" && status.stepCount !== undefined ? (
@@ -883,9 +928,13 @@ function RunBubble({ message, onRetry }: { message: CopilotMessage; onRetry: () 
 
         {isError && (
           <div className="mt-3 flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold text-red-800">
-              {status.errorMessage ?? "Run failed. Retry?"}
-            </span>
+            {showErrorLine ? (
+              <span className="text-xs font-semibold text-red-800">
+                {status.errorMessage ?? "Run failed. Retry?"}
+              </span>
+            ) : (
+              <span className="text-xs font-semibold text-red-800">Run failed. Retry?</span>
+            )}
             {status.retryable ? (
               <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={onRetry}>
                 Retry

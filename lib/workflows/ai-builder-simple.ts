@@ -173,23 +173,42 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     logger.debug("[copilot:draft-blueprint] raw_response", content);
 
     const aiResponse = parseAIResponse(content);
-    const normalizedSteps = Array.isArray(aiResponse.blueprint?.steps)
-      ? aiResponse.blueprint?.steps
+    const workflowBlock =
+      (aiResponse as any)?.workflow && typeof (aiResponse as any)?.workflow === "object"
+        ? (aiResponse as any)?.workflow
+        : aiResponse.blueprint;
+    const normalizedSteps = Array.isArray(workflowBlock?.steps)
+      ? workflowBlock.steps
       : Array.isArray(aiResponse.steps)
         ? aiResponse.steps
         : [];
-    const normalizedTasks = Array.isArray(aiResponse.blueprint?.tasks)
-      ? aiResponse.blueprint?.tasks
+    const normalizedTasks = Array.isArray(workflowBlock?.tasks)
+      ? workflowBlock.tasks
       : Array.isArray(aiResponse.tasks)
         ? aiResponse.tasks
         : [];
-    const normalizedBranches = Array.isArray(aiResponse.blueprint?.branches)
-      ? aiResponse.blueprint?.branches
+
+    const tasksWithFallback: AITask[] =
+      normalizedTasks.length > 0
+        ? normalizedTasks
+        : normalizedSteps
+            .filter((step: AIStep) => step.name && step.type !== "Trigger")
+            .slice(0, 6)
+            .map((step: AIStep, idx: number) => ({
+              title: step.name,
+              description: step.description || step.name,
+              priority: idx === 0 ? "blocker" : "important",
+              relatedSteps: [step.stepNumber || `step_${idx + 1}`],
+              systemType: step.systemsInvolved?.[0] || "unspecified",
+            }));
+
+    const normalizedBranches = Array.isArray(workflowBlock?.branches)
+      ? workflowBlock.branches
       : Array.isArray(aiResponse.branches)
         ? aiResponse.branches
         : [];
-    const normalizedSections = aiResponse.blueprint?.sections ?? aiResponse.sections ?? {};
-    const rawRequirements = aiResponse.requirementsText ?? aiResponse.blueprint?.requirementsText;
+    const normalizedSections = workflowBlock?.sections ?? aiResponse.sections ?? {};
+    const rawRequirements = aiResponse.requirementsText ?? workflowBlock?.requirementsText ?? aiResponse.blueprint?.requirementsText;
     const updatedRequirementsText =
       typeof rawRequirements === "string" ? rawRequirements.trim() : undefined;
 
@@ -220,10 +239,33 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       fallbackApplied: sanitizedBlueprintRaw.steps.length === 0,
     });
 
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "copilot-chat",
+        hypothesisId: "B",
+        location: "ai-builder-simple.ts:parsed_response",
+        message: "AI response step diagnostics",
+        data: {
+          rawStepCount: normalizedSteps.length,
+          sanitizedStepCount: sanitizedBlueprintRaw.steps.length,
+          finalStepCount: sanitizedBlueprint.steps.length,
+          fallbackApplied: sanitizedBlueprintRaw.steps.length === 0,
+          firstStepNames: sanitizedBlueprint.steps.slice(0, 3).map((s) => s.name),
+          model: WORKFLOW_MODEL,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+
     return {
       blueprint: sanitizedBlueprint,
       workflow: sanitizedBlueprint,
-      tasks: normalizedTasks,
+      tasks: tasksWithFallback,
       chatResponse,
       followUpQuestion,
       sanitizationSummary,
@@ -521,7 +563,16 @@ function buildCompactPrompt({
   parts.push(`CURRENT WORKFLOW (compact JSON):\n${summarizeBlueprintCompact(currentBlueprint)}`);
 
   parts.push(`USER INPUT:\n${userMessage}`);
-  parts.push("Return ONLY valid JSON matching the expected blueprint envelope.");
+  parts.push(
+    [
+      "RESPONSE FORMAT (MANDATORY):",
+      "- Return a JSON object with keys: workflow, tasks (array), chatResponse, followUpQuestion",
+      "- Put steps/branches/sections inside workflow.steps / workflow.branches / workflow.sections",
+      "- Put tasks inside tasks[] with: title, description, priority (blocker|important|optional), relatedSteps (ids), systemType",
+      "- Keep steps specific to the user's systems and include decisions/exception branches for missing data and retries",
+      "- Include at least 2 tasks when possible",
+    ].join("\n")
+  );
 
   return parts.join("\n\n");
 }

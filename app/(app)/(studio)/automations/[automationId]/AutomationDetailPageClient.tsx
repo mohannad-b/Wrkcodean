@@ -1217,7 +1217,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   );
 
   const handleWorkflowAIUpdates = useCallback(
-    (updates: CopilotWorkflowUpdates | Workflow) => {
+    (updates: CopilotWorkflowUpdates | Workflow | { workflowJson?: Workflow | null; blueprintJson?: Workflow | null }) => {
       setIsSynthesizingWorkflow(true);
       if (synthesisTimeoutRef.current) {
         clearTimeout(synthesisTimeoutRef.current);
@@ -1227,7 +1227,9 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       }, 1500);
       applyWorkflowUpdate((current) => {
         if (!current) return current;
-        const maybeWorkflow = updates as Workflow;
+        const updatesPayload = updates as Workflow & { workflowJson?: Workflow | null; blueprintJson?: Workflow | null };
+        const maybeWorkflow =
+          updatesPayload?.workflowJson ?? updatesPayload?.blueprintJson ?? (updates as Workflow);
         if (Array.isArray(maybeWorkflow?.steps) && Array.isArray((maybeWorkflow as any)?.sections)) {
           setWorkflow(maybeWorkflow);
           setWorkflowDirty(true);
