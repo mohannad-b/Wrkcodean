@@ -42,6 +42,16 @@ export async function syncAutomationTasks({
       stepIdByNumber.set(step.stepNumber, step.id);
     }
   });
+  const stepIdByNormalizedNumber = new Map<string, string>();
+  const normalizeStepKey = (value: string) => value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  workflowSpec.steps.forEach((step) => {
+    if (step.stepNumber) {
+      stepIdByNormalizedNumber.set(normalizeStepKey(step.stepNumber), step.id);
+    }
+  });
+
+  let matchedCount = 0;
+  let createdCount = 0;
 
   for (const aiTask of aiTasks) {
     const title = aiTask.title?.trim();
@@ -56,8 +66,17 @@ export async function syncAutomationTasks({
           .filter((value): value is string => Boolean(value))
       : [];
     const relatedStepIds = relatedStepNumbers
-      .map((stepNumber) => stepIdByNumber.get(stepNumber))
+      .map((stepNumber) => stepIdByNumber.get(stepNumber) ?? stepIdByNormalizedNumber.get(normalizeStepKey(stepNumber)))
       .filter((value): value is string => Boolean(value));
+
+    // Fallback: if no related steps resolved, attach to the last non-trigger step (or last step)
+    let fallbackStepId: string | null = null;
+    if (relatedStepIds.length === 0 && workflowSpec.steps.length > 0) {
+      const nonTrigger = [...workflowSpec.steps].reverse().find((s) => s.type !== "Trigger");
+      const lastStep = workflowSpec.steps[workflowSpec.steps.length - 1];
+      fallbackStepId = nonTrigger?.id ?? lastStep.id;
+      relatedStepIds.push(fallbackStepId);
+    }
 
     const metadata: TaskMetadata = {
       systemType: normalizedSystemType,
@@ -108,6 +127,7 @@ export async function syncAutomationTasks({
         };
       }
       taskId = match.id;
+      matchedCount += 1;
     } else {
       const [inserted] = await db
         .insert(tasks)
@@ -128,6 +148,7 @@ export async function syncAutomationTasks({
 
       taskId = inserted.id;
       existingTasks.push(inserted);
+      createdCount += 1;
     }
 
     relatedStepIds.forEach((stepId) => {
