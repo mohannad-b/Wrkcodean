@@ -34,27 +34,5 @@ export const auth0 = new Auth0Client({
   },
 });
 
-// #region agent log
-fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    sessionId: "debug-session",
-    runId: "pre-fix",
-    hypothesisId: "H-auth0",
-    location: "lib/auth/auth0.ts:init",
-    message: "Auth0 client initialized",
-    data: {
-      hasDomain: Boolean(process.env.AUTH0_DOMAIN),
-      hasClientId: Boolean(process.env.AUTH0_CLIENT_ID),
-      hasClientSecret: Boolean(process.env.AUTH0_CLIENT_SECRET),
-      hasSecret: Boolean(secret),
-      isProd,
-    },
-    timestamp: Date.now(),
-  }),
-}).catch(() => {});
-// #endregion
-
 export default auth0;
 

@@ -519,21 +519,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       setLoading(true);
       setError(null);
       setTasksLoadState("loading");
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: "debug-session",
-          runId: "pre-fix",
-          hypothesisId: "H1",
-          location: "AutomationDetailPageClient.tsx:434",
-          message: "Workflow fetch start",
-          data: { automationId: params.automationId, selectedVersionId },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
       try {
         const response = await fetch(`/api/automations/${params.automationId}`, { cache: "no-store" });
         if (!response.ok) {
@@ -594,27 +579,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         });
         // #endregion
         const workflow = version?.workflowJson ? cloneWorkflow(version.workflowJson) : createEmptyWorkflowSpec();
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: "debug-session",
-            runId: "pre-fix",
-            hypothesisId: "H1",
-            location: "AutomationDetailPageClient.tsx:494",
-            message: "Workflow fetch success",
-            data: {
-              automationId: params.automationId,
-              versionId: version?.id,
-              stepCount: version?.workflowJson?.steps?.length ?? 0,
-              hasWorkflow: Boolean(version?.workflowJson),
-              taskCount: version?.tasks?.length ?? 0,
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
         // #region agent log
         sendDevAgentLog({
           location: "page.tsx:400",
@@ -863,26 +827,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     setTasksLoadState(nextTasks.length === 0 ? "empty" : "ready");
     setRequirementsText(selectedVersion.requirementsText ?? "");
     previousRequirementsRef.current = selectedVersion.requirementsText ?? "";
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H3",
-        location: "AutomationDetailPageClient.tsx:697",
-        message: "Version tasks set",
-        data: {
-          automationId: automation?.id,
-          versionId: selectedVersion.id,
-          taskCount: nextTasks.length,
-          taskIds: nextTasks.map((t) => t.id),
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
   }, [automation?.id, loading, selectedVersion]);
 
   const taskGroups = useMemo(() => {
@@ -1626,25 +1570,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
         nodePositions: nodes.map((node) => ({ id: node.id, position: node.position })),
       });
     }
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H2",
-        location: "AutomationDetailPageClient.tsx:1400",
-        message: "Derived canvas nodes",
-        data: {
-          stepCount: workflow?.steps?.length ?? 0,
-          nodeCount: nodes.length,
-          edgeCount: workflow ? workflowToEdges(workflow).length : 0,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
     return nodes;
   }, [workflow, taskLookup]);
   

@@ -7,6 +7,12 @@ const LEVEL_RANK: Record<Exclude<LogLevel, "silent">, number> = {
   debug: 3,
 };
 
+function flagEnabled(value: string | undefined | null): boolean {
+  if (!value) return false;
+  const lower = value.toLowerCase();
+  return lower === "1" || lower === "true";
+}
+
 function normalizeLevel(value: string | undefined | null): LogLevel | undefined {
   if (!value) return undefined;
   const lower = value.toLowerCase();
@@ -33,6 +39,7 @@ function resolveLogLevel(): LogLevel {
 }
 
 const activeLevel: LogLevel = resolveLogLevel();
+const debugCopilotLogsEnabled = flagEnabled(process.env.DEBUG_COPILOT_LOGS);
 
 const shouldLog = (level: Exclude<LogLevel, "silent">) => {
   if (activeLevel === "silent") return false;
@@ -48,4 +55,12 @@ export const logger = {
   info: shouldLog("info") ? (...args: unknown[]) => console.info(...args) : noop,
   debug: shouldLog("debug") ? (...args: unknown[]) => console.debug(...args) : noop,
 };
+
+if (shouldLog("warn")) {
+  console.warn("[logger:init]", {
+    env: process.env.NODE_ENV ?? "unknown",
+    level: activeLevel,
+    debugCopilotLogsEnabled,
+  });
+}
 

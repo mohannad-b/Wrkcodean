@@ -10,24 +10,6 @@ let subscriberBound = false;
 
 function requireRedisUrl(): string {
   const redisUrl = process.env.REDIS_URL;
-  // #region agent log
-  fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      sessionId: "debug-session",
-      runId: "pre-fix",
-      hypothesisId: "H-redis",
-      location: "lib/realtime/redis-bus.ts:requireRedisUrl",
-      message: "Checking REDIS_URL presence",
-      data: {
-        hasRedisUrl: Boolean(redisUrl),
-        length: redisUrl?.length ?? 0,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
   if (!redisUrl) {
     throw new Error("REDIS_URL not set for realtime events");
   }

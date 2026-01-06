@@ -84,7 +84,9 @@ export function sendDevAgentLog(payload: Record<string, unknown>, options?: Send
     return;
   }
 
-  logger.debug(JSON.stringify(record));
+  const serialized = JSON.stringify(record);
+  const clipped = serialized.length > 2000 ? `${serialized.slice(0, 2000)}…` : serialized;
+  logger.debug(clipped);
 }
 
 

@@ -13,7 +13,8 @@ const LOG_PATH = process.env.DEBUG_LOG_PATH ?? path.join(process.cwd(), "debug.l
 async function appendLine(entry: Record<string, unknown>) {
   const line = JSON.stringify(entry);
   if (!debugLogEnabled) {
-    logger.debug(line);
+    const clipped = line.length > 2000 ? `${line.slice(0, 2000)}…` : line;
+    logger.debug(clipped);
     return;
   }
 

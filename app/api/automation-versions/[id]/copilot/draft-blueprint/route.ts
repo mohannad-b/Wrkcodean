@@ -63,22 +63,7 @@ const SYSTEM_PROMPT =
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId: "draft-pre",
-        hypothesisId: "A",
-        location: "draft-blueprint/route.ts:65",
-        message: "Route hit",
-        data: { versionId: params.id },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
-
+    copilotDebug("draft_workflow.route_hit", { versionId: params.id });
     logger.debug("[copilot:draft-workflow] Request received for version:", params.id);
     
     const session = await requireTenantSession();

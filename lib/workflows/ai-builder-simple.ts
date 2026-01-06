@@ -149,10 +149,10 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       content: msg.content,
     })),
   });
-  logger.debug("[copilot:draft-blueprint] prompt", {
+  logger.debug("[copilot:draft-blueprint] prompt_metadata", {
     model: WORKFLOW_MODEL,
     temperature: 0.3,
-    messages,
+    messageCount: messages.length,
   });
 
   try {
@@ -170,7 +170,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     }
 
     copilotDebug("draft_blueprint.raw_response", content);
-    logger.debug("[copilot:draft-blueprint] raw_response", content);
+    logger.debug("[copilot:draft-blueprint] raw_response_meta", { length: content.length });
 
     const aiResponse = parseAIResponse(content);
     const workflowBlock =
@@ -239,28 +239,14 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       fallbackApplied: sanitizedBlueprintRaw.steps.length === 0,
     });
 
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId: "copilot-chat",
-        hypothesisId: "B",
-        location: "ai-builder-simple.ts:parsed_response",
-        message: "AI response step diagnostics",
-        data: {
-          rawStepCount: normalizedSteps.length,
-          sanitizedStepCount: sanitizedBlueprintRaw.steps.length,
-          finalStepCount: sanitizedBlueprint.steps.length,
-          fallbackApplied: sanitizedBlueprintRaw.steps.length === 0,
-          firstStepNames: sanitizedBlueprint.steps.slice(0, 3).map((s) => s.name),
-          model: WORKFLOW_MODEL,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
+    copilotDebug("draft_blueprint.parsed_response_metrics", {
+      rawStepCount: normalizedSteps.length,
+      sanitizedStepCount: sanitizedBlueprintRaw.steps.length,
+      finalStepCount: sanitizedBlueprint.steps.length,
+      fallbackApplied: sanitizedBlueprintRaw.steps.length === 0,
+      firstStepNames: sanitizedBlueprint.steps.slice(0, 3).map((s) => s.name),
+      model: WORKFLOW_MODEL,
+    });
 
     return {
       blueprint: sanitizedBlueprint,

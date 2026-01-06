@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
 import { buildRateLimitKey, ensureRateLimit } from "@/lib/rate-limit";
@@ -9,7 +10,7 @@ import { getAutomationVersionDetail } from "@/lib/services/automations";
 import { createCopilotMessage, listCopilotMessages } from "@/lib/services/copilot-messages";
 import { determineConversationPhase, generateThinkingSteps } from "@/lib/ai/copilot-orchestrator";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
-import { sendDevAgentLog } from "@/lib/dev/agent-log";
+import { createCopilotTrace } from "@/lib/ai/copilot-trace";
 import { logAudit } from "@/lib/audit/log";
 import { db } from "@/db";
 import { automationVersions, copilotMessages, tasks as tasksTable, type CopilotRun } from "@/db/schema";
@@ -96,6 +97,17 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     const clientMessageId = payload.clientMessageId?.trim();
+    const runId = clientMessageId || randomUUID();
+    const requestId = randomUUID();
+    const baseTrace = createCopilotTrace({
+      runId,
+      requestId,
+      automationVersionId: params.id,
+      clientMessageId: clientMessageId ?? undefined,
+      source: "copilot/chat",
+      phase: "run",
+    });
+    baseTrace.event("run.started", { automationVersionId: params.id });
     if (clientMessageId) {
       const existingRun = await getCopilotRunByClientMessageId({
         tenantId: session.tenantId,
@@ -110,7 +122,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           automationVersionId: params.id,
           detail,
         });
-        return NextResponse.json(replay);
+        return NextResponse.json({ ...replay, runId });
       }
     }
 
@@ -143,6 +155,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
           content: message.role === "assistant" ? parseCopilotReply(message.content).displayText : message.content,
         }))
     );
+    const understandingTrace = baseTrace.phase("understanding");
+    understandingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
 
     const latestUserMessage = [...normalizedMessages].reverse().find((message) => message.role === "user");
     if (latestUserMessage && isOffTopic(latestUserMessage.content)) {
@@ -178,6 +192,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
     let aiTasks: AITask[] = [];
     let updatedRequirementsText: string | null | undefined;
 
+    const trace = baseTrace;
+
     if (directCommand && latestUserMessage) {
       commandExecuted = true;
       const command = parseCommand(latestUserMessage.content);
@@ -210,19 +226,12 @@ export async function POST(request: Request, { params }: { params: { id: string 
       });
     } else {
       try {
-        sendDevAgentLog({
-          sessionId: "debug-session",
-          runId: "copilot-chat",
-          hypothesisId: "B1",
-          location: "app/api/automation-versions/[id]/copilot/chat/route.ts",
-          message: "Invoking buildWorkflowFromChat",
-          data: {
-            tenantId: session.tenantId,
-            automationVersionId: params.id,
-            messageCount: normalizedMessages.length,
-            hasIntakeNotes: Boolean(intakeNotes),
-          },
-          timestamp: Date.now(),
+        const draftingTrace = trace.phase("drafting");
+        draftingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
+
+        const buildSpan = draftingTrace.spanStart("llm.buildWorkflowFromChat", {
+          messageCount: normalizedMessages.length,
+          hasIntakeNotes: Boolean(intakeNotes),
         });
 
         const {
@@ -246,31 +255,24 @@ export async function POST(request: Request, { params }: { params: { id: string 
         });
         updatedRequirementsText = newRequirementsText;
 
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: "debug-session",
-            runId: "copilot-chat",
-            hypothesisId: "A",
-            location: "copilot/chat/route.ts:post-buildWorkflowFromChat",
-            message: "Post-buildWorkflowFromChat step counts",
-            data: {
-              automationVersionId: params.id,
-              userMessagePreview: userMessageContent.slice(0, 200),
-              aiGeneratedStepCount: aiGeneratedWorkflow.steps?.length ?? 0,
-              sanitizedSummary: sanitizationSummary,
-              tasksReturned: generatedTasks.length,
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
+        draftingTrace.spanEnd(buildSpan, {
+          tasksReturned: generatedTasks.length,
+          stepsReturned: aiGeneratedWorkflow.steps?.length ?? 0,
+        });
+
+        copilotDebug("copilot_chat.post_build_metrics", {
+          automationVersionId: params.id,
+          userMessagePreview: userMessageContent.slice(0, 200),
+          aiGeneratedStepCount: aiGeneratedWorkflow.steps?.length ?? 0,
+          sanitizationSummary,
+          tasksReturned: generatedTasks.length,
+        });
 
         const numberedWorkflow = applyStepNumbers(aiGeneratedWorkflow);
+        draftingTrace.event("workflow.stepNumbering.completed", { stepCount: numberedWorkflow.steps.length });
         aiTasks = generatedTasks;
 
+        const taskSyncSpan = draftingTrace.spanStart("task.sync", { taskCount: aiTasks.length });
         const taskAssignments = await syncAutomationTasks({
           tenantId: session.tenantId,
           automationVersionId: params.id,
@@ -278,6 +280,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
           blueprint: numberedWorkflow,
           workflow: numberedWorkflow,
         });
+        const tasksAssignedCount = Object.values(taskAssignments).reduce(
+          (total, ids) => total + (ids?.length ?? 0),
+          0
+        );
+        draftingTrace.spanEnd(taskSyncSpan, { tasksAssignedCount });
 
 
         workflowWithTasks = {
@@ -332,25 +339,13 @@ export async function POST(request: Request, { params }: { params: { id: string 
           updatedAt: new Date().toISOString(),
         });
 
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId: "copilot-chat",
-        hypothesisId: "C",
-        location: "copilot/chat/route.ts:validatedWorkflow",
-        message: "Validated workflow ready for response",
-        data: {
-          automationVersionId: params.id,
-          stepCount: validatedWorkflow.steps?.length ?? 0,
-          sectionCount: validatedWorkflow.sections?.length ?? 0,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
+    copilotDebug("copilot_chat.workflow_ready", {
+      automationVersionId: params.id,
+      stepCount: validatedWorkflow.steps?.length ?? 0,
+      sectionCount: validatedWorkflow.sections?.length ?? 0,
+    });
+    const savingTrace = trace.phase("saving");
+    const saveSpan = savingTrace.spanStart("workflow.save", { stepCount: validatedWorkflow.steps?.length ?? 0 });
 
     const updatePayload: { workflowJson: Workflow; requirementsText?: string | null; updatedAt: Date } = {
       workflowJson: validatedWorkflow,
@@ -370,6 +365,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
       .where(eq(automationVersions.id, params.id))
       .returning();
 
+    savingTrace.spanEnd(saveSpan, { stepCount: validatedWorkflow.steps?.length ?? 0 });
+
     if (!savedVersion) {
       throw new ApiError(500, "Failed to save workflow.");
     }
@@ -383,6 +380,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       content: responseMessage,
       createdBy: null,
     });
+    savingTrace.event("assistantMessage.saved", { messageId: assistantMessage.id });
 
     if (clientMessageId) {
       const runResult = await createCopilotRun({
@@ -437,6 +435,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           },
         },
       });
+      savingTrace.event("audit.logged", { automationVersionId: params.id });
     }
 
     const completionState = getWorkflowCompletionState(validatedWorkflow);
@@ -471,6 +470,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     };
 
     let analysisPersistenceError = false;
+    const analysisPersistSpan = savingTrace.spanStart("analysis.persist", { automationVersionId: params.id });
     try {
       await upsertCopilotAnalysis({
         tenantId: session.tenantId,
@@ -481,8 +481,13 @@ export async function POST(request: Request, { params }: { params: { id: string 
         },
         workflowUpdatedAt: savedVersion.updatedAt ? new Date(savedVersion.updatedAt) : new Date(),
       });
+      savingTrace.spanEnd(analysisPersistSpan, { ok: true });
     } catch (analysisError) {
       analysisPersistenceError = true;
+      savingTrace.event("analysis.persist_failed", {
+        automationVersionId: params.id,
+        error: analysisError instanceof Error ? analysisError.message : String(analysisError),
+      });
       logger.error("[copilot:chat] Failed to persist copilot analysis", {
         automationVersionId: params.id,
         error: analysisError,
@@ -496,7 +501,13 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
     const updatedTasks = await fetchTasksForVersion(session.tenantId, params.id);
 
+    savingTrace.event("run.completed", {
+      stepCount: validatedWorkflow.steps?.length ?? 0,
+      persistenceError: analysisPersistenceError,
+    });
+
     return NextResponse.json({
+      runId,
       workflow: withLegacyWorkflowAlias(validatedWorkflow),
       message: assistantMessage,
       tasks: updatedTasks,
@@ -587,6 +598,7 @@ async function buildIdempotentResponse(params: {
   const tasks = await fetchTasksForVersion(params.tenantId, params.automationVersionId);
 
   return {
+    runId: params.run.clientMessageId,
     workflow: withLegacyWorkflowAlias(workflow),
     message: assistantMessage,
     tasks,

@@ -15,6 +15,9 @@ import type { CopilotAnalysisState, WorkflowProgressSnapshot } from "@/lib/workf
 import type { Task } from "@/db/schema";
 import { logger } from "@/lib/logger";
 
+const DEBUG_UI_ENABLED =
+  process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_DEBUG_COPILOT_UI === "true";
+
 type ChatRole = "user" | "assistant" | "system";
 type RunPhase = "understanding" | "drafting" | "drawing" | "done" | "error";
 
@@ -36,6 +39,7 @@ export interface CopilotMessage {
     debugDetails?: Record<string, unknown> | null;
     collapsed?: boolean;
     debugLines?: string[];
+    runId?: string;
   };
 }
 
@@ -322,6 +326,7 @@ export function StudioChat({
         debugDetails: null,
         collapsed: false,
         debugLines: [],
+        runId,
       };
 
       setMessages((prev) => {
@@ -368,10 +373,23 @@ export function StudioChat({
                 debugDetails: null,
                 collapsed: false,
                 debugLines: [],
+                runId,
               };
             return { ...msg, runStatus: updater(currentStatus) };
           });
           return next;
+        });
+      };
+
+      const appendDebugLine = (line: string) => {
+        if (!DEBUG_UI_ENABLED) return;
+        updateRunMessage((status) => {
+          const nextLines = [...(status.debugLines ?? []), line.slice(0, 160)];
+          return {
+            ...status,
+            debugLines: nextLines.slice(-40),
+            collapsed: status.collapsed ?? true,
+          };
         });
       };
 
@@ -429,6 +447,7 @@ export function StudioChat({
         }
 
         const rawData: {
+          runId?: string;
           workflow?: Workflow | { workflowSpec?: Workflow };
           message?: ApiCopilotMessage;
           progress?: WorkflowProgressSnapshot | null;
@@ -451,6 +470,9 @@ export function StudioChat({
           ...rawData,
           workflow: normalizedWorkflow,
         };
+        const responseRunId = rawData.runId ?? runId;
+        appendDebugLine(`runId: ${responseRunId}`);
+        updateRunMessage((status) => ({ ...status, runId: responseRunId }));
 
         const isLatest = requestId === pendingRequestIdRef.current;
 
@@ -580,7 +602,7 @@ export function StudioChat({
           nodeCount,
           analysisSaved: !persistenceError,
         });
-        return { ok: true as const, stepCount, nodeCount, persistenceError, runId };
+        return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to send message. Try again.";
         logger.error("[STUDIO-CHAT] Failed to process message:", error);
@@ -872,6 +894,7 @@ function stripWorkflowBlocks(content: string): string {
 function RunBubble({ message, onRetry }: { message: CopilotMessage; onRetry: () => void }) {
   const status = message.runStatus;
   const [showDebug, setShowDebug] = useState(false);
+  const [showDebugLines, setShowDebugLines] = useState(false);
 
   if (!status) return null;
 
@@ -942,6 +965,33 @@ function RunBubble({ message, onRetry }: { message: CopilotMessage; onRetry: () 
             ) : null}
           </div>
         )}
+
+        {DEBUG_UI_ENABLED && (status.debugLines?.length || status.runId) ? (
+          <div className="mt-3 border-t border-gray-200 pt-2">
+            <div className="flex items-center justify-between text-[11px] text-gray-600">
+              <span className="font-semibold">Debug</span>
+              <button
+                type="button"
+                className="text-[11px] underline"
+                onClick={() => setShowDebugLines((prev) => !prev)}
+              >
+                {showDebugLines ? "Hide" : "Show"}
+              </button>
+            </div>
+            {showDebugLines ? (
+              <div className="mt-1 space-y-1 text-[11px] text-gray-700">
+                {status.runId ? (
+                  <div className="font-mono text-[10px] text-gray-500">runId: {status.runId}</div>
+                ) : null}
+                {(status.debugLines ?? []).map((line, idx) => (
+                  <div key={`${message.id}-dbg-${idx}`} className="font-mono text-[10px] text-gray-600 truncate">
+                    {line}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {lastEvent && status.phase !== "error" ? (
           <div className="mt-2 text-[10px] text-gray-400">{lastEvent}</div>
