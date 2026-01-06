@@ -36,6 +36,7 @@ import { getCopilotAnalysis, upsertCopilotAnalysis } from "@/lib/services/copilo
 import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
 import { createCopilotRun, getCopilotRunByClientMessageId } from "@/lib/services/copilot-runs";
 import { logger } from "@/lib/logger";
+import { createSSEStream } from "@/lib/http/sse";
 
 const ChatRequestSchema = z.object({
   content: z.string().min(1).max(8000),
@@ -60,7 +61,69 @@ const OFF_TOPIC_KEYWORDS = ["weather", "stock", "joke", "recipe", "story", "nove
 const SYSTEM_PROMPT =
   "You are Wrk Copilot. You ONLY help users describe and design business processes to automate. If the user asks unrelated questions (general knowledge, advice, or chit chat) you politely redirect them to describing the workflow they want to automate. You return a JSON object that matches the provided Workflow schema exactly.";
 
+type CopilotRunResult = Awaited<ReturnType<typeof buildIdempotentResponse>> & {
+  runId: string;
+  message: Awaited<ReturnType<typeof createCopilotMessage>>;
+  workflow: Workflow;
+  tasks: Awaited<ReturnType<typeof fetchTasksForVersion>>;
+  completion: ReturnType<typeof getWorkflowCompletionState>;
+  progress: Awaited<ReturnType<typeof evaluateWorkflowProgress>> | null;
+  prompt: {
+    system: string;
+    contextSummary: string;
+    messageCount: number;
+  } | null;
+  commandExecuted: boolean;
+  thinkingSteps: ReturnType<typeof generateThinkingSteps>;
+  conversationPhase: ReturnType<typeof determineConversationPhase>;
+  persistenceError?: boolean;
+};
+
+type CopilotStatusPayload = {
+  runId: string;
+  requestId: string;
+  phase: string;
+  message: string;
+  meta?: Record<string, unknown>;
+};
+
+type CopilotErrorPayload = {
+  runId: string;
+  requestId: string;
+  message: string;
+  code?: number | string;
+};
+
+type CopilotCallbacks = {
+  onStatus?: (payload: CopilotStatusPayload) => void;
+  onResult?: (payload: CopilotRunResult) => void;
+  onError?: (payload: CopilotErrorPayload) => void;
+};
+
+function isStreamRequest(request: Request) {
+  const url = new URL(request.url);
+  const streamParam = url.searchParams.get("stream");
+  const accept = request.headers.get("accept") ?? "";
+  return streamParam === "1" || accept.includes("text/event-stream");
+}
+
 export async function POST(request: Request, { params }: { params: { id: string } }) {
+  const streaming = isStreamRequest(request);
+  const sse = streaming ? createSSEStream({ signal: request.signal }) : null;
+  const respondError = (error: unknown) => {
+    if (streaming && sse) {
+      const message = error instanceof Error ? error.message : "Unexpected error.";
+      const code = error instanceof ApiError ? error.status : undefined;
+      void sse.send("error", { runId: "unknown", requestId: "unknown", message, code });
+      sse.close();
+      return sse.response({ status: code ?? 500 });
+    }
+    if (error instanceof Error && error.message === "Automation version not found") {
+      return handleApiError(new ApiError(404, error.message));
+    }
+    return handleApiError(error);
+  };
+
   try {
     const session = await requireTenantSession();
 
@@ -96,444 +159,513 @@ export async function POST(request: Request, { params }: { params: { id: string 
       throw new ApiError(404, "Automation version not found.");
     }
 
-    const clientMessageId = payload.clientMessageId?.trim();
-    const runId = clientMessageId || randomUUID();
-    const requestId = randomUUID();
-    const baseTrace = createCopilotTrace({
-      runId,
-      requestId,
-      automationVersionId: params.id,
-      clientMessageId: clientMessageId ?? undefined,
-      source: "copilot/chat",
-      phase: "run",
-    });
-    baseTrace.event("run.started", { automationVersionId: params.id });
-    if (clientMessageId) {
-      const existingRun = await getCopilotRunByClientMessageId({
-        tenantId: session.tenantId,
-        automationVersionId: params.id,
-        clientMessageId,
-      });
+    const callbacks: CopilotCallbacks | undefined = streaming
+      ? {
+          onStatus: (status) => void sse?.send("status", status),
+          onResult: (result) => void sse?.send("result", result),
+          onError: (err) => void sse?.send("error", err),
+        }
+      : undefined;
 
-      if (existingRun) {
-        const replay = await buildIdempotentResponse({
-          run: existingRun,
-          tenantId: session.tenantId,
-          automationVersionId: params.id,
-          detail,
-        });
-        return NextResponse.json({ ...replay, runId });
-      }
-    }
-
-    const currentWorkflow = detail.workflowView?.workflowSpec ?? createEmptyWorkflowSpec();
-    const intakeNotes = payload.intakeNotes ?? detail.version.intakeNotes ?? undefined;
-
-    const trimmedContent = payload.content.trim();
-    if (!trimmedContent) {
-      throw new ApiError(400, "Message content is required.");
-    }
-
-    const userMessage = await createCopilotMessage({
-      tenantId: session.tenantId,
-      automationVersionId: params.id,
-      role: "user",
-      content: trimmedContent,
-      createdBy: session.userId,
+    const result = await runCopilotChat({
+      request,
+      params,
+      payload,
+      session,
+      detail,
+      callbacks,
     });
 
-    const messages = await listCopilotMessages({
-      tenantId: session.tenantId,
-      automationVersionId: params.id,
-    });
-
-    const normalizedMessages = normalizeMessages(
-      messages
-        .filter((message) => message.role === "user" || message.role === "assistant")
-        .map((message) => ({
-          role: message.role as "user" | "assistant",
-          content: message.role === "assistant" ? parseCopilotReply(message.content).displayText : message.content,
-        }))
-    );
-    const understandingTrace = baseTrace.phase("understanding");
-    understandingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
-
-    const latestUserMessage = [...normalizedMessages].reverse().find((message) => message.role === "user");
-    if (latestUserMessage && isOffTopic(latestUserMessage.content)) {
-      throw new ApiError(
-        400,
-        "Wrk Copilot only helps design automations. Tell me about the workflow you want to automate and I can draft a workflow."
-      );
+    if (streaming && sse) {
+      sse.close();
+      return sse.response();
     }
 
-    const contextSummary = buildConversationSummary(normalizedMessages, intakeNotes);
-    const currentBlueprint = currentWorkflow ?? createEmptyWorkflowSpec();
-    const userMessageContent = latestUserMessage?.content ?? trimmedContent;
-
-    const existingAnalysisRaw =
-      (await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id })) ?? null;
-    const mostRecentUserMessageId = [...messages].reverse().find((message) => message.role === "user")?.id ?? null;
-    const workflowUpdatedAt = detail.version.updatedAt ? new Date(detail.version.updatedAt).toISOString() : null;
-    const staleAnalysis =
-      (existingAnalysisRaw?.workflowUpdatedAt && workflowUpdatedAt && existingAnalysisRaw.workflowUpdatedAt !== workflowUpdatedAt) ||
-      (existingAnalysisRaw?.lastUserMessageId && mostRecentUserMessageId && existingAnalysisRaw.lastUserMessageId !== mostRecentUserMessageId);
-    const existingAnalysis = staleAnalysis
-      ? createEmptyCopilotAnalysisState()
-      : existingAnalysisRaw ?? createEmptyCopilotAnalysisState();
-    let analysisState: CopilotAnalysisState = {
-      ...existingAnalysis,
-      memory: existingAnalysis.memory ?? createEmptyMemory(),
-    };
-
-    const directCommand = Boolean(latestUserMessage?.content && isDirectCommand(latestUserMessage.content));
-    let responseMessage = "";
-    let commandExecuted = false;
-    let workflowWithTasks: Workflow;
-    let aiTasks: AITask[] = [];
-    let updatedRequirementsText: string | null | undefined;
-
-    const trace = baseTrace;
-
-    if (directCommand && latestUserMessage) {
-      commandExecuted = true;
-      const command = parseCommand(latestUserMessage.content);
-      const commandResult = executeCommand(currentWorkflow, command);
-      if (!commandResult.success) {
-        throw new ApiError(400, commandResult.error ?? "Command failed");
-      }
-      workflowWithTasks = commandResult.workflow;
-      responseMessage = commandResult.message ? `Done. ${commandResult.message}` : "Done.";
-
-      if (commandResult.auditEvents.length) {
-        await Promise.all(
-          commandResult.auditEvents.map((event) =>
-            logAudit({
-              tenantId: session.tenantId,
-              userId: session.userId,
-              action: event.action,
-              resourceType: "automation_version",
-              resourceId: params.id,
-              metadata: event.metadata,
-            })
-          )
-        );
-      }
-
-      copilotDebug("copilot_chat.command_executed", {
-        automationVersionId: params.id,
-        command: command.type,
-        message: responseMessage,
-      });
-    } else {
-      try {
-        const draftingTrace = trace.phase("drafting");
-        draftingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
-
-        const buildSpan = draftingTrace.spanStart("llm.buildWorkflowFromChat", {
-          messageCount: normalizedMessages.length,
-          hasIntakeNotes: Boolean(intakeNotes),
-        });
-
-        const {
-          workflow: aiGeneratedWorkflow,
-          tasks: generatedTasks,
-          chatResponse,
-          followUpQuestion,
-          sanitizationSummary,
-          requirementsText: newRequirementsText,
-        } = await buildWorkflowFromChat({
-          userMessage: userMessageContent,
-          currentWorkflow,
-          currentBlueprint,
-          conversationHistory: normalizedMessages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-          requirementsText: detail.version.requirementsText ?? undefined,
-          memorySummary: analysisState.memory?.summary_compact ?? null,
-          memoryFacts: analysisState.memory?.facts ?? {},
-        });
-        updatedRequirementsText = newRequirementsText;
-
-        draftingTrace.spanEnd(buildSpan, {
-          tasksReturned: generatedTasks.length,
-          stepsReturned: aiGeneratedWorkflow.steps?.length ?? 0,
-        });
-
-        copilotDebug("copilot_chat.post_build_metrics", {
-          automationVersionId: params.id,
-          userMessagePreview: userMessageContent.slice(0, 200),
-          aiGeneratedStepCount: aiGeneratedWorkflow.steps?.length ?? 0,
-          sanitizationSummary,
-          tasksReturned: generatedTasks.length,
-        });
-
-        const numberedWorkflow = applyStepNumbers(aiGeneratedWorkflow);
-        draftingTrace.event("workflow.stepNumbering.completed", { stepCount: numberedWorkflow.steps.length });
-        aiTasks = generatedTasks;
-
-        const taskSyncSpan = draftingTrace.spanStart("task.sync", { taskCount: aiTasks.length });
-        const taskAssignments = await syncAutomationTasks({
-          tenantId: session.tenantId,
-          automationVersionId: params.id,
-          aiTasks,
-          blueprint: numberedWorkflow,
-          workflow: numberedWorkflow,
-        });
-        const tasksAssignedCount = Object.values(taskAssignments).reduce(
-          (total, ids) => total + (ids?.length ?? 0),
-          0
-        );
-        draftingTrace.spanEnd(taskSyncSpan, { tasksAssignedCount });
-
-
-        workflowWithTasks = {
-          ...numberedWorkflow,
-          steps: numberedWorkflow.steps.map((step) => ({
-            ...step,
-            taskIds: Array.from(new Set(taskAssignments[step.id] ?? step.taskIds ?? [])),
-          })),
-        };
-        const trimmedFollowUp = followUpQuestion?.trim();
-        const nextFollowUp = chooseFollowUpQuestion({
-          candidate: trimmedFollowUp,
-          memory: analysisState.memory ?? createEmptyMemory(),
-          workflow: workflowWithTasks,
-          userMessage: userMessageContent,
-        });
-
-        analysisState = {
-          ...analysisState,
-          memory: refreshMemoryState({
-            previous: analysisState.memory ?? createEmptyMemory(),
-            workflow: workflowWithTasks,
-            lastUserMessage: userMessageContent,
-            appliedFollowUp: nextFollowUp,
-          }),
-        };
-
-        responseMessage = nextFollowUp ? `${chatResponse} ${nextFollowUp}`.trim() : chatResponse;
-
-        copilotDebug("copilot_chat.llm_response", {
-          automationVersionId: params.id,
-          chatResponse,
-          followUpQuestion: trimmedFollowUp,
-          stepCount: workflowWithTasks.steps.length,
-          taskCount: aiTasks.length,
-          sanitizationSummary,
-        });
-      } catch (error) {
-        throw error;
-      }
-    }
-
-    const validatedWorkflow = directCommand
-      ? ({
-          ...workflowWithTasks,
-          status: workflowWithTasks.status ?? "Draft",
-          updatedAt: new Date().toISOString(),
-        } as Workflow)
-      : WorkflowSchema.parse({
-          ...workflowWithTasks,
-          status: "Draft",
-          updatedAt: new Date().toISOString(),
-        });
-
-    copilotDebug("copilot_chat.workflow_ready", {
-      automationVersionId: params.id,
-      stepCount: validatedWorkflow.steps?.length ?? 0,
-      sectionCount: validatedWorkflow.sections?.length ?? 0,
-    });
-    const savingTrace = trace.phase("saving");
-    const saveSpan = savingTrace.spanStart("workflow.save", { stepCount: validatedWorkflow.steps?.length ?? 0 });
-
-    const updatePayload: { workflowJson: Workflow; requirementsText?: string | null; updatedAt: Date } = {
-      workflowJson: validatedWorkflow,
-      updatedAt: new Date(),
-    };
-
-    if (commandExecuted === false && typeof updatedRequirementsText === "string") {
-      const trimmed = updatedRequirementsText.trim();
-      if (trimmed.length > 0) {
-        updatePayload.requirementsText = trimmed;
-      }
-    }
-
-    const [savedVersion] = await db
-      .update(automationVersions)
-      .set(updatePayload)
-      .where(eq(automationVersions.id, params.id))
-      .returning();
-
-    savingTrace.spanEnd(saveSpan, { stepCount: validatedWorkflow.steps?.length ?? 0 });
-
-    if (!savedVersion) {
-      throw new ApiError(500, "Failed to save workflow.");
-    }
-
-    revalidatePath(`/automations/${detail.automation?.id ?? savedVersion.automationId}`);
-
-    const assistantMessage = await createCopilotMessage({
-      tenantId: session.tenantId,
-      automationVersionId: params.id,
-      role: "assistant",
-      content: responseMessage,
-      createdBy: null,
-    });
-    savingTrace.event("assistantMessage.saved", { messageId: assistantMessage.id });
-
-    if (clientMessageId) {
-      const runResult = await createCopilotRun({
-        tenantId: session.tenantId,
-        automationVersionId: params.id,
-        clientMessageId,
-        userMessageId: userMessage.id,
-        assistantMessageId: assistantMessage.id,
-      });
-
-      if (runResult && runResult.assistantMessageId !== assistantMessage.id) {
-        return NextResponse.json(
-          await buildIdempotentResponse({
-            run: runResult,
-            tenantId: session.tenantId,
-            automationVersionId: params.id,
-            detail,
-          })
-        );
-      }
-    }
-
-    copilotDebug("copilot_chat.persisted_message", {
-      automationVersionId: params.id,
-      messageId: assistantMessage.id,
-      commandExecuted,
-    });
-
-    const augmentedMessages = [...normalizedMessages, { role: "assistant" as const, content: responseMessage }];
-    const conversationPhase = determineConversationPhase(validatedWorkflow, augmentedMessages);
-    const thinkingSteps = generateThinkingSteps(conversationPhase, latestUserMessage?.content, validatedWorkflow);
-
-    if (!commandExecuted) {
-      const diff = diffWorkflow(currentWorkflow, validatedWorkflow);
-      await logAudit({
-        tenantId: session.tenantId,
-        userId: session.userId,
-        action: "automation.workflow.drafted",
-        resourceType: "automation_version",
-        resourceId: params.id,
-        metadata: {
-          source: "copilot",
-          versionLabel: detail.version.versionLabel,
-          summary: diff.summary,
-          diff,
-          changes: {
-            stepsAdded: diff.stepsAdded?.length ?? 0,
-            stepsRemoved: diff.stepsRemoved?.length ?? 0,
-            stepsRenamed: diff.stepsRenamed?.length ?? 0,
-            branchesAdded: diff.branchesAdded?.length ?? 0,
-            branchesRemoved: diff.branchesRemoved?.length ?? 0,
-          },
-        },
-      });
-      savingTrace.event("audit.logged", { automationVersionId: params.id });
-    }
-
-    const completionState = getWorkflowCompletionState(validatedWorkflow);
-    let progressSnapshot = null;
-    try {
-      progressSnapshot = await evaluateWorkflowProgress({
-        workflow: validatedWorkflow,
-        completionState,
-        latestUserMessage: latestUserMessage?.content ?? null,
-      });
-    } catch (error) {
-      copilotDebug("copilot_chat.progress_eval_failed", error instanceof Error ? error.message : error);
-    }
-
-    if (progressSnapshot) {
-      analysisState = {
-        ...analysisState,
-        progress: progressSnapshot,
-      };
-    }
-
-    analysisState = {
-      ...analysisState,
-      stage: analysisState.memory?.stage ?? "requirements",
-      question_count: analysisState.memory?.question_count ?? 0,
-      asked_questions_normalized: analysisState.memory?.asked_questions_normalized ?? [],
-      facts: analysisState.memory?.facts ?? {},
-      assumptions: analysisState.assumptions ?? [],
-      lastUserMessageId: userMessage.id,
-      lastAssistantMessageId: assistantMessage.id,
-      workflowUpdatedAt: savedVersion.updatedAt?.toISOString ? savedVersion.updatedAt.toISOString() : new Date().toISOString(),
-    };
-
-    let analysisPersistenceError = false;
-    const analysisPersistSpan = savingTrace.spanStart("analysis.persist", { automationVersionId: params.id });
-    try {
-      await upsertCopilotAnalysis({
-        tenantId: session.tenantId,
-        automationVersionId: params.id,
-        analysis: {
-          ...analysisState,
-          lastUpdatedAt: new Date().toISOString(),
-        },
-        workflowUpdatedAt: savedVersion.updatedAt ? new Date(savedVersion.updatedAt) : new Date(),
-      });
-      savingTrace.spanEnd(analysisPersistSpan, { ok: true });
-    } catch (analysisError) {
-      analysisPersistenceError = true;
-      savingTrace.event("analysis.persist_failed", {
-        automationVersionId: params.id,
-        error: analysisError instanceof Error ? analysisError.message : String(analysisError),
-      });
-      logger.error("[copilot:chat] Failed to persist copilot analysis", {
-        automationVersionId: params.id,
-        error: analysisError,
-        stack: analysisError instanceof Error ? analysisError.stack : null,
-      });
-      copilotDebug(
-        "copilot_chat.progress_persist_failed",
-        analysisError instanceof Error ? analysisError.message : analysisError
-      );
-    }
-
-    const updatedTasks = await fetchTasksForVersion(session.tenantId, params.id);
-
-    savingTrace.event("run.completed", {
-      stepCount: validatedWorkflow.steps?.length ?? 0,
-      persistenceError: analysisPersistenceError,
-    });
-
-    return NextResponse.json({
-      runId,
-      workflow: withLegacyWorkflowAlias(validatedWorkflow),
-      message: assistantMessage,
-      tasks: updatedTasks,
-      completion: completionState,
-      progress: progressSnapshot,
-      prompt: commandExecuted
-        ? null
-        : {
-            system: SYSTEM_PROMPT,
-            contextSummary,
-            messageCount: normalizedMessages.length,
-          },
-      commandExecuted,
-      thinkingSteps,
-      conversationPhase,
-      persistenceError: analysisPersistenceError,
-    });
+    return NextResponse.json(result);
   } catch (error) {
-    if (error instanceof Error && error.message === "Automation version not found") {
-      return handleApiError(new ApiError(404, error.message));
-    }
-    return handleApiError(error);
+    return respondError(error);
   }
 }
 
 type AutomationVersionDetail = NonNullable<Awaited<ReturnType<typeof getAutomationVersionDetail>>>;
+
+async function runCopilotChat({
+  request,
+  params,
+  payload,
+  session,
+  detail,
+  callbacks,
+}: {
+  request: Request;
+  params: { id: string };
+  payload: ChatRequest;
+  session: Awaited<ReturnType<typeof requireTenantSession>>;
+  detail: AutomationVersionDetail;
+  callbacks?: CopilotCallbacks;
+}): Promise<CopilotRunResult> {
+  const clientMessageId = payload.clientMessageId?.trim();
+  const runId = clientMessageId || randomUUID();
+  const requestId = randomUUID();
+  const baseTrace = createCopilotTrace({
+    runId,
+    requestId,
+    automationVersionId: params.id,
+    clientMessageId: clientMessageId ?? undefined,
+    source: "copilot/chat",
+    phase: "run",
+  });
+  baseTrace.event("run.started", { automationVersionId: params.id });
+
+  const emitStatus = (phase: string, message: string, meta?: Record<string, unknown>) =>
+    callbacks?.onStatus?.({ runId, requestId, phase, message, meta });
+  const emitError = (message: string, code?: number | string) =>
+    callbacks?.onError?.({ runId, requestId, message, code });
+
+  const existingRun =
+    clientMessageId &&
+    (await getCopilotRunByClientMessageId({
+      tenantId: session.tenantId,
+      automationVersionId: params.id,
+      clientMessageId,
+    }));
+
+  if (existingRun) {
+    const replay = await buildIdempotentResponse({
+      run: existingRun,
+      tenantId: session.tenantId,
+      automationVersionId: params.id,
+      detail,
+    });
+    emitStatus("done", "Replaying saved result…", { replay: true });
+    callbacks?.onResult?.({ ...replay, runId } as CopilotRunResult);
+    return { ...replay, runId } as CopilotRunResult;
+  }
+
+  const currentWorkflow = detail.workflowView?.workflowSpec ?? createEmptyWorkflowSpec();
+  const intakeNotes = payload.intakeNotes ?? detail.version.intakeNotes ?? undefined;
+
+  const trimmedContent = payload.content.trim();
+  if (!trimmedContent) {
+    throw new ApiError(400, "Message content is required.");
+  }
+
+  const userMessage = await createCopilotMessage({
+    tenantId: session.tenantId,
+    automationVersionId: params.id,
+    role: "user",
+    content: trimmedContent,
+    createdBy: session.userId,
+  });
+
+  const messages = await listCopilotMessages({
+    tenantId: session.tenantId,
+    automationVersionId: params.id,
+  });
+
+  const normalizedMessages = normalizeMessages(
+    messages
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .map((message) => ({
+        role: message.role as "user" | "assistant",
+        content: message.role === "assistant" ? parseCopilotReply(message.content).displayText : message.content,
+      }))
+  );
+  const understandingTrace = baseTrace.phase("understanding");
+  understandingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
+  emitStatus("understanding", "Reviewing conversation and notes…", { messageCount: normalizedMessages.length });
+
+  const latestUserMessage = [...normalizedMessages].reverse().find((message) => message.role === "user");
+  if (latestUserMessage && isOffTopic(latestUserMessage.content)) {
+    const error = new ApiError(
+      400,
+      "Wrk Copilot only helps design automations. Tell me about the workflow you want to automate and I can draft a workflow."
+    );
+    emitError(error.message, error.status);
+    throw error;
+  }
+
+  const contextSummary = buildConversationSummary(normalizedMessages, intakeNotes);
+  const currentBlueprint = currentWorkflow ?? createEmptyWorkflowSpec();
+  const userMessageContent = latestUserMessage?.content ?? trimmedContent;
+
+  const existingAnalysisRaw =
+    (await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id })) ?? null;
+  const mostRecentUserMessageId = [...messages].reverse().find((message) => message.role === "user")?.id ?? null;
+  const workflowUpdatedAt = detail.version.updatedAt ? new Date(detail.version.updatedAt).toISOString() : null;
+  const staleAnalysis =
+    (existingAnalysisRaw?.workflowUpdatedAt && workflowUpdatedAt && existingAnalysisRaw.workflowUpdatedAt !== workflowUpdatedAt) ||
+    (existingAnalysisRaw?.lastUserMessageId && mostRecentUserMessageId && existingAnalysisRaw.lastUserMessageId !== mostRecentUserMessageId);
+  const existingAnalysis = staleAnalysis
+    ? createEmptyCopilotAnalysisState()
+    : existingAnalysisRaw ?? createEmptyCopilotAnalysisState();
+  let analysisState: CopilotAnalysisState = {
+    ...existingAnalysis,
+    memory: existingAnalysis.memory ?? createEmptyMemory(),
+  };
+
+  const directCommand = Boolean(latestUserMessage?.content && isDirectCommand(latestUserMessage.content));
+  let responseMessage = "";
+  let commandExecuted = false;
+  let workflowWithTasks: Workflow;
+  let aiTasks: AITask[] = [];
+  let updatedRequirementsText: string | null | undefined;
+
+  const trace = baseTrace;
+
+  if (directCommand && latestUserMessage) {
+    commandExecuted = true;
+    emitStatus("drafting", "Applying direct command to the workflow…");
+    const command = parseCommand(latestUserMessage.content);
+    const commandResult = executeCommand(currentWorkflow, command);
+    if (!commandResult.success) {
+      const error = new ApiError(400, commandResult.error ?? "Command failed");
+      emitError(error.message, error.status);
+      throw error;
+    }
+    workflowWithTasks = commandResult.workflow;
+    responseMessage = commandResult.message ? `Done. ${commandResult.message}` : "Done.";
+
+    if (commandResult.auditEvents.length) {
+      await Promise.all(
+        commandResult.auditEvents.map((event) =>
+          logAudit({
+            tenantId: session.tenantId,
+            userId: session.userId,
+            action: event.action,
+            resourceType: "automation_version",
+            resourceId: params.id,
+            metadata: event.metadata,
+          })
+        )
+      );
+    }
+
+    copilotDebug("copilot_chat.command_executed", {
+      automationVersionId: params.id,
+      command: command.type,
+      message: responseMessage,
+    });
+  } else {
+    try {
+      emitStatus("drafting", "Drafting a fresh workflow…", {
+        intakeNotes: Boolean(intakeNotes),
+        messages: normalizedMessages.length,
+      });
+      const draftingTrace = trace.phase("drafting");
+      draftingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
+
+      const buildSpan = draftingTrace.spanStart("llm.buildWorkflowFromChat", {
+        messageCount: normalizedMessages.length,
+        hasIntakeNotes: Boolean(intakeNotes),
+      });
+
+      const {
+        workflow: aiGeneratedWorkflow,
+        tasks: generatedTasks,
+        chatResponse,
+        followUpQuestion,
+        sanitizationSummary,
+        requirementsText: newRequirementsText,
+      } = await buildWorkflowFromChat({
+        userMessage: userMessageContent,
+        currentWorkflow,
+        currentBlueprint,
+        conversationHistory: normalizedMessages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+        requirementsText: detail.version.requirementsText ?? undefined,
+        memorySummary: analysisState.memory?.summary_compact ?? null,
+        memoryFacts: analysisState.memory?.facts ?? {},
+      });
+      updatedRequirementsText = newRequirementsText;
+
+      draftingTrace.spanEnd(buildSpan, {
+        tasksReturned: generatedTasks.length,
+        stepsReturned: aiGeneratedWorkflow.steps?.length ?? 0,
+      });
+
+      copilotDebug("copilot_chat.post_build_metrics", {
+        automationVersionId: params.id,
+        userMessagePreview: userMessageContent.slice(0, 200),
+        aiGeneratedStepCount: aiGeneratedWorkflow.steps?.length ?? 0,
+        sanitizationSummary,
+        tasksReturned: generatedTasks.length,
+      });
+
+      const numberedWorkflow = applyStepNumbers(aiGeneratedWorkflow);
+      draftingTrace.event("workflow.stepNumbering.completed", { stepCount: numberedWorkflow.steps.length });
+      emitStatus("drafting", "Cleaning up steps and numbering…", {
+        stepCount: numberedWorkflow.steps.length,
+      });
+      aiTasks = generatedTasks;
+
+      const taskSyncSpan = draftingTrace.spanStart("task.sync", { taskCount: aiTasks.length });
+      const taskAssignments = await syncAutomationTasks({
+        tenantId: session.tenantId,
+        automationVersionId: params.id,
+        aiTasks,
+        blueprint: numberedWorkflow,
+        workflow: numberedWorkflow,
+      });
+      const tasksAssignedCount = Object.values(taskAssignments).reduce(
+        (total, ids) => total + (ids?.length ?? 0),
+        0
+      );
+      draftingTrace.spanEnd(taskSyncSpan, { tasksAssignedCount });
+
+      workflowWithTasks = {
+        ...numberedWorkflow,
+        steps: numberedWorkflow.steps.map((step) => ({
+          ...step,
+          taskIds: Array.from(new Set(taskAssignments[step.id] ?? step.taskIds ?? [])),
+        })),
+      };
+      const trimmedFollowUp = followUpQuestion?.trim();
+      const nextFollowUp = chooseFollowUpQuestion({
+        candidate: trimmedFollowUp,
+        memory: analysisState.memory ?? createEmptyMemory(),
+        workflow: workflowWithTasks,
+        userMessage: userMessageContent,
+      });
+
+      analysisState = {
+        ...analysisState,
+        memory: refreshMemoryState({
+          previous: analysisState.memory ?? createEmptyMemory(),
+          workflow: workflowWithTasks,
+          lastUserMessage: userMessageContent,
+          appliedFollowUp: nextFollowUp,
+        }),
+      };
+
+      responseMessage = nextFollowUp ? `${chatResponse} ${nextFollowUp}`.trim() : chatResponse;
+
+      copilotDebug("copilot_chat.llm_response", {
+        automationVersionId: params.id,
+        chatResponse,
+        followUpQuestion: trimmedFollowUp,
+        stepCount: workflowWithTasks.steps.length,
+        taskCount: aiTasks.length,
+        sanitizationSummary,
+      });
+    } catch (error) {
+      emitError(error instanceof Error ? error.message : "Failed to draft workflow");
+      throw error;
+    }
+  }
+
+  const validatedWorkflow = directCommand
+    ? ({
+        ...workflowWithTasks,
+        status: workflowWithTasks.status ?? "Draft",
+        updatedAt: new Date().toISOString(),
+      } as Workflow)
+    : WorkflowSchema.parse({
+        ...workflowWithTasks,
+        status: "Draft",
+        updatedAt: new Date().toISOString(),
+      });
+
+  copilotDebug("copilot_chat.workflow_ready", {
+    automationVersionId: params.id,
+    stepCount: validatedWorkflow.steps?.length ?? 0,
+    sectionCount: validatedWorkflow.sections?.length ?? 0,
+  });
+  emitStatus("saving", "Saving draft and messages…", { stepCount: validatedWorkflow.steps?.length ?? 0 });
+  const savingTrace = trace.phase("saving");
+  const saveSpan = savingTrace.spanStart("workflow.save", { stepCount: validatedWorkflow.steps?.length ?? 0 });
+
+  const updatePayload: { workflowJson: Workflow; requirementsText?: string | null; updatedAt: Date } = {
+    workflowJson: validatedWorkflow,
+    updatedAt: new Date(),
+  };
+
+  if (commandExecuted === false && typeof updatedRequirementsText === "string") {
+    const trimmed = updatedRequirementsText.trim();
+    if (trimmed.length > 0) {
+      updatePayload.requirementsText = trimmed;
+    }
+  }
+
+  const [savedVersion] = await db
+    .update(automationVersions)
+    .set(updatePayload)
+    .where(eq(automationVersions.id, params.id))
+    .returning();
+
+  savingTrace.spanEnd(saveSpan, { stepCount: validatedWorkflow.steps?.length ?? 0 });
+
+  if (!savedVersion) {
+    const error = new ApiError(500, "Failed to save workflow.");
+    emitError(error.message, error.status);
+    throw error;
+  }
+
+  revalidatePath(`/automations/${detail.automation?.id ?? savedVersion.automationId}`);
+
+  const assistantMessage = await createCopilotMessage({
+    tenantId: session.tenantId,
+    automationVersionId: params.id,
+    role: "assistant",
+    content: responseMessage,
+    createdBy: null,
+  });
+  savingTrace.event("assistantMessage.saved", { messageId: assistantMessage.id });
+
+  if (clientMessageId) {
+    const runResult = await createCopilotRun({
+      tenantId: session.tenantId,
+      automationVersionId: params.id,
+      clientMessageId,
+      userMessageId: userMessage.id,
+      assistantMessageId: assistantMessage.id,
+    });
+
+    if (runResult && runResult.assistantMessageId !== assistantMessage.id) {
+      const replay = await buildIdempotentResponse({
+        run: runResult,
+        tenantId: session.tenantId,
+        automationVersionId: params.id,
+        detail,
+      });
+      callbacks?.onResult?.({ ...replay, runId } as CopilotRunResult);
+      return { ...replay, runId } as CopilotRunResult;
+    }
+  }
+
+  copilotDebug("copilot_chat.persisted_message", {
+    automationVersionId: params.id,
+    messageId: assistantMessage.id,
+    commandExecuted,
+  });
+
+  const augmentedMessages = [...normalizedMessages, { role: "assistant" as const, content: responseMessage }];
+  const conversationPhase = determineConversationPhase(validatedWorkflow, augmentedMessages);
+  const thinkingSteps = generateThinkingSteps(conversationPhase, latestUserMessage?.content, validatedWorkflow);
+
+  if (!commandExecuted) {
+    const diff = diffWorkflow(currentWorkflow, validatedWorkflow);
+    await logAudit({
+      tenantId: session.tenantId,
+      userId: session.userId,
+      action: "automation.workflow.drafted",
+      resourceType: "automation_version",
+      resourceId: params.id,
+      metadata: {
+        source: "copilot",
+        versionLabel: detail.version.versionLabel,
+        summary: diff.summary,
+        diff,
+        changes: {
+          stepsAdded: diff.stepsAdded?.length ?? 0,
+          stepsRemoved: diff.stepsRemoved?.length ?? 0,
+          stepsRenamed: diff.stepsRenamed?.length ?? 0,
+          branchesAdded: diff.branchesAdded?.length ?? 0,
+          branchesRemoved: diff.branchesRemoved?.length ?? 0,
+        },
+      },
+    });
+    savingTrace.event("audit.logged", { automationVersionId: params.id });
+  }
+
+  const completionState = getWorkflowCompletionState(validatedWorkflow);
+  let progressSnapshot = null;
+  try {
+    progressSnapshot = await evaluateWorkflowProgress({
+      workflow: validatedWorkflow,
+      completionState,
+      latestUserMessage: latestUserMessage?.content ?? null,
+    });
+  } catch (error) {
+    copilotDebug("copilot_chat.progress_eval_failed", error instanceof Error ? error.message : error);
+  }
+
+  if (progressSnapshot) {
+    analysisState = {
+      ...analysisState,
+      progress: progressSnapshot,
+    };
+  }
+
+  analysisState = {
+    ...analysisState,
+    stage: analysisState.memory?.stage ?? "requirements",
+    question_count: analysisState.memory?.question_count ?? 0,
+    asked_questions_normalized: analysisState.memory?.asked_questions_normalized ?? [],
+    facts: analysisState.memory?.facts ?? {},
+    assumptions: analysisState.assumptions ?? [],
+    lastUserMessageId: userMessage.id,
+    lastAssistantMessageId: assistantMessage.id,
+    workflowUpdatedAt: savedVersion.updatedAt?.toISOString ? savedVersion.updatedAt.toISOString() : new Date().toISOString(),
+  };
+
+  let analysisPersistenceError = false;
+  const analysisPersistSpan = savingTrace.spanStart("analysis.persist", { automationVersionId: params.id });
+  try {
+    await upsertCopilotAnalysis({
+      tenantId: session.tenantId,
+      automationVersionId: params.id,
+      analysis: {
+        ...analysisState,
+        lastUpdatedAt: new Date().toISOString(),
+      },
+      workflowUpdatedAt: savedVersion.updatedAt ? new Date(savedVersion.updatedAt) : new Date(),
+    });
+    savingTrace.spanEnd(analysisPersistSpan, { ok: true });
+  } catch (analysisError) {
+    analysisPersistenceError = true;
+    savingTrace.event("analysis.persist_failed", {
+      automationVersionId: params.id,
+      error: analysisError instanceof Error ? analysisError.message : String(analysisError),
+    });
+    logger.error("[copilot:chat] Failed to persist copilot analysis", {
+      automationVersionId: params.id,
+      error: analysisError,
+      stack: analysisError instanceof Error ? analysisError.stack : null,
+    });
+    copilotDebug(
+      "copilot_chat.progress_persist_failed",
+      analysisError instanceof Error ? analysisError.message : analysisError
+    );
+  }
+
+  const updatedTasks = await fetchTasksForVersion(session.tenantId, params.id);
+
+  savingTrace.event("run.completed", {
+    stepCount: validatedWorkflow.steps?.length ?? 0,
+    persistenceError: analysisPersistenceError,
+  });
+
+  emitStatus("done", "Run complete — preparing result…", {
+    stepCount: validatedWorkflow.steps?.length ?? 0,
+    persistenceError: analysisPersistenceError,
+  });
+
+  const result: CopilotRunResult = {
+    runId,
+    workflow: withLegacyWorkflowAlias(validatedWorkflow),
+    message: assistantMessage,
+    tasks: updatedTasks,
+    completion: completionState,
+    progress: progressSnapshot,
+    prompt: commandExecuted
+      ? null
+      : {
+          system: SYSTEM_PROMPT,
+          contextSummary,
+          messageCount: normalizedMessages.length,
+        },
+    commandExecuted,
+    thinkingSteps,
+    conversationPhase,
+    persistenceError: analysisPersistenceError,
+  };
+
+  callbacks?.onResult?.(result);
+  return result;
+}
 
 async function buildIdempotentResponse(params: {
   run: CopilotRun;

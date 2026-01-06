@@ -19,7 +19,7 @@ const DEBUG_UI_ENABLED =
   process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_DEBUG_COPILOT_UI === "true";
 
 type ChatRole = "user" | "assistant" | "system";
-type RunPhase = "understanding" | "drafting" | "drawing" | "done" | "error";
+type RunPhase = "understanding" | "drafting" | "drawing" | "saving" | "done" | "error";
 
 export interface CopilotMessage {
   id: string;
@@ -125,6 +125,7 @@ export function StudioChat({
     string,
     { slow?: number; slower?: number; slowest?: number }
   >>(new Map());
+  const runSeenServerStatusRef = useRef<Map<string, boolean>>(new Map());
 
   const getUserInitials = () => {
     if (!profile) return "ME";
@@ -328,6 +329,7 @@ export function StudioChat({
         debugLines: [],
         runId,
       };
+      runSeenServerStatusRef.current.set(runId, false);
 
       setMessages((prev) => {
         const durable = dropTransientMessages(prev);
@@ -393,69 +395,72 @@ export function StudioChat({
         });
       };
 
+      const clearHeartbeatTimers = () => {
+        const timers = runHeartbeatTimersRef.current.get(runId);
+        if (timers) {
+          if (timers.slow) window.clearTimeout(timers.slow);
+          if (timers.slower) window.clearTimeout(timers.slower);
+          if (timers.slowest) window.clearTimeout(timers.slowest);
+          runHeartbeatTimersRef.current.delete(runId);
+        }
+      };
+
+      const applyStatusFromEvent = (payload: { phase?: string; message?: string; runId?: string }) => {
+        if (!payload.message) return;
+        const phaseMap: Record<string, RunPhase> = {
+          understanding: "understanding",
+          drafting: "drafting",
+          saving: "saving",
+          done: "done",
+        };
+        const mappedPhase = payload.phase && phaseMap[payload.phase] ? phaseMap[payload.phase] : undefined;
+        runSeenServerStatusRef.current.set(runId, true);
+        clearHeartbeatTimers();
+        updateRunMessage((status) => ({
+          ...status,
+          phase: mappedPhase ?? status.phase,
+          text: payload.message ?? status.text,
+          runId: payload.runId ?? status.runId ?? runId,
+          errorMessage: mappedPhase === "error" ? payload.message ?? status.errorMessage : status.errorMessage,
+          retryable: mappedPhase === "error" ? true : status.retryable,
+          collapsed: false,
+        }));
+        if (payload.runId && payload.runId !== runId) {
+          appendDebugLine(`event runId: ${payload.runId}`);
+        }
+      };
+
+      const applyErrorFromEvent = (payload: { message?: string }) => {
+        const message = payload.message ?? "Run failed. Retry?";
+        updateRunMessage((status) => ({
+          ...status,
+          phase: "error",
+          text: "Error — retry",
+          errorMessage: message,
+          retryable: true,
+          collapsed: false,
+        }));
+      };
+
       setIsSending(true);
       setIsAwaitingReply(true);
 
       let stepCount = 0;
       let nodeCount: number | null = null;
       let persistenceError = false;
+      let receivedTerminalEvent = false;
 
-      try {
-        updateRunMessage((status) => ({
-          ...status,
-          phase: "drafting",
-          text: "Drafting workflow…",
-          errorMessage: null,
-          retryable: false,
-          persistenceError: false,
-          debugDetails: null,
-          collapsed: false,
-        }));
-
-        const slowTimer = window.setTimeout(() => {
-          updateRunMessage((status) => ({
-            ...status,
-            text: status.phase === "done" || status.phase === "error" ? status.text : "Still working…",
-          }));
-        }, 800);
-        const slowerTimer = window.setTimeout(() => {
-          updateRunMessage((status) => ({
-            ...status,
-            text: status.phase === "done" || status.phase === "error" ? status.text : "Pulling systems + edge cases…",
-          }));
-        }, 3000);
-        const slowestTimer = window.setTimeout(() => {
-          updateRunMessage((status) => ({
-            ...status,
-            text: status.phase === "done" || status.phase === "error" ? status.text : "Almost there…",
-          }));
-        }, 8000);
-        runHeartbeatTimersRef.current.set(runId, { slow: slowTimer, slower: slowerTimer, slowest: slowestTimer });
-
-        const chatResponse = await fetch(`/api/automation-versions/${automationVersionId}/copilot/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            content: trimmed,
-            clientMessageId,
-          }),
-        });
-
-        if (!chatResponse.ok) {
-          const errorData = await chatResponse.json().catch(() => ({}));
-          throw new Error(errorData.error ?? "Failed to update workflow");
-        }
-
-        const rawData: {
+      const applyResultPayload = async (
+        rawData: {
           runId?: string;
-          workflow?: Workflow | { workflowSpec?: Workflow };
+          workflow?: Workflow | { workflowSpec?: Workflow } | { workflowJson?: Workflow } | { blueprintJson?: Workflow };
           message?: ApiCopilotMessage;
           progress?: WorkflowProgressSnapshot | null;
           tasks?: Task[];
           persistenceError?: boolean;
-        } = await chatResponse.json();
-
-
+        },
+        responseRunId: string
+      ) => {
         // Accept legacy alias where workflow lives under workflowSpec
         const normalizedWorkflow =
           rawData.workflow && "workflowJson" in rawData.workflow && rawData.workflow.workflowJson
@@ -470,12 +475,10 @@ export function StudioChat({
           ...rawData,
           workflow: normalizedWorkflow,
         };
-        const responseRunId = rawData.runId ?? runId;
         appendDebugLine(`runId: ${responseRunId}`);
         updateRunMessage((status) => ({ ...status, runId: responseRunId }));
 
         const isLatest = requestId === pendingRequestIdRef.current;
-
 
         if (data.workflow && onWorkflowUpdates && isLatest) {
           stepCount = data.workflow.steps?.length ?? 0;
@@ -602,7 +605,135 @@ export function StudioChat({
           nodeCount,
           analysisSaved: !persistenceError,
         });
+        receivedTerminalEvent = true;
         return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
+      };
+
+      const decoder = new TextDecoder();
+
+      const attemptStreaming = async () => {
+        try {
+          const response = await fetch(
+            `/api/automation-versions/${automationVersionId}/copilot/chat?stream=1`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "text/event-stream",
+              },
+              body: JSON.stringify({
+                content: trimmed,
+                clientMessageId,
+              }),
+            }
+          );
+
+          if (!response.ok || !response.body) {
+            return false;
+          }
+
+          const reader = response.body.getReader();
+          let buffer = "";
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop() ?? "";
+            for (const part of parts) {
+              const lines = part.split("\n");
+              let eventType = "message";
+              const dataLines: string[] = [];
+              for (const line of lines) {
+                if (line.startsWith("event:")) {
+                  eventType = line.slice("event:".length).trim();
+                } else if (line.startsWith("data:")) {
+                  dataLines.push(line.slice("data:".length).trim());
+                }
+              }
+              const dataText = dataLines.join("\n");
+              if (!dataText) continue;
+              try {
+                const parsed = JSON.parse(dataText);
+                if (eventType === "status") {
+                  applyStatusFromEvent(parsed);
+                } else if (eventType === "result") {
+                  await applyResultPayload(parsed, parsed.runId ?? runId);
+                  return true;
+                } else if (eventType === "error") {
+                  applyErrorFromEvent(parsed);
+                  return true;
+                }
+              } catch (parseError) {
+                logger.warn("[STUDIO-CHAT] Failed to parse SSE message", parseError);
+              }
+            }
+          }
+          return receivedTerminalEvent;
+        } catch (error) {
+          logger.warn("[STUDIO-CHAT] SSE stream failed, falling back", error);
+          return false;
+        }
+      };
+
+      try {
+        updateRunMessage((status) => ({
+          ...status,
+          phase: "drafting",
+          text: "Drafting workflow…",
+          errorMessage: null,
+          retryable: false,
+          persistenceError: false,
+          debugDetails: null,
+          collapsed: false,
+        }));
+
+        const slowTimer = window.setTimeout(() => {
+          if (runSeenServerStatusRef.current.get(runId)) return;
+          updateRunMessage((status) => ({
+            ...status,
+            text: status.phase === "done" || status.phase === "error" ? status.text : "Still working…",
+          }));
+        }, 800);
+        const slowerTimer = window.setTimeout(() => {
+          if (runSeenServerStatusRef.current.get(runId)) return;
+          updateRunMessage((status) => ({
+            ...status,
+            text: status.phase === "done" || status.phase === "error" ? status.text : "Pulling systems + edge cases…",
+          }));
+        }, 3000);
+        const slowestTimer = window.setTimeout(() => {
+          if (runSeenServerStatusRef.current.get(runId)) return;
+          updateRunMessage((status) => ({
+            ...status,
+            text: status.phase === "done" || status.phase === "error" ? status.text : "Almost there…",
+          }));
+        }, 8000);
+        runHeartbeatTimersRef.current.set(runId, { slow: slowTimer, slower: slowerTimer, slowest: slowestTimer });
+
+        const streamFinished = await attemptStreaming();
+
+        if (!streamFinished) {
+          const chatResponse = await fetch(`/api/automation-versions/${automationVersionId}/copilot/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              content: trimmed,
+              clientMessageId,
+            }),
+          });
+
+          if (!chatResponse.ok) {
+            const errorData = await chatResponse.json().catch(() => ({}));
+            throw new Error(errorData.error ?? "Failed to update workflow");
+          }
+
+          const rawData = await chatResponse.json();
+          return await applyResultPayload(rawData, rawData.runId ?? runId);
+        }
+
+        return { ok: true as const, stepCount, nodeCount, persistenceError, runId };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to send message. Try again.";
         logger.error("[STUDIO-CHAT] Failed to process message:", error);
@@ -616,13 +747,7 @@ export function StudioChat({
         }));
         return { ok: false as const };
       } finally {
-        const timers = runHeartbeatTimersRef.current.get(runId);
-        if (timers) {
-          if (timers.slow) window.clearTimeout(timers.slow);
-          if (timers.slower) window.clearTimeout(timers.slower);
-          if (timers.slowest) window.clearTimeout(timers.slowest);
-          runHeartbeatTimersRef.current.delete(runId);
-        }
+        clearHeartbeatTimers();
         setIsSending(false);
         setIsAwaitingReply(false);
         onWorkflowUpdatingChange?.(false);
