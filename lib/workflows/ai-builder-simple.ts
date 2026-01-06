@@ -415,9 +415,17 @@ function preserveEssentialData(
 
   // Update sections - preserve existing content, only update if AI provides new content for empty sections
   const updatedSections = currentBlueprint.sections.map((section) => {
-    const aiContent = aiSections[section.key];
-    // Only update if section is currently empty and AI provided content
-    if (aiContent && aiContent.trim().length > 0 && (!section.content || section.content.trim().length === 0)) {
+    const rawAiContent = aiSections?.[section.key];
+    const aiContent =
+      typeof rawAiContent === "string"
+        ? rawAiContent
+        : rawAiContent != null
+          ? String(rawAiContent)
+          : "";
+    const currentContent = typeof section.content === "string" ? section.content : "";
+
+    // Only update if section is currently empty and AI provided usable content
+    if (aiContent.trim().length > 0 && currentContent.trim().length === 0) {
       return { ...section, content: aiContent.trim() };
     }
     return section;
