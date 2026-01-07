@@ -19,7 +19,7 @@ const DEBUG_UI_ENABLED =
   process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_DEBUG_COPILOT_UI === "true";
 
 type ChatRole = "user" | "assistant" | "system";
-type RunPhase = "understanding" | "drafting" | "drawing" | "saving" | "done" | "error";
+type RunPhase = "connected" | "understanding" | "drafting" | "structuring" | "drawing" | "saving" | "done" | "error";
 
 export interface CopilotMessage {
   id: string;
@@ -40,6 +40,8 @@ export interface CopilotMessage {
     collapsed?: boolean;
     debugLines?: string[];
     runId?: string;
+    displayLines?: string[];
+    completed?: boolean;
   };
 }
 
@@ -126,6 +128,26 @@ export function StudioChat({
     { slow?: number; slower?: number; slowest?: number }
   >>(new Map());
   const runSeenServerStatusRef = useRef<Map<string, boolean>>(new Map());
+  const runCompletedRef = useRef<Map<string, boolean>>(new Map());
+  const lastSeqByRunIdRef = useRef<Map<string, number>>(new Map());
+  const runSseEventsRef = useRef<
+    Map<
+      string,
+      Array<{ seq?: number; eventType: string; phase?: string; message?: string; timestamp: string; ignored?: boolean }>
+    >
+  >(new Map());
+  const [, forceSseDebugRender] = useState(0);
+  const FORCE_JSON = false;
+  const PHASE_COPY: Record<RunPhase, string> = {
+    connected: "Connected — starting…",
+    understanding: "Understanding your request…",
+    drafting: "Drafting workflow steps…",
+    structuring: "Structuring and numbering…",
+    drawing: "Drawing flowchart…",
+    saving: "Saving draft…",
+    done: "Run complete",
+    error: "Run failed. Retry?",
+  };
 
   const getUserInitials = () => {
     if (!profile) return "ME";
@@ -297,6 +319,19 @@ export function StudioChat({
       const clientMessageId =
         options?.reuseRunId && isRetry ? `${runId}-retry-${Date.now()}` : optimisticMessageId ?? `msg-${Date.now()}`;
       const initialText = source === "seed" ? "Understanding…" : isRetry ? "Understanding…" : "Understanding…";
+      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "debug-session",
+          runId,
+          hypothesisId: "H-stream-default",
+          location: "StudioChat.tsx:sendMessage",
+          message: "copilot_chat.streaming_default_on",
+          data: { clientMessageId },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
 
       lastSentContentRef.current = trimmed;
       runContentRef.current.set(runId, trimmed);
@@ -328,8 +363,15 @@ export function StudioChat({
         collapsed: false,
         debugLines: [],
         runId,
+        displayLines: [initialText],
+        completed: false,
       };
       runSeenServerStatusRef.current.set(runId, false);
+      lastSeqByRunIdRef.current.set(runId, 0);
+      if (DEBUG_UI_ENABLED) {
+        runSseEventsRef.current.set(runId, []);
+      }
+      runCompletedRef.current.set(runId, false);
 
       setMessages((prev) => {
         const durable = dropTransientMessages(prev);
@@ -395,31 +437,191 @@ export function StudioChat({
         });
       };
 
-      const clearHeartbeatTimers = () => {
-        const timers = runHeartbeatTimersRef.current.get(runId);
+      const clearHeartbeatTimers = (targetRunId: string) => {
+        const timers = runHeartbeatTimersRef.current.get(targetRunId);
         if (timers) {
           if (timers.slow) window.clearTimeout(timers.slow);
           if (timers.slower) window.clearTimeout(timers.slower);
           if (timers.slowest) window.clearTimeout(timers.slowest);
-          runHeartbeatTimersRef.current.delete(runId);
+          runHeartbeatTimersRef.current.delete(targetRunId);
         }
       };
 
-      const applyStatusFromEvent = (payload: { phase?: string; message?: string; runId?: string }) => {
-        if (!payload.message) return;
+      const recordSseEvent = (
+        eventType: string,
+        payload: { seq?: number; phase?: string; message?: string; runId?: string },
+        ignored = false
+      ) => {
+        if (!DEBUG_UI_ENABLED) return;
+        const targetRunId = payload.runId ?? runId;
+        if (!targetRunId) return;
+        const next = runSseEventsRef.current.get(targetRunId) ?? [];
+        next.push({
+          seq: payload.seq,
+          eventType,
+          phase: payload.phase,
+          message: payload.message,
+          timestamp: new Date().toISOString(),
+          ignored,
+        });
+        if (next.length > 50) {
+          next.splice(0, next.length - 50);
+        }
+        runSseEventsRef.current.set(targetRunId, next);
+        forceSseDebugRender((value) => value + 1);
+      };
+
+      const shouldProcessEvent = (targetRunId: string | undefined, seq?: number) => {
+        if (!seq || !targetRunId) return true;
+        const last = lastSeqByRunIdRef.current.get(targetRunId) ?? 0;
+        if (seq <= last) {
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H1-parser",
+              location: "StudioChat.tsx:shouldProcessEvent",
+              message: "seq ignored",
+              data: { targetRunId, seq, last },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
+          return false;
+        }
+        lastSeqByRunIdRef.current.set(targetRunId, seq);
+        return true;
+      };
+
+      const normalizeLine = (line: string) =>
+        line
+          .replace(/\u2026/g, "...")
+          .replace(/\.{3,}/g, "...")
+          .replace(/\s+/g, " ")
+          .trim();
+
+      const pushDisplayLine = (line: string, targetRunId: string) => {
+        if (runCompletedRef.current.get(targetRunId)) return;
+        updateRunMessage((status) => {
+          if (status.completed) return status;
+          const lines = [...(status.displayLines ?? [])];
+          const normIncoming = normalizeLine(line);
+          const last = lines.length ? normalizeLine(lines[lines.length - 1]) : null;
+          if (last === normIncoming) {
+            // #region agent log
+            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: "debug-session",
+                runId,
+                hypothesisId: "H4-display",
+                location: "StudioChat.tsx:pushDisplayLine",
+                message: "dedupe skip",
+                data: { targetRunId, line },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            // #endregion
+            return { ...status, text: line, displayLines: lines };
+          }
+          if (lines.length === 1 && normalizeLine(lines[0]) === normIncoming) {
+            // #region agent log
+            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: "debug-session",
+                runId,
+                hypothesisId: "H4-display",
+                location: "StudioChat.tsx:pushDisplayLine",
+                message: "replace initial fallback",
+                data: { targetRunId, line },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            // #endregion
+            return { ...status, text: line, displayLines: [line] };
+          }
+          lines.push(line);
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H4-display",
+              location: "StudioChat.tsx:pushDisplayLine",
+              message: "line added",
+              data: { targetRunId, line, count: lines.length + 1 },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
+          return { ...status, text: line, displayLines: lines.slice(-6) };
+        });
+      };
+
+      const applyStatusFromEvent = (payload: { phase?: string; message?: string; runId?: string; seq?: number }) => {
+        if (!payload.message && !payload.phase) return;
+        const targetRunId = payload.runId ?? runId;
+        if (runCompletedRef.current.get(targetRunId)) return;
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId,
+            hypothesisId: "H1-status-flow",
+            location: "StudioChat.tsx:applyStatusFromEvent",
+            message: "status event received",
+            data: { targetRunId, seq: payload.seq, phase: payload.phase, message: payload.message },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+        recordSseEvent("status", payload);
+        if (!shouldProcessEvent(targetRunId, payload.seq)) return;
         const phaseMap: Record<string, RunPhase> = {
+          connected: "connected",
           understanding: "understanding",
           drafting: "drafting",
+          structuring: "structuring",
           saving: "saving",
+          drawing: "drawing",
           done: "done",
+          error: "error",
         };
         const mappedPhase = payload.phase && phaseMap[payload.phase] ? phaseMap[payload.phase] : undefined;
-        runSeenServerStatusRef.current.set(runId, true);
-        clearHeartbeatTimers();
+        if (payload.phase && !mappedPhase) {
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H1-status-flow",
+              location: "StudioChat.tsx:applyStatusFromEvent",
+              message: "copilot_chat.unknown_phase",
+              data: { phase: payload.phase },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+        }
+        runSeenServerStatusRef.current.set(targetRunId, true);
+        clearHeartbeatTimers(targetRunId);
+        const displayText =
+          mappedPhase && PHASE_COPY[mappedPhase]
+            ? PHASE_COPY[mappedPhase]
+            : payload.message ?? PHASE_COPY[mappedPhase ?? "understanding"] ?? payload.message ?? "";
         updateRunMessage((status) => ({
           ...status,
           phase: mappedPhase ?? status.phase,
-          text: payload.message ?? status.text,
           runId: payload.runId ?? status.runId ?? runId,
           errorMessage: mappedPhase === "error" ? payload.message ?? status.errorMessage : status.errorMessage,
           retryable: mappedPhase === "error" ? true : status.retryable,
@@ -428,18 +630,57 @@ export function StudioChat({
         if (payload.runId && payload.runId !== runId) {
           appendDebugLine(`event runId: ${payload.runId}`);
         }
+        pushDisplayLine(displayText, targetRunId);
       };
 
-      const applyErrorFromEvent = (payload: { message?: string }) => {
+      const applyErrorFromEvent = (payload: { message?: string; runId?: string; seq?: number }) => {
+        const targetRunId = payload.runId ?? runId;
+        recordSseEvent("error", payload);
+        if (!shouldProcessEvent(targetRunId, payload.seq)) return;
         const message = payload.message ?? "Run failed. Retry?";
+        terminalSource = "sse";
+        if (sseTerminalReceived) {
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H2-terminal",
+              location: "StudioChat.tsx:applyErrorFromEvent",
+              message: "copilot_chat.terminal_once_guard_hit",
+              data: { targetRunId, seq: payload.seq },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          return;
+        }
+        sseTerminalReceived = true;
         updateRunMessage((status) => ({
           ...status,
           phase: "error",
-          text: "Error — retry",
           errorMessage: message,
           retryable: true,
           collapsed: false,
+          completed: true,
         }));
+        runCompletedRef.current.set(targetRunId, true);
+        pushDisplayLine(message, targetRunId);
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId,
+            hypothesisId: "H2-terminal",
+            location: "StudioChat.tsx:applyErrorFromEvent",
+            message: "error terminal processed",
+            data: { targetRunId, seq: payload.seq, message },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
       };
 
       setIsSending(true);
@@ -449,6 +690,37 @@ export function StudioChat({
       let nodeCount: number | null = null;
       let persistenceError = false;
       let receivedTerminalEvent = false;
+      let sseFirstChunkReceived = false;
+      let sseTerminalReceived = false;
+      let metricsLogged = false;
+      const fetchStartedAt = Date.now();
+      let firstChunkMs: number | null = null;
+      let chunkCount = 0;
+      let terminalSource: "sse" | "fallback" | "auth_error" | "http_error" | null = null;
+
+      const logStreamMetrics = () => {
+        if (metricsLogged) return;
+        metricsLogged = true;
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId,
+            hypothesisId: "H-metrics",
+            location: "StudioChat.tsx:sendMessage",
+            message: "copilot_chat.stream_metrics",
+            data: {
+              runId,
+              requestId,
+              firstChunkMs,
+              chunkCount,
+              terminalSource,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+      };
 
       const applyResultPayload = async (
         rawData: {
@@ -458,9 +730,94 @@ export function StudioChat({
           progress?: WorkflowProgressSnapshot | null;
           tasks?: Task[];
           persistenceError?: boolean;
+          seq?: number;
         },
-        responseRunId: string
+        responseRunId: string,
+        source: "sse" | "fallback"
       ) => {
+        if (source === "sse") {
+          terminalSource = "sse";
+          if (sseTerminalReceived) {
+            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: "debug-session",
+                runId,
+                hypothesisId: "H2-terminal",
+                location: "StudioChat.tsx:applyResultPayload",
+                message: "copilot_chat.terminal_once_guard_hit",
+                data: { responseRunId, seq: rawData.seq },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
+          }
+          sseTerminalReceived = true;
+          const timers = runHeartbeatTimersRef.current.get(responseRunId);
+          if (timers) {
+            if (timers.slow) window.clearTimeout(timers.slow);
+            if (timers.slower) window.clearTimeout(timers.slower);
+            if (timers.slowest) window.clearTimeout(timers.slowest);
+            runHeartbeatTimersRef.current.delete(responseRunId);
+          }
+        } else if (sseTerminalReceived || sseFirstChunkReceived) {
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H2-terminal",
+              location: "StudioChat.tsx:applyResultPayload",
+              message: "copilot_chat.fallback_blocked_due_to_sse",
+              data: { responseRunId, source },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
+          return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
+        }
+        recordSseEvent("result", {
+          runId: responseRunId,
+          seq: rawData.seq,
+          message: rawData.message?.content,
+          phase: "result",
+        });
+        if (!shouldProcessEvent(responseRunId, rawData.seq)) {
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H1-parser",
+              location: "StudioChat.tsx:applyResultPayload",
+              message: "result seq ignored",
+              data: { responseRunId, seq: rawData.seq, source },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
+          return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
+        }
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId,
+            hypothesisId: "H2-terminal",
+            location: "StudioChat.tsx:applyResultPayload",
+            message: "result event processed",
+            data: { responseRunId, seq: rawData.seq, source, sseTerminalReceived, sseFirstChunkReceived },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
         // Accept legacy alias where workflow lives under workflowSpec
         const normalizedWorkflow =
           rawData.workflow && "workflowJson" in rawData.workflow && rawData.workflow.workflowJson
@@ -486,7 +843,6 @@ export function StudioChat({
             updateRunMessage((status) => ({
               ...status,
               phase: "error",
-              text: "No steps generated — retry",
               errorMessage: "No steps generated — retry",
               retryable: true,
               stepCount,
@@ -499,6 +855,7 @@ export function StudioChat({
                 rawWorkflow: data.workflow,
               });
             }
+            pushDisplayLine("No steps generated — retry", responseRunId);
           } else {
             const nodes = workflowToNodes(data.workflow, new Map());
             nodeCount = nodes.length;
@@ -514,7 +871,6 @@ export function StudioChat({
             updateRunMessage((status) => ({
               ...status,
               phase: "drawing",
-              text: "Drawing flowchart…",
               stepCount,
               errorMessage: null,
               retryable: false,
@@ -575,12 +931,39 @@ export function StudioChat({
         updateRunMessage((status) => ({
           ...status,
           phase: finalPhase,
-          text: finalPhase === "done" ? `Flow updated (${stepCount} steps)` : status.text,
           errorMessage: finalPhase === "error" ? status.errorMessage ?? "Run failed" : null,
           retryable: finalPhase === "error",
           stepCount: stepCount || status.stepCount,
           collapsed: false,
         }));
+
+        if (!runCompletedRef.current.get(responseRunId)) {
+          const terminalLine =
+            finalPhase === "done"
+              ? "Saved. Ready for review."
+              : "Run failed. Retry?";
+          pushDisplayLine(terminalLine, responseRunId);
+          runCompletedRef.current.set(responseRunId, true);
+          updateRunMessage((status) => ({
+            ...status,
+            completed: true,
+          }));
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H2-terminal",
+              location: "StudioChat.tsx:applyResultPayload",
+              message: "terminal line pushed",
+              data: { responseRunId, terminalLine },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
+        }
 
         if (finalPhase === "done") {
           const timer = window.setTimeout(() => {
@@ -612,6 +995,66 @@ export function StudioChat({
       const decoder = new TextDecoder();
 
       const attemptStreaming = async () => {
+        if (FORCE_JSON) {
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H0-stream",
+              location: "StudioChat.tsx:attemptStreaming",
+              message: "stream skipped FORCE_JSON",
+              data: {},
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          return false;
+        }
+        const controller = new AbortController();
+        const idleTimeoutMs = 60_000;
+        const maxTimeoutMs = 70_000;
+        let idleTimer: number | null = null;
+        let maxTimer: number | null = null;
+        let abortedByTimeout = false;
+        let abortedByIdle = false;
+        let parsedCount = 0;
+        let terminalType: string | null = null;
+        let idleArmed = false;
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId,
+            hypothesisId: "H0-stream",
+            location: "StudioChat.tsx:attemptStreaming",
+            message: "stream start",
+            data: {},
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+        const resetIdle = () => {
+          if (idleTimer) window.clearTimeout(idleTimer);
+          idleTimer = window.setTimeout(() => {
+            abortedByIdle = true;
+            controller.abort();
+          }, idleTimeoutMs);
+        };
+        const startMax = () => {
+          maxTimer = window.setTimeout(() => {
+            abortedByTimeout = true;
+            controller.abort();
+          }, maxTimeoutMs);
+        };
+
+        const clearAllTimers = () => {
+          if (idleTimer) window.clearTimeout(idleTimer);
+          if (maxTimer) window.clearTimeout(maxTimer);
+        };
+
         try {
           const response = await fetch(
             `/api/automation-versions/${automationVersionId}/copilot/chat?stream=1`,
@@ -625,19 +1068,153 @@ export function StudioChat({
                 content: trimmed,
                 clientMessageId,
               }),
+              signal: controller.signal,
             }
           );
 
-          if (!response.ok || !response.body) {
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H0-stream",
+              location: "StudioChat.tsx:attemptStreaming",
+              message: "response headers",
+              data: {
+                status: response.status,
+                ok: response.ok,
+                contentType: response.headers.get("content-type"),
+                hasBody: Boolean(response.body),
+              },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
+
+          if (response.status === 401 || response.status === 403) {
+            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: "debug-session",
+                runId,
+                hypothesisId: "H-auth",
+                location: "StudioChat.tsx:attemptStreaming",
+                message: "copilot_chat.auth_error",
+                data: { status: response.status },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            const authMessage = response.status === 401 ? "Unauthorized" : "Forbidden";
+            terminalSource = "auth_error";
+            pushDisplayLine(authMessage, runId);
+            runCompletedRef.current.set(runId, true);
+            updateRunMessage((status) => ({ ...status, completed: true, phase: "error", errorMessage: authMessage }));
+            logStreamMetrics();
             return false;
           }
 
-          const reader = response.body.getReader();
+          if (!response.ok || !response.body) {
+            // #region agent log
+            let textBody = "";
+            try {
+              textBody = await response.text();
+            } catch {
+              textBody = "";
+            }
+            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: "debug-session",
+                runId,
+                hypothesisId: "H0-stream",
+                location: "StudioChat.tsx:attemptStreaming",
+                message: "response not ok/body missing",
+                data: {
+                  status: response.status,
+                  ok: response.ok,
+                  hasBody: Boolean(response.body),
+                  contentType: response.headers.get("content-type"),
+                  body: textBody.slice(0, 300),
+                },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            // #endregion
+            terminalSource = response.ok ? "http_error" : "http_error";
+            logStreamMetrics();
+            return false;
+          }
+
+        const reader = response.body.getReader();
+          startMax();
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H0-stream",
+              location: "StudioChat.tsx:attemptStreaming",
+              message: "reader acquired",
+              data: { contentType: response.headers.get("content-type") },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
           let buffer = "";
+          let chunkCount = 0;
 
           while (true) {
             const { value, done } = await reader.read();
-            if (done) break;
+            if (done) {
+              // #region agent log
+              fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  sessionId: "debug-session",
+                  runId,
+                  hypothesisId: "H0-stream",
+                  location: "StudioChat.tsx:attemptStreaming",
+                  message: "reader done",
+                  data: { parsedCount, terminalType },
+                  timestamp: Date.now(),
+                }),
+              }).catch(() => {});
+              // #endregion
+              break;
+            }
+            // #region agent log
+            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: "debug-session",
+                runId,
+                hypothesisId: "H1-parser",
+                location: "StudioChat.tsx:attemptStreaming",
+                message: "chunk read",
+                data: { size: value?.length ?? 0, chunkCount: chunkCount + 1 },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            // #endregion
+            chunkCount += 1;
+            if (!idleArmed) {
+              resetIdle();
+              idleArmed = true;
+            }
+            if (value && value.length > 0) {
+              sseFirstChunkReceived = true;
+              if (firstChunkMs === null) {
+                firstChunkMs = Date.now() - fetchStartedAt;
+              }
+            }
             buffer += decoder.decode(value, { stream: true });
             const parts = buffer.split("\n\n");
             buffer = parts.pop() ?? "";
@@ -656,22 +1233,131 @@ export function StudioChat({
               if (!dataText) continue;
               try {
                 const parsed = JSON.parse(dataText);
-                if (eventType === "status") {
-                  applyStatusFromEvent(parsed);
-                } else if (eventType === "result") {
-                  await applyResultPayload(parsed, parsed.runId ?? runId);
+                const eventRunId = parsed.runId ?? runId;
+                const effectiveType =
+                  eventType?.trim() ||
+                  (typeof parsed.event === "string" && parsed.event.trim()) ||
+                  (typeof parsed.type === "string" && parsed.type.trim()) ||
+                  (parsed.message ? "status" : undefined) ||
+                  "status";
+
+                const isPing =
+                  effectiveType.toLowerCase() === "ping" || (parsed && typeof parsed === "object" && parsed.ping === true);
+                parsedCount += 1;
+                recordSseEvent(effectiveType, { ...parsed, runId: eventRunId }, isPing);
+                // #region agent log
+                fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    sessionId: "debug-session",
+                    runId,
+                    hypothesisId: "H1-parser",
+                    location: "StudioChat.tsx:attemptStreaming",
+                    message: "SSE chunk parsed",
+                    data: { effectiveType, eventType, hasMessage: Boolean(parsed?.message), seq: parsed?.seq },
+                    timestamp: Date.now(),
+                  }),
+                }).catch(() => {});
+                // #endregion
+                if (isPing) {
+                  resetIdle();
+                  continue;
+                }
+
+                resetIdle();
+
+                if (effectiveType === "status") {
+                  applyStatusFromEvent({ ...parsed, runId: eventRunId });
+                } else if (effectiveType === "result") {
+                  terminalType = "result";
+                  await applyResultPayload(parsed, eventRunId, "sse");
+                  await reader.cancel();
+                  controller.abort();
+                  clearAllTimers();
                   return true;
-                } else if (eventType === "error") {
-                  applyErrorFromEvent(parsed);
+                } else if (effectiveType === "error") {
+                  terminalType = "error";
+                  applyErrorFromEvent({ ...parsed, runId: eventRunId });
+                  await reader.cancel();
+                  controller.abort();
+                  clearAllTimers();
                   return true;
                 }
               } catch (parseError) {
+                // #region agent log
+                fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    sessionId: "debug-session",
+                    runId,
+                    hypothesisId: "H1-parser",
+                    location: "StudioChat.tsx:attemptStreaming",
+                    message: "parse error",
+                    data: { part: part.slice(0, 200) },
+                    timestamp: Date.now(),
+                  }),
+                }).catch(() => {});
+                // #endregion
                 logger.warn("[STUDIO-CHAT] Failed to parse SSE message", parseError);
               }
             }
           }
+          clearAllTimers();
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H0-stream",
+              location: "StudioChat.tsx:attemptStreaming",
+              message: "stream exit",
+              data: { parsedCount, terminalType, receivedTerminalEvent },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
           return receivedTerminalEvent;
         } catch (error) {
+          if (DEBUG_UI_ENABLED && (abortedByTimeout || abortedByIdle)) {
+            logger.warn("[STUDIO-CHAT] SSE aborted", {
+              runId,
+              reason: abortedByTimeout ? "timeout" : abortedByIdle ? "idle_timeout" : "error",
+            });
+            // #region agent log
+            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: "debug-session",
+                runId,
+                hypothesisId: "H3-timeout",
+                location: "StudioChat.tsx:attemptStreaming",
+                message: "SSE aborted fallback",
+                data: { abortedByTimeout, abortedByIdle },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            // #endregion
+          }
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H0-stream",
+              location: "StudioChat.tsx:attemptStreaming",
+              message: "stream error",
+              data: { abortedByTimeout, abortedByIdle, error: error instanceof Error ? error.message : String(error) },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
           logger.warn("[STUDIO-CHAT] SSE stream failed, falling back", error);
           return false;
         }
@@ -681,7 +1367,6 @@ export function StudioChat({
         updateRunMessage((status) => ({
           ...status,
           phase: "drafting",
-          text: "Drafting workflow…",
           errorMessage: null,
           retryable: false,
           persistenceError: false,
@@ -693,21 +1378,21 @@ export function StudioChat({
           if (runSeenServerStatusRef.current.get(runId)) return;
           updateRunMessage((status) => ({
             ...status,
-            text: status.phase === "done" || status.phase === "error" ? status.text : "Still working…",
+            text: status.displayLines?.length ? status.text : "Still working…",
           }));
         }, 800);
         const slowerTimer = window.setTimeout(() => {
           if (runSeenServerStatusRef.current.get(runId)) return;
           updateRunMessage((status) => ({
             ...status,
-            text: status.phase === "done" || status.phase === "error" ? status.text : "Pulling systems + edge cases…",
+            text: status.displayLines?.length ? status.text : "Pulling systems + edge cases…",
           }));
         }, 3000);
         const slowestTimer = window.setTimeout(() => {
           if (runSeenServerStatusRef.current.get(runId)) return;
           updateRunMessage((status) => ({
             ...status,
-            text: status.phase === "done" || status.phase === "error" ? status.text : "Almost there…",
+            text: status.displayLines?.length ? status.text : "Almost there…",
           }));
         }, 8000);
         runHeartbeatTimersRef.current.set(runId, { slow: slowTimer, slower: slowerTimer, slowest: slowestTimer });
@@ -715,6 +1400,23 @@ export function StudioChat({
         const streamFinished = await attemptStreaming();
 
         if (!streamFinished) {
+          if (sseFirstChunkReceived || sseTerminalReceived) {
+            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: "debug-session",
+                runId,
+                hypothesisId: "H2-terminal",
+                location: "StudioChat.tsx:sendMessage",
+                message: "copilot_chat.fallback_blocked_due_to_sse",
+                data: { sseFirstChunkReceived, sseTerminalReceived },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            logStreamMetrics();
+            return { ok: true as const, stepCount, nodeCount, persistenceError, runId };
+          }
           const chatResponse = await fetch(`/api/automation-versions/${automationVersionId}/copilot/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -730,9 +1432,27 @@ export function StudioChat({
           }
 
           const rawData = await chatResponse.json();
-          return await applyResultPayload(rawData, rawData.runId ?? runId);
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H2-terminal",
+              location: "StudioChat.tsx:sendMessage",
+              message: "fallback result path",
+              data: { hasRunId: Boolean(rawData.runId), hasWorkflow: Boolean(rawData.workflow) },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
+          const result = await applyResultPayload(rawData, rawData.runId ?? runId, "fallback");
+          logStreamMetrics();
+          return result;
         }
 
+        logStreamMetrics();
         return { ok: true as const, stepCount, nodeCount, persistenceError, runId };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to send message. Try again.";
@@ -747,7 +1467,7 @@ export function StudioChat({
         }));
         return { ok: false as const };
       } finally {
-        clearHeartbeatTimers();
+        clearHeartbeatTimers(runId);
         setIsSending(false);
         setIsAwaitingReply(false);
         onWorkflowUpdatingChange?.(false);
@@ -871,7 +1591,11 @@ export function StudioChat({
 
               <div className={`max-w-[85%] space-y-2 ${msg.role === "user" ? "items-end flex flex-col" : ""}`}>
                 {msg.kind === "system_run" ? (
-                  <RunBubble message={msg} onRetry={() => handleRunRetry(msg.id)} />
+                  <RunBubble
+                    message={msg}
+                    onRetry={() => handleRunRetry(msg.id)}
+                    sseEvents={DEBUG_UI_ENABLED ? runSseEventsRef.current.get(msg.id) ?? [] : undefined}
+                  />
                 ) : (
                   <>
                     <div
@@ -1016,16 +1740,29 @@ function stripWorkflowBlocks(content: string): string {
     .trim();
 }
 
-function RunBubble({ message, onRetry }: { message: CopilotMessage; onRetry: () => void }) {
+type RunSseEvent = { seq?: number; eventType: string; phase?: string; message?: string; timestamp: string };
+
+function RunBubble({
+  message,
+  onRetry,
+  sseEvents,
+}: {
+  message: CopilotMessage;
+  onRetry: () => void;
+  sseEvents?: RunSseEvent[];
+}) {
   const status = message.runStatus;
   const [showDebug, setShowDebug] = useState(false);
   const [showDebugLines, setShowDebugLines] = useState(false);
+  const [showSseEvents, setShowSseEvents] = useState(false);
 
   if (!status) return null;
 
   const isError = status.phase === "error";
-  const lastEvent = status.text;
   const showErrorLine = isError && status.errorMessage && status.errorMessage !== status.text;
+  const hasSseEvents = DEBUG_UI_ENABLED && (sseEvents?.length ?? 0) > 0;
+  const displayLines = status.displayLines?.length ? status.displayLines : status.text ? [status.text] : [];
+  const lastEvent = displayLines[displayLines.length - 1];
 
   return (
     <div className="w-full">
@@ -1044,10 +1781,12 @@ function RunBubble({ message, onRetry }: { message: CopilotMessage; onRetry: () 
           <span className="uppercase tracking-wide text-gray-500">{status.phase}</span>
         </div>
         <div className="text-xs text-gray-700 space-y-1">
-          <div className="flex items-start gap-2">
-            <span className="mt-1 block h-1.5 w-1.5 rounded-full bg-gray-400" />
-            <span className="font-medium">{status.text}</span>
-          </div>
+          {displayLines.map((line, idx) => (
+            <div className="flex items-start gap-2" key={`${message.id}-line-${idx}`}>
+              <span className="mt-1 block h-1.5 w-1.5 rounded-full bg-gray-400" />
+              <span className="font-medium">{line}</span>
+            </div>
+          ))}
         </div>
 
         {status.phase === "done" && status.stepCount !== undefined ? (
@@ -1091,7 +1830,7 @@ function RunBubble({ message, onRetry }: { message: CopilotMessage; onRetry: () 
           </div>
         )}
 
-        {DEBUG_UI_ENABLED && (status.debugLines?.length || status.runId) ? (
+        {DEBUG_UI_ENABLED && (status.debugLines?.length || status.runId || hasSseEvents) ? (
           <div className="mt-3 border-t border-gray-200 pt-2">
             <div className="flex items-center justify-between text-[11px] text-gray-600">
               <span className="font-semibold">Debug</span>
@@ -1113,6 +1852,43 @@ function RunBubble({ message, onRetry }: { message: CopilotMessage; onRetry: () 
                     {line}
                   </div>
                 ))}
+              </div>
+            ) : null}
+            {hasSseEvents ? (
+              <div className="mt-3 border-t border-gray-200 pt-2">
+                <div className="flex items-center justify-between text-[11px] text-gray-600">
+                  <span className="font-semibold">SSE</span>
+                  <button
+                    type="button"
+                    className="text-[11px] underline"
+                    onClick={() => setShowSseEvents((prev) => !prev)}
+                  >
+                    {showSseEvents ? "Hide" : "Show"}
+                  </button>
+                </div>
+                {showSseEvents ? (
+                  <div className="mt-1 space-y-1 text-[11px] text-gray-700">
+                    {(sseEvents ?? []).map((evt, idx) => (
+                      <div key={`${message.id}-sse-${idx}`} className="flex items-center gap-2">
+                        <span className="font-mono text-[10px] text-gray-500 w-10">
+                          {evt.seq !== undefined ? `#${evt.seq}` : "-"}
+                        </span>
+                        <div className="flex-1 truncate">
+                          <span className="font-semibold mr-1">{evt.eventType}</span>
+                          {evt.phase ? <span className="text-gray-500 mr-1">{evt.phase}</span> : null}
+                          {evt.message ? <span className="text-gray-700">{evt.message}</span> : null}
+                        </div>
+                        <span className="text-[9px] text-gray-400">
+                          {new Date(evt.timestamp).toLocaleTimeString(undefined, {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                          })}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>

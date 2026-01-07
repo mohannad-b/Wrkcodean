@@ -37,6 +37,7 @@ import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
 import { createCopilotRun, getCopilotRunByClientMessageId } from "@/lib/services/copilot-runs";
 import { logger } from "@/lib/logger";
 import { createSSEStream } from "@/lib/http/sse";
+import { generateIntentSummary, type IntentSummary } from "@/lib/ai/intent-summary";
 
 const ChatRequestSchema = z.object({
   content: z.string().min(1).max(8000),
@@ -110,12 +111,12 @@ function isStreamRequest(request: Request) {
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   const streaming = isStreamRequest(request);
   const sse = streaming ? createSSEStream({ signal: request.signal }) : null;
-  const respondError = (error: unknown) => {
+  const respondError = async (error: unknown) => {
     if (streaming && sse) {
       const message = error instanceof Error ? error.message : "Unexpected error.";
       const code = error instanceof ApiError ? error.status : undefined;
       void sse.send("error", { runId: "unknown", requestId: "unknown", message, code });
-      sse.close();
+      void sse.close();
       return sse.response({ status: code ?? 500 });
     }
     if (error instanceof Error && error.message === "Automation version not found") {
@@ -159,13 +160,75 @@ export async function POST(request: Request, { params }: { params: { id: string 
       throw new ApiError(404, "Automation version not found.");
     }
 
-    const callbacks: CopilotCallbacks | undefined = streaming
-      ? {
-          onStatus: (status) => void sse?.send("status", status),
-          onResult: (result) => void sse?.send("result", result),
-          onError: (err) => void sse?.send("error", err),
+    const callbacks: CopilotCallbacks | undefined =
+      streaming && sse
+        ? (() => {
+            let statusCount = 0;
+            const onStatus = (status: CopilotStatusPayload) => {
+              statusCount += 1;
+              return void sse.send("status", status);
+            };
+            const onResult = (result: CopilotRunResult) => void sse.send("result", result);
+            const onError = (err: CopilotErrorPayload) => void sse.send("error", err);
+            return { onStatus, onResult, onError };
+          })()
+        : undefined;
+
+    const clientMessageId = payload.clientMessageId?.trim();
+    const runId = clientMessageId || randomUUID();
+
+    if (streaming && sse) {
+      (async () => {
+        const runnerStartedAt = Date.now();
+        let statusCount = 0;
+        copilotDebug("copilot_chat.sse_runner_started", { runId });
+        try {
+          await sse.send("status", {
+            runId,
+            requestId: "bootstrap",
+            phase: "connected",
+            message: "Connected — starting…",
+          });
+          await runCopilotChat({
+            request,
+            params,
+            payload,
+            session,
+            detail,
+            callbacks:
+              callbacks &&
+              ({
+                onStatus: (status) => {
+                  statusCount += 1;
+                  return callbacks.onStatus?.(status);
+                },
+                onResult: callbacks.onResult,
+                onError: callbacks.onError,
+              } as CopilotCallbacks),
+            runIdOverride: runId,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unexpected error.";
+          const code = error instanceof ApiError ? error.status : undefined;
+          try {
+            await sse.send("error", { runId, requestId: "runner", message, code });
+          } catch {
+            // ignore
+          }
+        } finally {
+          copilotDebug("copilot_chat.sse_runner_duration_ms", {
+            runId,
+            durationMs: Date.now() - runnerStartedAt,
+            statusCount,
+          });
+          copilotDebug("copilot_chat.sse_runner_completed", { runId });
+          await sse.close();
         }
-      : undefined;
+      })();
+
+      copilotDebug("copilot_chat.sse_response_returned", { runId });
+      return sse.response();
+    }
 
     const result = await runCopilotChat({
       request,
@@ -174,12 +237,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
       session,
       detail,
       callbacks,
+      runIdOverride: runId,
     });
-
-    if (streaming && sse) {
-      sse.close();
-      return sse.response();
-    }
 
     return NextResponse.json(result);
   } catch (error) {
@@ -196,6 +255,7 @@ async function runCopilotChat({
   session,
   detail,
   callbacks,
+  runIdOverride,
 }: {
   request: Request;
   params: { id: string };
@@ -203,9 +263,10 @@ async function runCopilotChat({
   session: Awaited<ReturnType<typeof requireTenantSession>>;
   detail: AutomationVersionDetail;
   callbacks?: CopilotCallbacks;
+  runIdOverride?: string;
 }): Promise<CopilotRunResult> {
   const clientMessageId = payload.clientMessageId?.trim();
-  const runId = clientMessageId || randomUUID();
+  const runId = runIdOverride || clientMessageId || randomUUID();
   const requestId = randomUUID();
   const baseTrace = createCopilotTrace({
     runId,
@@ -217,10 +278,12 @@ async function runCopilotChat({
   });
   baseTrace.event("run.started", { automationVersionId: params.id });
 
+  const clampStatus = (value: string) => (value.length > 110 ? `${value.slice(0, 107)}...` : value);
   const emitStatus = (phase: string, message: string, meta?: Record<string, unknown>) =>
-    callbacks?.onStatus?.({ runId, requestId, phase, message, meta });
+    callbacks?.onStatus?.({ runId, requestId, phase, message: clampStatus(message), meta });
   const emitError = (message: string, code?: number | string) =>
     callbacks?.onError?.({ runId, requestId, message, code });
+  emitStatus("understanding", "Got it — working on this…");
 
   const existingRun =
     clientMessageId &&
@@ -237,7 +300,7 @@ async function runCopilotChat({
       automationVersionId: params.id,
       detail,
     });
-    emitStatus("done", "Replaying saved result…", { replay: true });
+    emitStatus("saving", "Replaying saved result…", { replay: true });
     callbacks?.onResult?.({ ...replay, runId } as CopilotRunResult);
     return { ...replay, runId } as CopilotRunResult;
   }
@@ -288,6 +351,14 @@ async function runCopilotChat({
   const contextSummary = buildConversationSummary(normalizedMessages, intakeNotes);
   const currentBlueprint = currentWorkflow ?? createEmptyWorkflowSpec();
   const userMessageContent = latestUserMessage?.content ?? trimmedContent;
+  let intentSummary: IntentSummary | null = null;
+  let intentStatusEmitted = false;
+  generateIntentSummary(userMessageContent).then((summary) => {
+    intentSummary = summary;
+    if (!summary || intentStatusEmitted) return;
+    intentStatusEmitted = true;
+    emitStatus("understanding", `Got it — ${summary.intent_summary}`);
+  });
 
   const existingAnalysisRaw =
     (await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id })) ?? null;
@@ -348,7 +419,11 @@ async function runCopilotChat({
     });
   } else {
     try {
-      emitStatus("drafting", "Drafting a fresh workflow…", {
+      const draftingText =
+        intentSummary?.intent_summary && intentSummary.intent_summary.length > 0
+          ? `Drafting steps for ${intentSummary.intent_summary}…`
+          : "Drafting steps for your workflow…";
+      emitStatus("drafting", draftingText, {
         intakeNotes: Boolean(intakeNotes),
         messages: normalizedMessages.length,
       });
@@ -396,7 +471,7 @@ async function runCopilotChat({
 
       const numberedWorkflow = applyStepNumbers(aiGeneratedWorkflow);
       draftingTrace.event("workflow.stepNumbering.completed", { stepCount: numberedWorkflow.steps.length });
-      emitStatus("drafting", "Cleaning up steps and numbering…", {
+      emitStatus("structuring", "Adding edge cases + step numbers…", {
         stepCount: numberedWorkflow.steps.length,
       });
       aiTasks = generatedTasks;
@@ -473,7 +548,12 @@ async function runCopilotChat({
     stepCount: validatedWorkflow.steps?.length ?? 0,
     sectionCount: validatedWorkflow.sections?.length ?? 0,
   });
-  emitStatus("saving", "Saving draft and messages…", { stepCount: validatedWorkflow.steps?.length ?? 0 });
+  const savingText =
+    intentSummary?.intent_summary && intentSummary.intent_summary.length > 0
+      ? `Saving ${intentSummary.intent_summary} draft…`
+      : "Saving draft and messages…";
+  emitStatus("saving", savingText, { stepCount: validatedWorkflow.steps?.length ?? 0 });
+  emitStatus("saving", savingText, { stepCount: validatedWorkflow.steps?.length ?? 0 });
   const savingTrace = trace.phase("saving");
   const saveSpan = savingTrace.spanStart("workflow.save", { stepCount: validatedWorkflow.steps?.length ?? 0 });
 
@@ -515,13 +595,38 @@ async function runCopilotChat({
   savingTrace.event("assistantMessage.saved", { messageId: assistantMessage.id });
 
   if (clientMessageId) {
-    const runResult = await createCopilotRun({
-      tenantId: session.tenantId,
-      automationVersionId: params.id,
-      clientMessageId,
-      userMessageId: userMessage.id,
-      assistantMessageId: assistantMessage.id,
-    });
+    let runResult = null;
+    try {
+      runResult = await createCopilotRun({
+        tenantId: session.tenantId,
+        automationVersionId: params.id,
+        clientMessageId,
+        userMessageId: userMessage.id,
+        assistantMessageId: assistantMessage.id,
+      });
+    } catch (runError) {
+      const isDuplicate =
+        (runError as any)?.cause?.code === "23505" ||
+        (runError instanceof Error && /duplicate key/i.test(runError.message));
+      if (isDuplicate) {
+        const existingRun = await getCopilotRunByClientMessageId({
+          tenantId: session.tenantId,
+          automationVersionId: params.id,
+          clientMessageId,
+        });
+        if (existingRun) {
+          const replay = await buildIdempotentResponse({
+            run: existingRun,
+            tenantId: session.tenantId,
+            automationVersionId: params.id,
+            detail,
+          });
+          callbacks?.onResult?.({ ...replay, runId } as CopilotRunResult);
+          return { ...replay, runId } as CopilotRunResult;
+        }
+      }
+      throw runError;
+    }
 
     if (runResult && runResult.assistantMessageId !== assistantMessage.id) {
       const replay = await buildIdempotentResponse({
@@ -638,7 +743,7 @@ async function runCopilotChat({
     persistenceError: analysisPersistenceError,
   });
 
-  emitStatus("done", "Run complete — preparing result…", {
+  emitStatus("saving", "Run complete — preparing result…", {
     stepCount: validatedWorkflow.steps?.length ?? 0,
     persistenceError: analysisPersistenceError,
   });

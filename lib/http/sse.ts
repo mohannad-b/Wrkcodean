@@ -23,6 +23,7 @@ export function createSSEStream(options: SSEOptions = {}): SSEStream {
   const writer = writable.getWriter();
   let closed = false;
   let chain: Promise<void> = Promise.resolve();
+  let seq = 1;
 
   const enqueue = (fn: () => Promise<void>) => {
     chain = chain.then(fn).catch(() => {});
@@ -52,16 +53,26 @@ export function createSSEStream(options: SSEOptions = {}): SSEStream {
 
   if (options.signal) {
     if (options.signal.aborted) {
-      close();
+      void close();
     } else {
-      options.signal.addEventListener("abort", close, { once: true });
+      options.signal.addEventListener("abort", () => {
+        void close();
+      }, { once: true });
     }
   }
 
   const send = (event: string, data: unknown) =>
     enqueue(async () => {
       if (closed) return;
-      const payload = typeof data === "string" ? data : JSON.stringify(data);
+      const currentSeq = seq++;
+      const shouldAttachSeq = event === "status" || event === "result" || event === "error";
+      const enriched =
+        shouldAttachSeq && data && typeof data === "object"
+          ? { ...(data as Record<string, unknown>), seq: currentSeq }
+          : shouldAttachSeq
+          ? { data, seq: currentSeq }
+          : data;
+      const payload = typeof enriched === "string" ? enriched : JSON.stringify(enriched);
       await write(`event: ${event}\n`);
       await write(`data: ${payload}\n\n`);
     });

@@ -62,7 +62,11 @@ export async function syncAutomationTasks({
     const normalizedSystemType = aiTask.systemType?.trim().toLowerCase();
     const relatedStepNumbers = Array.isArray(aiTask.relatedSteps)
       ? aiTask.relatedSteps
-          .map((step) => step?.trim())
+          .map((step) => {
+            if (typeof step === "string") return step.trim();
+            if (typeof step === "number") return String(step).trim();
+            return "";
+          })
           .filter((value): value is string => Boolean(value))
       : [];
     const relatedStepIds = relatedStepNumbers
