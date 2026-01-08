@@ -31,6 +31,7 @@ import {
   createEmptyMemory,
   type CopilotAnalysisState,
   type CopilotMemory,
+  type CopilotChecklistItem,
 } from "@/lib/workflows/copilot-analysis";
 import { getCopilotAnalysis, upsertCopilotAnalysis } from "@/lib/services/copilot-analysis";
 import { parseCopilotReply } from "@/lib/ai/parse-copilot-reply";
@@ -38,6 +39,7 @@ import { createCopilotRun, getCopilotRunByClientMessageId } from "@/lib/services
 import { logger } from "@/lib/logger";
 import { createSSEStream } from "@/lib/http/sse";
 import { generateIntentSummary, type IntentSummary } from "@/lib/ai/intent-summary";
+import { extractChecklistAnswers, type ChecklistExtraction } from "@/lib/ai/answer-extractor";
 import { ProgressPlanner, type ProgressEvent, validateStatusPayload } from "../progress-planner";
 
 const ChatRequestSchema = z.object({
@@ -140,6 +142,291 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<{
       // No-op: caller handles fallback behavior
     }
   }
+}
+
+const CORE_CHECKLIST_KEYS = [
+  "primary_outcome",
+  "trigger_cadence",
+  "trigger_time",
+  "storage_destination",
+  "systems",
+  "success_criteria",
+  "samples",
+];
+
+type ChecklistState = Record<string, CopilotChecklistItem>;
+
+function isCoreChecklistKey(key: string | null | undefined): key is string {
+  if (!key) return false;
+  return CORE_CHECKLIST_KEYS.includes(key);
+}
+
+function ensureChecklist(memory: CopilotMemory): ChecklistState {
+  if (!memory.checklist) {
+    memory.checklist = {};
+  }
+  CORE_CHECKLIST_KEYS.forEach((key) => {
+    if (!memory.checklist![key]) {
+      memory.checklist![key] = {
+        key,
+        confirmed: false,
+        source: undefined,
+        value: null,
+        evidence: null,
+        confidence: 0,
+      };
+    }
+  });
+  return memory.checklist!;
+}
+
+function normalizeKey(key: string | null | undefined): string | null {
+  if (!key) return null;
+  return key.trim().toLowerCase();
+}
+
+function inferChecklistKeyFromQuestion(question?: string | null): string | null {
+  if (!question) return null;
+  const lower = question.toLowerCase();
+  if (/(daily|weekly|schedule|cadence|frequency|every day|every week)/.test(lower)) return "trigger_cadence";
+  if (/(am|pm|\b\d{1,2}:\d{2}\b|\b\d{1,2}\b.+(am|pm))/i.test(question)) return "trigger_time";
+  if (/(goal|business goal|outcome|result)/.test(lower)) return "primary_outcome";
+  if (/(drop|store|save).+(sheet|excel|drive|db|database|warehouse)/.test(lower)) return "storage_destination";
+  if (/(system|app|tool|platform|crm|erp|sheet|slack|gmail|notion|airtable|salesforce|hubspot)/.test(lower))
+    return "systems";
+  if (/(success|kpi|sla)/.test(lower)) return "success_criteria";
+  if (/(sample|file|pdf|doc|example)/.test(lower)) return "samples";
+  return null;
+}
+
+function setChecklistItem(params: {
+  memory: CopilotMemory;
+  key: string;
+  value?: string | null;
+  source?: CopilotChecklistItem["source"];
+  evidence?: string | null;
+  confidence?: number;
+  confirmed?: boolean;
+}) {
+  const checklist = ensureChecklist(params.memory);
+  const existing = checklist[params.key] ?? {
+    key: params.key,
+    confirmed: false,
+    value: null,
+    evidence: null,
+    confidence: 0,
+  };
+  const confirmed = params.confirmed ?? existing.confirmed;
+  checklist[params.key] = {
+    ...existing,
+    confirmed,
+    source: params.source ?? existing.source,
+    value: params.value ?? existing.value,
+    evidence: params.evidence ?? existing.evidence,
+    confidence: params.confidence ?? existing.confidence,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function isChecklistConfirmed(memory: CopilotMemory, key: string): boolean {
+  const normalized = normalizeKey(key);
+  if (!normalized) return false;
+  const checklist = ensureChecklist(memory);
+  return checklist[normalized]?.confirmed === true;
+}
+
+function deterministicAnswerDetection(params: {
+  memory: CopilotMemory;
+  userMessage: string;
+}): { memory: CopilotMemory; confirmedKeys: string[] } {
+  const { memory } = params;
+  const message = params.userMessage.toLowerCase();
+  const confirmedKeys: string[] = [];
+  const checklist = ensureChecklist(memory);
+  const lastKey = normalizeKey(memory.lastQuestionKey);
+
+  if (!lastKey) {
+    return { memory, confirmedKeys };
+  }
+
+  const yesPattern = /\b(yes|yeah|yep|correct|exactly|right|sounds good|works for me|that is fine|sure)\b/;
+  const timePattern = /\b(\d{1,2})(:\d{2})?\s?(am|pm)\b/i;
+  const cadencePattern = /\b(daily|weekly|monthly|hourly|every\s+\d+\s+(minutes?|hours?|days?|weeks?))\b/i;
+  const emailPattern = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+  const phonePattern = /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/;
+  const systemsPattern = /\b(slack|salesforce|hubspot|airtable|notion|gmail|outlook|zapier|sheet|sheets|drive|s3|snowflake|bigquery)\b/i;
+
+  if (yesPattern.test(message)) {
+    setChecklistItem({
+      memory,
+      key: lastKey,
+      confirmed: true,
+      source: "user",
+      evidence: params.userMessage.slice(0, 120),
+    });
+    confirmedKeys.push(lastKey);
+  } else if (lastKey === "trigger_time" && timePattern.test(params.userMessage)) {
+    const match = params.userMessage.match(timePattern)?.[0]?.trim();
+    setChecklistItem({
+      memory,
+      key: lastKey,
+      confirmed: true,
+      source: "user",
+      value: match,
+      evidence: match,
+    });
+    memory.facts.trigger_time = match;
+    confirmedKeys.push(lastKey);
+  } else if (lastKey === "trigger_cadence" && cadencePattern.test(params.userMessage)) {
+    const match = params.userMessage.match(cadencePattern)?.[0]?.trim();
+    setChecklistItem({
+      memory,
+      key: lastKey,
+      confirmed: true,
+      source: "user",
+      value: match,
+      evidence: match,
+    });
+    memory.facts.trigger_cadence = match;
+    confirmedKeys.push(lastKey);
+  } else if (lastKey === "systems" && systemsPattern.test(params.userMessage)) {
+    const systemMatch = params.userMessage.match(systemsPattern)?.[0]?.trim();
+    setChecklistItem({
+      memory,
+      key: lastKey,
+      confirmed: true,
+      source: "user",
+      value: systemMatch,
+      evidence: systemMatch,
+    });
+    memory.facts.systems = Array.from(new Set([...(memory.facts.systems ?? []), systemMatch])).slice(0, 5);
+    confirmedKeys.push(lastKey);
+  } else if (lastKey === "storage_destination" && /\b(sheet|sheets|drive|s3|snowflake|bigquery|db|database)\b/i.test(params.userMessage)) {
+    const destMatch = params.userMessage.match(/\b(sheet|sheets|drive|s3|snowflake|bigquery|db|database)\b/i)?.[0]?.trim();
+    setChecklistItem({
+      memory,
+      key: lastKey,
+      confirmed: true,
+      source: "user",
+      value: destMatch,
+      evidence: destMatch,
+    });
+    memory.facts.storage_destination = destMatch ?? memory.facts.storage_destination;
+    confirmedKeys.push(lastKey);
+  } else if (lastKey === "success_criteria" && /\b(error|sla|success|uptime|latency|kpi|metric)\b/i.test(params.userMessage)) {
+    setChecklistItem({
+      memory,
+      key: lastKey,
+      confirmed: true,
+      source: "user",
+      value: params.userMessage.slice(0, 120),
+      evidence: params.userMessage.slice(0, 120),
+    });
+    memory.facts.success_criteria = params.userMessage.slice(0, 200);
+    confirmedKeys.push(lastKey);
+  } else if (lastKey === "samples" && /(sample|pdf|file|document|example)/i.test(params.userMessage)) {
+    setChecklistItem({
+      memory,
+      key: lastKey,
+      confirmed: true,
+      source: "user",
+      value: "samples_provided",
+      evidence: params.userMessage.slice(0, 120),
+    });
+    memory.facts.samples = "provided";
+    confirmedKeys.push(lastKey);
+  } else if ((emailPattern.test(params.userMessage) || phonePattern.test(params.userMessage)) && lastKey === "systems") {
+    // treat contact info as confirmation of communication system
+    const contact = params.userMessage.match(emailPattern)?.[0] ?? params.userMessage.match(phonePattern)?.[0];
+    setChecklistItem({
+      memory,
+      key: lastKey,
+      confirmed: true,
+      source: "user",
+      value: contact,
+      evidence: contact ?? params.userMessage.slice(0, 120),
+    });
+    confirmedKeys.push(lastKey);
+  }
+
+  if (confirmedKeys.length > 0) {
+    memory.lastQuestionKey = null;
+    memory.lastQuestionText = null;
+  }
+
+  return { memory, confirmedKeys };
+}
+
+function applyExtractorAnswers(params: {
+  memory: CopilotMemory;
+  userMessage: string;
+  questionText?: string | null;
+  candidateKey?: string | null;
+  trace: ReturnType<typeof createCopilotTrace>;
+}): Promise<{ memory: CopilotMemory; confirmedKeys: string[] }> {
+  const { memory, userMessage, questionText, candidateKey, trace } = params;
+  const checklist = ensureChecklist(memory);
+  const keys = candidateKey ? [candidateKey] : Object.keys(checklist);
+  return extractChecklistAnswers({
+    userMessage,
+    checklistKeys: keys,
+    questionText: questionText ?? undefined,
+    candidateKey: candidateKey ?? undefined,
+  }).then((items) => {
+    const confirmedKeys: string[] = [];
+    if (!items) return { memory, confirmedKeys };
+    items.forEach((item: ChecklistExtraction) => {
+      const key = normalizeKey(item.key);
+      if (!key) return;
+      const confidence = item.confidence ?? 0;
+      const value = item.value?.trim() ?? null;
+      if (confidence >= 0.8) {
+        setChecklistItem({
+          memory,
+          key,
+          confirmed: true,
+          source: "ai",
+          value,
+          evidence: item.evidence ?? value ?? undefined,
+          confidence,
+        });
+        confirmedKeys.push(key);
+        if (key in memory.facts) {
+          (memory.facts as any)[key] = value ?? (memory.facts as any)[key];
+        }
+      } else if (confidence >= 0.5) {
+        setChecklistItem({
+          memory,
+          key,
+          confirmed: false,
+          source: "ai",
+          value,
+          evidence: item.evidence ?? value ?? undefined,
+          confidence,
+        });
+      }
+    });
+    if (confirmedKeys.length > 0) {
+      memory.lastQuestionKey = null;
+      memory.lastQuestionText = null;
+    }
+    trace.event("copilot.checklist_extracted", {
+      candidateKey,
+      questionText,
+      confirmedKeys,
+    });
+    return { memory, confirmedKeys };
+  });
+}
+
+function checklistSnapshot(memory: CopilotMemory) {
+  const checklist = ensureChecklist(memory);
+  const snapshot: Record<string, { confirmed: boolean; source?: string; value?: string | null }> = {};
+  CORE_CHECKLIST_KEYS.forEach((key) => {
+    const item = checklist[key];
+    snapshot[key] = { confirmed: item?.confirmed ?? false, source: item?.source, value: item?.value ?? null };
+  });
+  return snapshot;
 }
 
 function hashIntentValue(value: string): string {
@@ -627,6 +914,30 @@ async function runCopilotChat({
     memory: existingAnalysis.memory ?? createEmptyMemory(),
   };
 
+  // Apply answer detection for the latest user message against the last asked checklist item
+  analysisState.memory = ensureChecklist(analysisState.memory ?? createEmptyMemory());
+  const deterministicChecklist = deterministicAnswerDetection({
+    memory: analysisState.memory,
+    userMessage: userMessageContent,
+  });
+  analysisState.memory = deterministicChecklist.memory;
+
+  if (deterministicChecklist.confirmedKeys.length === 0 && analysisState.memory.lastQuestionKey) {
+    const extractorResult = await applyExtractorAnswers({
+      memory: analysisState.memory,
+      userMessage: userMessageContent,
+      questionText: analysisState.memory.lastQuestionText,
+      candidateKey: analysisState.memory.lastQuestionKey,
+      trace: baseTrace,
+    });
+    analysisState.memory = extractorResult.memory;
+  }
+
+  baseTrace.event("copilot.checklist_state", {
+    lastQuestionKey: analysisState.memory.lastQuestionKey ?? null,
+    checklist: checklistSnapshot(analysisState.memory),
+  });
+
   const directCommand = Boolean(latestUserMessage?.content && isDirectCommand(latestUserMessage.content));
   let responseMessage = "";
   let commandExecuted = false;
@@ -790,26 +1101,70 @@ async function runCopilotChat({
       };
       const trimmedFollowUp = followUpQuestion?.trim();
       const hasGoalContext = Boolean(intakeNotes?.trim()?.length || detail.version.requirementsText?.trim()?.length);
-      const nextFollowUp = hasGoalContext
-        ? undefined
-        : chooseFollowUpQuestion({
-            candidate: trimmedFollowUp,
-            memory: analysisState.memory ?? createEmptyMemory(),
-            workflow: workflowWithTasks,
-            userMessage: userMessageContent,
-          });
+      const baseMemory = analysisState.memory ?? createEmptyMemory();
+      const checklistForDecision = ensureChecklist(baseMemory);
+      const hasMissingCore = CORE_CHECKLIST_KEYS.some((key) => !checklistForDecision[key]?.confirmed);
+
+      const nextFollowUpResult = chooseFollowUpQuestion({
+        candidate: trimmedFollowUp,
+        memory: baseMemory,
+        workflow: workflowWithTasks,
+        userMessage: userMessageContent,
+      });
+      let nextFollowUp = nextFollowUpResult.question;
+      let nextFollowUpKey = nextFollowUpResult.key;
+
+      if (nextFollowUp && chatResponse.trim().endsWith("?")) {
+        const normalizedExisting = normalizeQuestionText(chatResponse);
+        const normalizedCandidate = normalizeQuestionText(nextFollowUp);
+        if (normalizedExisting === normalizedCandidate) {
+          nextFollowUp = undefined;
+          nextFollowUpKey = null;
+        }
+      }
+
+      let followUpSkippedReason: string | null = null;
+      if (!hasMissingCore) {
+        followUpSkippedReason = "no-missing-core";
+        nextFollowUp = undefined;
+        nextFollowUpKey = null;
+      } else if (!nextFollowUp) {
+        followUpSkippedReason = "none-selected-or-duplicate";
+      } else if (nextFollowUpKey && checklistForDecision[nextFollowUpKey]?.confirmed) {
+        followUpSkippedReason = "confirmed-key";
+        nextFollowUp = undefined;
+        nextFollowUpKey = null;
+      }
 
       analysisState = {
         ...analysisState,
         memory: refreshMemoryState({
-          previous: analysisState.memory ?? createEmptyMemory(),
+          previous: baseMemory,
           workflow: workflowWithTasks,
           lastUserMessage: userMessageContent,
           appliedFollowUp: nextFollowUp,
+          followUpKey: nextFollowUpKey,
         }),
       };
 
-      responseMessage = nextFollowUp ? `${chatResponse} ${nextFollowUp}`.trim() : chatResponse;
+      responseMessage =
+        nextFollowUp && nextFollowUp.trim().length > 0
+          ? `${chatResponse.trim()} ${nextFollowUp.trim()}`.trim()
+          : chatResponse;
+      if (nextFollowUp && nextFollowUp.trim().length > 0 && analysisState.memory.lastQuestionKey) {
+        baseTrace.event("copilot.follow_up_asked", {
+          question: nextFollowUp,
+          key: analysisState.memory.lastQuestionKey,
+        });
+      }
+
+      baseTrace.event("copilot.follow_up_decision", {
+        candidateFollowUp: trimmedFollowUp ?? null,
+        chosenFollowUp: nextFollowUp ?? null,
+        chosenFollowUpKey: nextFollowUpKey ?? null,
+        whySkipped: followUpSkippedReason,
+        lastQuestionKey: analysisState.memory.lastQuestionKey ?? null,
+      });
 
       baseTrace.event("copilot_chat.llm_response", {
         automationVersionId: params.id,
@@ -1237,38 +1592,49 @@ type FollowUpChoiceArgs = {
   userMessage: string;
 };
 
-function chooseFollowUpQuestion({ candidate, memory, workflow, userMessage }: FollowUpChoiceArgs): string | null {
+function chooseFollowUpQuestion({
+  candidate,
+  memory,
+  workflow,
+  userMessage,
+}: FollowUpChoiceArgs): { question: string | null; key: string | null } {
   const trimmed = candidate?.trim();
   const normalizedCandidate = trimmed ? normalizeQuestionText(trimmed) : null;
   const reachedCap = memory.question_count >= 10;
+  const checklist = ensureChecklist(memory);
+  const askedNormalized = memory.asked_questions_normalized ?? [];
 
   if (reachedCap) {
-    return "This looks complete — want me to finalize or tweak anything?";
+    return { question: "This looks complete — want me to finalize or tweak anything?", key: null };
   }
 
   const mergedFacts = mergeFacts(memory.facts ?? {}, workflow, userMessage);
-  const stage = computeStage(mergedFacts, memory.question_count);
+  const stage = computeStage(mergedFacts, memory.question_count, checklist);
 
-  if (trimmed && normalizedCandidate && !memory.asked_questions_normalized.includes(normalizedCandidate)) {
-    const assumptionCandidate = pickStageQuestion(stage, mergedFacts);
-    if (assumptionCandidate) {
-      const normalizedAssumption = normalizeQuestionText(assumptionCandidate);
-      if (!memory.asked_questions_normalized.includes(normalizedAssumption)) {
-        return assumptionCandidate;
-      }
+  if (trimmed && normalizedCandidate && !askedNormalized.includes(normalizedCandidate)) {
+    const candidateKey = inferChecklistKeyFromQuestion(trimmed);
+    if (candidateKey && !isCoreChecklistKey(candidateKey)) {
+      // Ignore non-core checklist questions
+      return { question: null, key: null };
     }
-    return trimmed;
+    if (!candidateKey || !checklist[candidateKey]?.confirmed) {
+      return { question: trimmed, key: candidateKey };
+    }
   }
 
   const fallback = pickStageQuestion(stage, mergedFacts);
   if (!fallback) {
-    return null;
+    return { question: null, key: null };
   }
   const normalizedFallback = normalizeQuestionText(fallback);
-  if (memory.asked_questions_normalized.includes(normalizedFallback)) {
-    return null;
+  if (askedNormalized.includes(normalizedFallback)) {
+    return { question: null, key: null };
   }
-  return fallback;
+  const fallbackKey = inferChecklistKeyFromQuestion(fallback);
+  if ((fallbackKey && !isCoreChecklistKey(fallbackKey)) || (fallbackKey && checklist[fallbackKey]?.confirmed)) {
+    return { question: null, key: null };
+  }
+  return { question: fallback, key: fallbackKey };
 }
 
 type RefreshMemoryArgs = {
@@ -1276,14 +1642,24 @@ type RefreshMemoryArgs = {
   workflow: Workflow;
   lastUserMessage: string;
   appliedFollowUp?: string | null;
+  followUpKey?: string | null;
 };
 
-function refreshMemoryState({ previous, workflow, lastUserMessage, appliedFollowUp }: RefreshMemoryArgs): CopilotMemory {
+function refreshMemoryState({
+  previous,
+  workflow,
+  lastUserMessage,
+  appliedFollowUp,
+  followUpKey,
+}: RefreshMemoryArgs): CopilotMemory {
   const mergedFacts = mergeFacts(previous.facts ?? {}, workflow, lastUserMessage);
   const normalizedFollowUp = appliedFollowUp ? normalizeQuestionText(appliedFollowUp) : null;
   const newCount =
-    appliedFollowUp && previous.question_count < 10 ? previous.question_count + 1 : previous.question_count;
-  const nextStage = computeStage(mergedFacts, newCount);
+    appliedFollowUp && appliedFollowUp.trim().length > 0 && previous.question_count < 10
+      ? previous.question_count + 1
+      : previous.question_count;
+  const checklist = ensureChecklist(previous);
+  const nextStage = computeStage(mergedFacts, newCount, checklist);
   const asked = new Set(previous.asked_questions_normalized ?? []);
   if (normalizedFollowUp) {
     asked.add(normalizedFollowUp);
@@ -1295,6 +1671,11 @@ function refreshMemoryState({ previous, workflow, lastUserMessage, appliedFollow
     question_count: newCount,
     asked_questions_normalized: Array.from(asked).slice(-30),
     stage: nextStage,
+    checklist,
+    lastQuestionKey: normalizeKey(
+      followUpKey ?? (appliedFollowUp ? inferChecklistKeyFromQuestion(appliedFollowUp) : previous.lastQuestionKey ?? null)
+    ),
+    lastQuestionText: appliedFollowUp && appliedFollowUp.trim().length > 0 ? appliedFollowUp : previous.lastQuestionText ?? null,
   };
 }
 
@@ -1359,16 +1740,29 @@ function mergeFacts(existing: CopilotMemory["facts"], workflow: Workflow, lastUs
   return facts;
 }
 
-function computeStage(facts: CopilotMemory["facts"], questionCount: number): CopilotMemory["stage"] {
+function computeStage(
+  facts: CopilotMemory["facts"],
+  questionCount: number,
+  checklist?: ChecklistState
+): CopilotMemory["stage"] {
   if (questionCount >= 10) {
     return "done";
   }
 
-  const hasRequirements = Boolean(facts.primary_outcome || facts.trigger_cadence || facts.trigger_time);
-  const hasObjectives = Boolean(facts.primary_outcome);
-  const hasSuccess = Boolean(facts.success_criteria);
+  const confirmedOr = (key: string, fallback: boolean) => (checklist ? checklist[key]?.confirmed === true : fallback);
+
+  const hasRequirements = Boolean(
+    confirmedOr("primary_outcome", Boolean(facts.primary_outcome)) ||
+      confirmedOr("trigger_cadence", Boolean(facts.trigger_cadence)) ||
+      confirmedOr("trigger_time", Boolean(facts.trigger_time))
+  );
+  const hasObjectives = Boolean(confirmedOr("primary_outcome", Boolean(facts.primary_outcome)));
+  const hasSuccess = Boolean(confirmedOr("success_criteria", Boolean(facts.success_criteria)));
   const hasSystems = Boolean(
-    (facts.systems && facts.systems.length > 0) || facts.exception_policy || facts.human_review || facts.storage_destination
+    confirmedOr("systems", Boolean(facts.systems && facts.systems.length > 0)) ||
+      facts.exception_policy ||
+      facts.human_review ||
+      confirmedOr("storage_destination", Boolean(facts.storage_destination))
   );
 
   if (!hasRequirements) return "requirements";

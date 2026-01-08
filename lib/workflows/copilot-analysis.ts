@@ -96,12 +96,25 @@ export type CopilotMemoryFacts = {
   samples?: string | null;
 };
 
+export interface CopilotChecklistItem {
+  key: string;
+  confirmed: boolean;
+  source?: "user" | "ai" | "assumed";
+  value?: string | null;
+  evidence?: string | null;
+  confidence?: number;
+  updatedAt?: string;
+}
+
 export interface CopilotMemory {
   summary_compact: string | null;
   facts: CopilotMemoryFacts;
   question_count: number;
   asked_questions_normalized: string[];
   stage: CopilotStage;
+  checklist?: Record<string, CopilotChecklistItem>;
+  lastQuestionKey?: string | null;
+  lastQuestionText?: string | null;
 }
 
 export type BlueprintSectionProgressStatus = "not_started" | "in_progress" | "complete";
@@ -170,6 +183,9 @@ export function cloneCopilotAnalysisState(state: CopilotAnalysisState): CopilotA
           question_count: state.memory.question_count,
           asked_questions_normalized: [...state.memory.asked_questions_normalized],
           stage: state.memory.stage,
+          checklist: state.memory.checklist ? { ...state.memory.checklist } : undefined,
+          lastQuestionKey: state.memory.lastQuestionKey ?? null,
+          lastQuestionText: state.memory.lastQuestionText ?? null,
         }
       : createEmptyMemory(),
     version: state.version ?? COPILOT_ANALYSIS_VERSION,
@@ -260,6 +276,9 @@ export function createEmptyMemory(): CopilotMemory {
     question_count: 0,
     asked_questions_normalized: [],
     stage: "requirements",
+    checklist: {},
+    lastQuestionKey: null,
+    lastQuestionText: null,
   };
 }
 

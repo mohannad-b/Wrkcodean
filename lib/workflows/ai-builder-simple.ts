@@ -307,7 +307,9 @@ function preserveEssentialData(
     if (step.stepNumber) {
       existingStepsByNumber.set(step.stepNumber, step);
     }
-    existingStepsByName.set(step.name.toLowerCase().trim(), step);
+    if (typeof step.name === "string" && step.name.trim().length > 0) {
+      existingStepsByName.set(step.name.toLowerCase().trim(), step);
+    }
   });
 
   // Build map of existing branches by parent/target for ID preservation
@@ -322,9 +324,11 @@ function preserveEssentialData(
   const newSteps: BlueprintStep[] = aiSteps
     .filter((aiStep): aiStep is AIStep => Boolean(aiStep?.stepNumber))
     .map((aiStep) => {
+      const stepName = typeof aiStep.name === "string" ? aiStep.name : "";
+      const normalizedName = stepName ? stepName.toLowerCase().trim() : null;
       // Try to match by step number first, then by name
       const existingByNumber = aiStep.stepNumber ? existingStepsByNumber.get(aiStep.stepNumber) : null;
-      const existingByName = existingStepsByName.get(aiStep.name.toLowerCase().trim());
+      const existingByName = normalizedName ? existingStepsByName.get(normalizedName) : null;
       const existing = existingByNumber ?? existingByName;
 
       const stepId = existing?.id ?? randomUUID();
@@ -338,15 +342,17 @@ function preserveEssentialData(
 
       // Preserve taskIds from existing step
       const taskIds = existing?.taskIds ?? [];
+      const safeName = stepName && stepName.trim().length > 0 ? stepName : `Step ${aiStep.stepNumber ?? stepId}`;
+      const safeSummary = aiStep.description?.trim() || safeName;
 
       return {
         id: stepId,
         stepNumber: aiStep.stepNumber,
         type: stepType,
-        name: aiStep.name,
-        summary: aiStep.description?.trim() || aiStep.name,
-        description: aiStep.description?.trim() || aiStep.name,
-        goalOutcome: aiStep.description?.trim() || aiStep.name,
+        name: safeName,
+        summary: safeSummary,
+        description: safeSummary,
+        goalOutcome: safeSummary,
         responsibility: aiStep.responsibility ?? mapTypeToResponsibility(stepType),
         systemsInvolved: Array.isArray(aiStep.systemsInvolved) ? aiStep.systemsInvolved : [],
         notifications: Array.isArray(aiStep.notifications) ? aiStep.notifications : [],
