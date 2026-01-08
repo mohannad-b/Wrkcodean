@@ -34,6 +34,7 @@ interface BuildBlueprintParams {
   memorySummary?: string | null;
   memoryFacts?: Record<string, unknown>;
   onStatus?: (payload: BuildStatusUpdate) => void;
+  trace?: import("@/lib/ai/copilot-trace").CopilotTrace;
 }
 
 export type AITask = {
@@ -128,6 +129,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     memorySummary,
     memoryFacts,
     onStatus,
+    trace,
   } = params;
   const currentBlueprint = currentWorkflow ?? blueprintInput;
   const emitStatus = (phase: string, text: string) => onStatus?.({ phase, text });
@@ -149,7 +151,15 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
   ];
 
   // Log the exact prompt being sent to OpenAI for debugging
-  copilotDebug("draft_blueprint.prompt_log", {
+  const logDebug = (event: string, meta?: Record<string, unknown>) => {
+    if (trace) {
+      trace.event(event, meta, "debug");
+      return;
+    }
+    copilotDebug(event, meta);
+  };
+
+  logDebug("draft_blueprint.prompt_log", {
     model: WORKFLOW_MODEL,
     temperature: 0.3,
     messages: messages.map((msg, index) => ({
@@ -179,7 +189,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       throw new Error("OpenAI returned an empty response");
     }
 
-    copilotDebug("draft_blueprint.raw_response", content);
+    logDebug("draft_blueprint.raw_response", content);
     logger.debug("[copilot:draft-blueprint] raw_response_meta", { length: content.length });
 
     const aiResponse = parseAIResponse(content);
@@ -241,7 +251,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     const followUpQuestion =
       typeof aiResponse.followUpQuestion === "string" ? aiResponse.followUpQuestion.trim() : undefined;
 
-    copilotDebug("draft_blueprint.parsed_response", {
+    logDebug("draft_blueprint.parsed_response", {
       chatResponse,
       followUpQuestion,
       stepCount: sanitizedBlueprint.steps.length,
@@ -252,7 +262,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       fallbackApplied: sanitizedBlueprintRaw.steps.length === 0,
     });
 
-    copilotDebug("draft_blueprint.parsed_response_metrics", {
+    logDebug("draft_blueprint.parsed_response_metrics", {
       rawStepCount: normalizedSteps.length,
       sanitizedStepCount: sanitizedBlueprintRaw.steps.length,
       finalStepCount: sanitizedBlueprint.steps.length,

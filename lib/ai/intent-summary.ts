@@ -17,11 +17,12 @@ const SYSTEM_PROMPT = [
   "You produce ONLY strict JSON matching this TypeScript type:",
   "type IntentSummary = { intent_summary: string; verb?: string; object?: string; systems?: string[]; cadence?: string }",
   "Rules:",
-  "- intent_summary <= 90 chars, concise, readable, action/progress phrasing",
-  "- The intent_summary must read like an operator status update (e.g., 'Mapping your workflow to crawl Kayak for rental prices', 'Adding a daily 8am schedule', 'Syncing systems → Generating steps').",
-  "- Do NOT output generic filler such as 'working on this', 'processing', 'reviewing', or 'got it'.",
-  "- Prefer 'System A → System B → Outcome' phrasing when possible.",
-  "- Use context from previous assistant prompt if provided to reflect what is being acted on.",
+  "- Focus on the DELTA requested in the latest user message. Describe what is being added/updated/changed now.",
+  "- If hasExistingWorkflow=false (initial build), you may summarize the requested workflow; otherwise, DO NOT restate the whole workflow—only the requested change.",
+  "- intent_summary <= 70 chars, concise, readable, action/progress phrasing (e.g., 'Adding PDF report generation', 'Updating schedule to 8am daily').",
+  "- Do NOT truncate mid-word; drop trailing words if needed to stay under 70 chars.",
+  "- Use verbs like 'Adding', 'Updating', 'Including', 'Changing'.",
+  "- No filler or acknowledgements (no 'Got it', 'working on this', 'processing').",
   "- Do NOT include emails, phone numbers, URLs, IDs, credentials, or user-provided tokens",
   "- Avoid guessing; omit fields if unclear",
   "- systems max 4 entries, short names only (no URLs, no secrets)",
@@ -41,9 +42,11 @@ function redactInput(input: string): string {
 
 function sanitizeSummary(candidate: IntentSummary): IntentSummary | null {
   if (!candidate || typeof candidate !== "object") return null;
-  const intentSummary = typeof candidate.intent_summary === "string" ? candidate.intent_summary.trim() : "";
+  let intentSummary = typeof candidate.intent_summary === "string" ? candidate.intent_summary.trim() : "";
   if (!intentSummary) return null;
-  const cappedIntent = intentSummary.slice(0, 90);
+  intentSummary = intentSummary.replace(/^got it\s*[—–-]?\s*/i, "").trim();
+  const cappedIntent = clampIntent(intentSummary, 70);
+  if (!cappedIntent) return null;
 
   const safe: IntentSummary = { intent_summary: cappedIntent };
 
@@ -73,96 +76,71 @@ function sanitizeSummary(candidate: IntentSummary): IntentSummary | null {
 }
 
 type IntentContext = {
-  previousAssistantMessage?: string;
   intakeNotes?: string;
+  workflowSummary?: string;
+  contextSummary?: string;
+  hasExistingWorkflow?: boolean;
 };
 
-function truncateWithEllipsis(value: string, limit: number): string {
-  if (value.length <= limit) return value;
-  return `${value.slice(0, limit - 1)}…`;
-}
-
-function deriveDeterministicFallback(userMessage: string): IntentSummary {
-  const message = userMessage ?? "";
-  const lower = message.toLowerCase();
-
-  const ensureAction = (text: string) => (text.endsWith("…") ? text : `${text}…`);
-
-  const timeMatch = message.match(/\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)?\b/i);
-  const retryCountMatch = message.match(/(\d+)\s*(?:x|times|attempts|retries?)/i);
-  const retryCount = retryCountMatch ? retryCountMatch[1] : "3";
-  const uploadTargetMatch =
-    message.match(/upload(?:ing)?\s+(?:to\s+)?([A-Za-z0-9][\w-]{0,40})/i) ??
-    message.match(/to\s+([A-Za-z0-9][\w-]{0,40})\s+for\s+upload/i);
-
-  if (/retry|retries|failover|fallback/.test(lower)) {
-    return {
-      intent_summary: truncateWithEllipsis(ensureAction(`Adding retry policy (up to ${retryCount} attempts)`), 90),
-    };
+function clampIntent(value: string, limit = 70): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= limit) return trimmed;
+  const slice = trimmed.slice(0, limit);
+  const lastSpace = slice.lastIndexOf(" ");
+  if (lastSpace > 40) {
+    return slice.slice(0, lastSpace).trim();
   }
-
-  if (/daily|schedule/.test(lower) || timeMatch) {
-    const timeText = timeMatch ? timeMatch[0] : "8am";
-    return {
-      intent_summary: truncateWithEllipsis(ensureAction(`Updating schedule (daily at ${timeText})`), 90),
-    };
-  }
-
-  if (/notify|notification|email|slack|teams|sms|text/.test(lower)) {
-    const channelMatch = lower.match(/email|slack|teams|sms|text|pagerduty|webhook/);
-    const channel = channelMatch ? channelMatch[0] : "preferred channel";
-    return {
-      intent_summary: truncateWithEllipsis(ensureAction(`Adding notification step via ${channel}`), 90),
-    };
-  }
-
-  if (/upload/.test(lower)) {
-    const target = uploadTargetMatch?.[1];
-    if (target) {
-      return {
-        intent_summary: truncateWithEllipsis(ensureAction(`Adding upload to ${target}`), 90),
-      };
-    }
-    return {
-      intent_summary: truncateWithEllipsis(ensureAction("Adding upload step"), 90),
-    };
-  }
-
-  return {
-    intent_summary: truncateWithEllipsis(
-      ensureAction("Updating workflow based on your latest instructions"),
-      90
-    ),
-  };
+  return slice.trim();
 }
 
 export async function generateIntentSummary(
   userMessage: string,
   context?: IntentContext
 ): Promise<IntentSummary | null> {
-  const deterministicFallback = deriveDeterministicFallback(userMessage);
   if (!openai) {
-    console.debug("intent_summary.deterministic_fallback", {
+    console.debug("intent_summary.skipped", {
       reason: "openai_unavailable",
-      intent: deterministicFallback.intent_summary,
     });
-    return deterministicFallback;
+    return null;
   }
 
   const redacted = redactInput(userMessage);
-  const redactedPrev = context?.previousAssistantMessage ? redactInput(context.previousAssistantMessage) : undefined;
   const redactedIntake = context?.intakeNotes ? redactInput(context.intakeNotes) : undefined;
+  const redactedWorkflow = context?.workflowSummary ? redactInput(context.workflowSummary) : undefined;
+  const redactedContext = context?.contextSummary ? redactInput(context.contextSummary) : undefined;
 
   try {
+    const messages: { role: "system" | "user"; content: string }[] = [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: `Latest user request:\n${redacted}` },
+    ];
+
+    if (typeof context?.hasExistingWorkflow === "boolean") {
+      messages.push({
+        role: "user",
+        content: `Has existing workflow: ${context.hasExistingWorkflow ? "true" : "false"}`,
+      });
+    }
+
+    if (redactedWorkflow) {
+      messages.push({
+        role: "user",
+        content: `Existing workflow (context only, do not restate unless initial build):\n${redactedWorkflow}`,
+      });
+    }
+
+    if (redactedContext) {
+      messages.push({ role: "user", content: redactedContext });
+    }
+
+    if (redactedIntake) {
+      messages.push({ role: "user", content: `Intake notes:\n${redactedIntake}` });
+    }
+
     const completion = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL_INTENT ?? "gpt-4o-mini",
       temperature: 0,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: redacted },
-        redactedPrev ? { role: "user", content: `Previous assistant message:\n${redactedPrev}` } : null,
-        redactedIntake ? { role: "user", content: `Intake notes:\n${redactedIntake}` } : null,
-      ].filter(Boolean) as { role: "system" | "user"; content: string }[],
+      messages,
       max_tokens: 200,
     });
 
@@ -172,26 +150,23 @@ export async function generateIntentSummary(
     try {
       parsed = JSON.parse(cleaned);
     } catch {
-      console.debug("intent_summary.deterministic_fallback", {
+      console.debug("intent_summary.failed", {
         reason: "json_parse_failed",
-        intent: deterministicFallback.intent_summary,
       });
-      return deterministicFallback;
+      return null;
     }
     const sanitized = sanitizeSummary(parsed as IntentSummary);
     if (sanitized) return sanitized;
-    console.debug("intent_summary.deterministic_fallback", {
+    console.debug("intent_summary.failed", {
       reason: "sanitize_failed",
-      intent: deterministicFallback.intent_summary,
     });
-    return deterministicFallback;
+    return null;
   } catch (error) {
-    console.debug("intent_summary.deterministic_fallback", {
+    console.debug("intent_summary.failed", {
       reason: "openai_error",
       error: error instanceof Error ? error.message : String(error),
-      intent: deterministicFallback.intent_summary,
     });
-    return deterministicFallback;
+    return null;
   }
 }
 

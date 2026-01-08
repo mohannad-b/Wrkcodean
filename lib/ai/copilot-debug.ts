@@ -21,7 +21,27 @@ function sanitize(value: unknown): unknown {
 
 export function copilotDebug(message: string, payload?: unknown) {
   if (!TRACE_ENABLED) return;
-  defaultCopilotTrace.event(message, payload ? { payload: sanitize(payload) } : undefined, "debug");
+  const candidate = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : undefined;
+  const runId = candidate?.runId ?? (candidate as any)?.payload?.runId;
+  const requestId = candidate?.requestId ?? (candidate as any)?.payload?.requestId;
+  const automationVersionId =
+    (candidate as any)?.automationVersionId ?? (candidate as any)?.payload?.automationVersionId;
+  const clientMessageId = (candidate as any)?.clientMessageId ?? (candidate as any)?.payload?.clientMessageId;
+  const phase = candidate?.phase ?? (candidate as any)?.payload?.phase;
+
+  const hasContext = Boolean(runId || requestId || automationVersionId || clientMessageId || phase);
+  const trace = hasContext
+    ? createCopilotTrace({
+        runId,
+        requestId,
+        automationVersionId,
+        clientMessageId,
+        phase,
+        source: "copilot",
+      })
+    : defaultCopilotTrace;
+
+  trace.event(message, payload ? { payload: sanitize(payload) } : undefined, "debug");
 }
 
 export function createCopilotDebugTrace(context: { runId?: string; messageId?: string; phase?: string; source?: string } = {}) {

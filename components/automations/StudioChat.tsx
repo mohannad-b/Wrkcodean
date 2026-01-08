@@ -14,6 +14,7 @@ import { workflowToNodes } from "@/lib/workflows/canvas-utils";
 import type { CopilotAnalysisState, WorkflowProgressSnapshot } from "@/lib/workflows/copilot-analysis";
 import type { Task } from "@/db/schema";
 import { logger } from "@/lib/logger";
+import { appendDisplayLine } from "./progress-reducer";
 
 const DEBUG_UI_ENABLED =
   process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_DEBUG_COPILOT_UI === "true";
@@ -130,6 +131,7 @@ export function StudioChat({
   const runSeenServerStatusRef = useRef<Map<string, boolean>>(new Map());
   const runCompletedRef = useRef<Map<string, boolean>>(new Map());
   const lastSeqByRunIdRef = useRef<Map<string, number>>(new Map());
+  const sseFirstChunkByRunIdRef = useRef<Map<string, boolean>>(new Map());
   const runSseEventsRef = useRef<
     Map<
       string,
@@ -138,16 +140,6 @@ export function StudioChat({
   >(new Map());
   const [, forceSseDebugRender] = useState(0);
   const FORCE_JSON = false;
-  const PHASE_COPY: Record<RunPhase, string> = {
-    connected: "Connected — starting…",
-    understanding: "Understanding your request…",
-    drafting: "Drafting workflow steps…",
-    structuring: "Structuring and numbering…",
-    drawing: "Drawing flowchart…",
-    saving: "Saving draft…",
-    done: "Run complete",
-    error: "Run failed. Retry?",
-  };
   const runUsedServerMessageRef = useRef<Map<string, boolean>>(new Map());
   const runCopySourceLoggedRef = useRef<Map<string, boolean>>(new Map());
 
@@ -314,12 +306,11 @@ export function StudioChat({
       }
 
       const isRetry = Boolean(options?.reuseRunId);
-      const optimisticMessageId = isRetry ? null : `temp-${Date.now()}`;
+      const optimisticMessageId = isRetry ? options?.reuseRunId ?? null : `temp-${Date.now()}`;
       const requestId = pendingRequestIdRef.current + 1;
       pendingRequestIdRef.current = requestId;
-      const runId = options?.reuseRunId ?? `run-${optimisticMessageId ?? Date.now()}`;
-      const clientMessageId =
-        options?.reuseRunId && isRetry ? `${runId}-retry-${Date.now()}` : optimisticMessageId ?? `msg-${Date.now()}`;
+      const runId = options?.reuseRunId ?? optimisticMessageId ?? `temp-${Date.now()}`;
+      const clientMessageId = options?.reuseRunId && isRetry ? `${runId}-retry-${Date.now()}` : runId;
       const initialText = source === "seed" ? "Understanding…" : isRetry ? "Understanding…" : "Understanding…";
       fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
         method: "POST",
@@ -365,10 +356,11 @@ export function StudioChat({
         collapsed: false,
         debugLines: [],
         runId,
-        displayLines: [initialText],
+        displayLines: [],
         completed: false,
       };
       runSeenServerStatusRef.current.set(runId, false);
+      sseFirstChunkByRunIdRef.current.set(runId, false);
       lastSeqByRunIdRef.current.set(runId, 0);
       if (DEBUG_UI_ENABLED) {
         runSseEventsRef.current.set(runId, []);
@@ -404,11 +396,12 @@ export function StudioChat({
       });
 
       const updateRunMessage = (
+        targetRunId: string,
         updater: (status: NonNullable<CopilotMessage["runStatus"]>) => CopilotMessage["runStatus"]
       ) => {
         setMessages((prev) => {
           const next = dropTransientMessages(prev).map((msg) => {
-            if (msg.id !== runId || msg.kind !== "system_run") return msg;
+            if (msg.id !== targetRunId || msg.kind !== "system_run") return msg;
             const currentStatus: NonNullable<CopilotMessage["runStatus"]> =
               msg.runStatus ?? {
                 phase: "understanding",
@@ -419,7 +412,7 @@ export function StudioChat({
                 debugDetails: null,
                 collapsed: false,
                 debugLines: [],
-                runId,
+                runId: targetRunId,
               };
             return { ...msg, runStatus: updater(currentStatus) };
           });
@@ -427,9 +420,9 @@ export function StudioChat({
         });
       };
 
-      const appendDebugLine = (line: string) => {
+      const appendDebugLine = (line: string, targetRunId: string = runId) => {
         if (!DEBUG_UI_ENABLED) return;
-        updateRunMessage((status) => {
+        updateRunMessage(targetRunId, (status) => {
           const nextLines = [...(status.debugLines ?? []), line.slice(0, 160)];
           return {
             ...status,
@@ -498,21 +491,13 @@ export function StudioChat({
         return true;
       };
 
-      const normalizeLine = (line: string) =>
-        line
-          .replace(/\u2026/g, "...")
-          .replace(/\.{3,}/g, "...")
-          .replace(/\s+/g, " ")
-          .trim();
-
       const pushDisplayLine = (line: string, targetRunId: string) => {
         if (runCompletedRef.current.get(targetRunId)) return;
-        updateRunMessage((status) => {
+        updateRunMessage(targetRunId, (status) => {
           if (status.completed) return status;
           const lines = [...(status.displayLines ?? [])];
-          const normIncoming = normalizeLine(line);
-          const last = lines.length ? normalizeLine(lines[lines.length - 1]) : null;
-          if (last === normIncoming) {
+          const nextLines = appendDisplayLine(lines, line);
+          if (nextLines === lines) {
             // #region agent log
             fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
               method: "POST",
@@ -530,25 +515,6 @@ export function StudioChat({
             // #endregion
             return { ...status, text: line, displayLines: lines };
           }
-          if (lines.length === 1 && normalizeLine(lines[0]) === normIncoming) {
-            // #region agent log
-            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                sessionId: "debug-session",
-                runId,
-                hypothesisId: "H4-display",
-                location: "StudioChat.tsx:pushDisplayLine",
-                message: "replace initial fallback",
-                data: { targetRunId, line },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-            // #endregion
-            return { ...status, text: line, displayLines: [line] };
-          }
-          lines.push(line);
           // #region agent log
           fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
             method: "POST",
@@ -559,12 +525,12 @@ export function StudioChat({
               hypothesisId: "H4-display",
               location: "StudioChat.tsx:pushDisplayLine",
               message: "line added",
-              data: { targetRunId, line, count: lines.length },
+              data: { targetRunId, line, count: nextLines.length },
               timestamp: Date.now(),
             }),
           }).catch(() => {});
           // #endregion
-          return { ...status, text: line, displayLines: lines };
+          return { ...status, text: line, displayLines: nextLines };
         });
       };
 
@@ -601,7 +567,7 @@ export function StudioChat({
         };
         const mappedPhase = payload.phase && phaseMap[payload.phase] ? phaseMap[payload.phase] : undefined;
         if (mappedPhase) {
-          updateRunMessage((status) => ({ ...status, phase: mappedPhase }));
+          updateRunMessage(targetRunId, (status) => ({ ...status, phase: mappedPhase }));
         }
         if (payload.phase && !mappedPhase) {
           fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
@@ -622,11 +588,6 @@ export function StudioChat({
         clearHeartbeatTimers(targetRunId);
         const trimmedMessage = payload.message?.trim() ?? "";
         const useServerMessage = trimmedMessage.length > 0;
-        let displayText = useServerMessage
-          ? trimmedMessage
-          : mappedPhase && PHASE_COPY[mappedPhase]
-          ? PHASE_COPY[mappedPhase]
-          : PHASE_COPY[mappedPhase ?? "understanding"] ?? trimmedMessage;
         if (useServerMessage) {
           const already = runUsedServerMessageRef.current.get(targetRunId) ?? false;
           runUsedServerMessageRef.current.set(targetRunId, true);
@@ -646,26 +607,11 @@ export function StudioChat({
             }).catch(() => {});
             runCopySourceLoggedRef.current.set(targetRunId, true);
           }
-        } else if (!runCopySourceLoggedRef.current.get(targetRunId)) {
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sessionId: "debug-session",
-              runId,
-              hypothesisId: "H1-status-flow",
-              location: "StudioChat.tsx:applyStatusFromEvent",
-              message: "copilot_chat.progress_copy_source",
-              data: { source: "phase_copy" },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          runCopySourceLoggedRef.current.set(targetRunId, true);
         }
-        updateRunMessage((status) => ({
+        updateRunMessage(targetRunId, (status) => ({
           ...status,
           phase: mappedPhase ?? status.phase,
-          runId: payload.runId ?? status.runId ?? runId,
+          runId: payload.runId ?? status.runId ?? targetRunId,
           errorMessage: mappedPhase === "error" ? payload.message ?? status.errorMessage : status.errorMessage,
           retryable: mappedPhase === "error" ? true : status.retryable,
           collapsed: false,
@@ -673,7 +619,9 @@ export function StudioChat({
         if (payload.runId && payload.runId !== runId) {
           appendDebugLine(`event runId: ${payload.runId}`);
         }
-        pushDisplayLine(displayText, targetRunId);
+        if (useServerMessage) {
+          pushDisplayLine(trimmedMessage, targetRunId);
+        }
       };
 
       const applyErrorFromEvent = (payload: { message?: string; runId?: string; seq?: number }) => {
@@ -699,7 +647,7 @@ export function StudioChat({
           return;
         }
         sseTerminalReceived = true;
-        updateRunMessage((status) => ({
+        updateRunMessage(targetRunId, (status) => ({
           ...status,
           phase: "error",
           errorMessage: message,
@@ -733,7 +681,6 @@ export function StudioChat({
       let nodeCount: number | null = null;
       let persistenceError = false;
       let receivedTerminalEvent = false;
-      let sseFirstChunkReceived = false;
       let sseTerminalReceived = false;
       let metricsLogged = false;
       const fetchStartedAt = Date.now();
@@ -804,7 +751,7 @@ export function StudioChat({
             if (timers.slowest) window.clearTimeout(timers.slowest);
             runHeartbeatTimersRef.current.delete(responseRunId);
           }
-        } else if (sseTerminalReceived || sseFirstChunkReceived) {
+        } else if (sseTerminalReceived || (sseFirstChunkByRunIdRef.current.get(responseRunId) ?? false)) {
           // #region agent log
           fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
             method: "POST",
@@ -856,7 +803,13 @@ export function StudioChat({
             hypothesisId: "H2-terminal",
             location: "StudioChat.tsx:applyResultPayload",
             message: "result event processed",
-            data: { responseRunId, seq: rawData.seq, source, sseTerminalReceived, sseFirstChunkReceived },
+            data: {
+              responseRunId,
+              seq: rawData.seq,
+              source,
+              sseTerminalReceived,
+              sseFirstChunkReceived: sseFirstChunkByRunIdRef.current.get(responseRunId) ?? false,
+            },
             timestamp: Date.now(),
           }),
         }).catch(() => {});
@@ -875,15 +828,15 @@ export function StudioChat({
           ...rawData,
           workflow: normalizedWorkflow,
         };
-        appendDebugLine(`runId: ${responseRunId}`);
-        updateRunMessage((status) => ({ ...status, runId: responseRunId }));
+        appendDebugLine(`runId: ${responseRunId}`, responseRunId);
+        updateRunMessage(responseRunId, (status) => ({ ...status, runId: responseRunId }));
 
         const isLatest = requestId === pendingRequestIdRef.current;
 
         if (data.workflow && onWorkflowUpdates && isLatest) {
           stepCount = data.workflow.steps?.length ?? 0;
           if (stepCount === 0) {
-            updateRunMessage((status) => ({
+            updateRunMessage(responseRunId, (status) => ({
               ...status,
               phase: "error",
               errorMessage: "No steps generated — retry",
@@ -911,7 +864,7 @@ export function StudioChat({
             }
             onWorkflowUpdatingChange?.(true);
             onWorkflowUpdates(data.workflow);
-            updateRunMessage((status) => ({
+            updateRunMessage(responseRunId, (status) => ({
               ...status,
               phase: "drawing",
               stepCount,
@@ -946,7 +899,7 @@ export function StudioChat({
 
         persistenceError = Boolean(data.persistenceError);
         if (persistenceError) {
-          updateRunMessage((status) => ({
+          updateRunMessage(responseRunId, (status) => ({
             ...status,
             persistenceError: true,
             debugDetails: {
@@ -971,7 +924,7 @@ export function StudioChat({
         }
 
         const finalPhase: RunPhase = stepCount === 0 ? "error" : "done";
-        updateRunMessage((status) => ({
+        updateRunMessage(responseRunId, (status) => ({
           ...status,
           phase: finalPhase,
           errorMessage: finalPhase === "error" ? status.errorMessage ?? "Run failed" : null,
@@ -987,7 +940,7 @@ export function StudioChat({
               : "Run failed. Retry?";
           pushDisplayLine(terminalLine, responseRunId);
           runCompletedRef.current.set(responseRunId, true);
-          updateRunMessage((status) => ({
+          updateRunMessage(responseRunId, (status) => ({
             ...status,
             completed: true,
           }));
@@ -1110,6 +1063,7 @@ export function StudioChat({
               body: JSON.stringify({
                 content: trimmed,
                 clientMessageId,
+                runId,
               }),
               signal: controller.signal,
             }
@@ -1154,7 +1108,7 @@ export function StudioChat({
             terminalSource = "auth_error";
             pushDisplayLine(authMessage, runId);
             runCompletedRef.current.set(runId, true);
-            updateRunMessage((status) => ({ ...status, completed: true, phase: "error", errorMessage: authMessage }));
+            updateRunMessage(runId, (status) => ({ ...status, completed: true, phase: "error", errorMessage: authMessage }));
             logStreamMetrics();
             return false;
           }
@@ -1253,7 +1207,7 @@ export function StudioChat({
               idleArmed = true;
             }
             if (value && value.length > 0) {
-              sseFirstChunkReceived = true;
+              sseFirstChunkByRunIdRef.current.set(runId, true);
               if (firstChunkMs === null) {
                 firstChunkMs = Date.now() - fetchStartedAt;
               }
@@ -1407,7 +1361,7 @@ export function StudioChat({
       };
 
       try {
-        updateRunMessage((status) => ({
+        updateRunMessage(runId, (status) => ({
           ...status,
           phase: "drafting",
           errorMessage: null,
@@ -1419,31 +1373,17 @@ export function StudioChat({
 
         const slowTimer = window.setTimeout(() => {
           if (runSeenServerStatusRef.current.get(runId)) return;
-          updateRunMessage((status) => ({
-            ...status,
-            text: status.displayLines?.length ? status.text : "Still working…",
-          }));
+          updateRunMessage(runId, (status) => {
+            if ((status.displayLines?.length ?? 0) > 0) return status;
+            return { ...status, text: "Still working…" };
+          });
         }, 800);
-        const slowerTimer = window.setTimeout(() => {
-          if (runSeenServerStatusRef.current.get(runId)) return;
-          updateRunMessage((status) => ({
-            ...status,
-            text: status.displayLines?.length ? status.text : "Pulling systems + edge cases…",
-          }));
-        }, 3000);
-        const slowestTimer = window.setTimeout(() => {
-          if (runSeenServerStatusRef.current.get(runId)) return;
-          updateRunMessage((status) => ({
-            ...status,
-            text: status.displayLines?.length ? status.text : "Almost there…",
-          }));
-        }, 8000);
-        runHeartbeatTimersRef.current.set(runId, { slow: slowTimer, slower: slowerTimer, slowest: slowestTimer });
+        runHeartbeatTimersRef.current.set(runId, { slow: slowTimer });
 
         const streamFinished = await attemptStreaming();
 
         if (!streamFinished) {
-          if (sseFirstChunkReceived || sseTerminalReceived) {
+          if ((sseFirstChunkByRunIdRef.current.get(runId) ?? false) || sseTerminalReceived) {
             fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1453,7 +1393,7 @@ export function StudioChat({
                 hypothesisId: "H2-terminal",
                 location: "StudioChat.tsx:sendMessage",
                 message: "copilot_chat.fallback_blocked_due_to_sse",
-                data: { sseFirstChunkReceived, sseTerminalReceived },
+                data: { sseFirstChunkReceived: sseFirstChunkByRunIdRef.current.get(runId) ?? false, sseTerminalReceived },
                 timestamp: Date.now(),
               }),
             }).catch(() => {});
@@ -1466,6 +1406,7 @@ export function StudioChat({
             body: JSON.stringify({
               content: trimmed,
               clientMessageId,
+              runId,
             }),
           });
 
@@ -1500,7 +1441,7 @@ export function StudioChat({
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to send message. Try again.";
         logger.error("[STUDIO-CHAT] Failed to process message:", error);
-        updateRunMessage((status) => ({
+        updateRunMessage(runId, (status) => ({
           ...status,
           phase: "error",
           text: "Error — retry",
@@ -1820,17 +1761,21 @@ function RunBubble({
       >
         <div className="flex items-center justify-between text-xs font-semibold mb-1">
           <span className="text-gray-900">Copilot run</span>
-          <span className="uppercase tracking-wide text-gray-500">{status.phase}</span>
         </div>
-        {/* TODO: show full history while debugging; reintroduce cap/scroll once sequence is confirmed */}
-        <div className="text-xs text-gray-700 space-y-1">
-          {displayLines.map((line, idx) => (
-            <div className="flex items-start gap-2" key={`${message.id}-line-${idx}`}>
-              <span className="mt-1 block h-1.5 w-1.5 rounded-full bg-gray-400" />
-              <span className="font-medium">{line}</span>
-            </div>
-          ))}
-        </div>
+        {displayLines.length === 0 ? (
+          <div className="text-xs text-gray-700">
+            <span className="font-medium">{status.text}</span>
+          </div>
+        ) : (
+          <div className="text-xs text-gray-700 space-y-1">
+            {displayLines.map((line, idx) => (
+              <div className="flex items-start gap-2" key={`${message.id}-line-${idx}`}>
+                <span className="mt-1 block h-1.5 w-1.5 rounded-full bg-gray-400" />
+                <span className="font-medium">{line}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {status.phase === "done" && status.stepCount !== undefined ? (
           <div className="mt-2 text-xs font-semibold text-emerald-700">Flow updated ({status.stepCount} steps)</div>
@@ -1936,7 +1881,16 @@ function RunBubble({
             ) : null}
           </div>
         ) : null}
-
+        <div className="mt-4 flex items-center gap-2">
+          <span
+            className={cn(
+              "text-[11px] uppercase tracking-wide text-gray-500",
+              status.phase !== "done" && status.phase !== "error" ? "animate-pulse" : ""
+            )}
+          >
+            {status.phase}
+          </span>
+        </div>
       </div>
       <span className="text-[10px] text-gray-400 px-1 block mt-1">{formatTimestamp(message.createdAt)}</span>
     </div>

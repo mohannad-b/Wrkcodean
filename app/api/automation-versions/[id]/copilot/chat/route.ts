@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
-import { randomUUID } from "crypto";
+import { randomUUID, createHash } from "crypto";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
 import { buildRateLimitKey, ensureRateLimit } from "@/lib/rate-limit";
@@ -38,12 +38,14 @@ import { createCopilotRun, getCopilotRunByClientMessageId } from "@/lib/services
 import { logger } from "@/lib/logger";
 import { createSSEStream } from "@/lib/http/sse";
 import { generateIntentSummary, type IntentSummary } from "@/lib/ai/intent-summary";
+import { ProgressPlanner, type ProgressEvent, validateStatusPayload } from "../progress-planner";
 
 const ChatRequestSchema = z.object({
   content: z.string().min(1).max(8000),
   intakeNotes: z.string().max(20000).optional().nullable(),
   snippets: z.array(z.string().max(4000)).optional(),
   clientMessageId: z.string().max(128).optional(),
+  runId: z.string().max(128),
 });
 
 type ChatRequest = z.infer<typeof ChatRequestSchema>;
@@ -80,11 +82,12 @@ type CopilotRunResult = Awaited<ReturnType<typeof buildIdempotentResponse>> & {
   persistenceError?: boolean;
 };
 
-type CopilotStatusPayload = {
+export type CopilotStatusPayload = {
   runId: string;
   requestId: string;
   phase: string;
   message: string;
+  seq?: number;
   meta?: Record<string, unknown>;
 };
 
@@ -94,6 +97,15 @@ type CopilotErrorPayload = {
   message: string;
   code?: number | string;
 };
+
+const INTENT_CACHE_TTL_MS = 15 * 60 * 1000;
+const intentCache = new Map<
+  string,
+  {
+    summary: IntentSummary;
+    cachedAt: number;
+  }
+>();
 
 type CopilotCallbacks = {
   onStatus?: (payload: CopilotStatusPayload) => void;
@@ -106,94 +118,6 @@ function isStreamRequest(request: Request) {
   const streamParam = url.searchParams.get("stream");
   const accept = request.headers.get("accept") ?? "";
   return streamParam === "1" || accept.includes("text/event-stream");
-}
-
-function deriveScheduleStatus(message: string): string | null {
-  const lower = message.toLowerCase();
-  const hasDaily = /daily/.test(lower);
-  const hasWeekly = /weekly/.test(lower);
-  const hasEvery = /\bevery\b/.test(lower);
-  const timeMatch = message.match(/\b(\d{1,2})(:\d{2})?\s?(am|pm)?\b/i);
-  const cronish = /(\*|\d+)\s+(\*|\d+)\s+(\*|\d+)\s+(\*|\d+)\s+(\*|\d+)/.test(message);
-  if (!(hasDaily || hasWeekly || hasEvery || timeMatch || cronish)) {
-    return null;
-  }
-  const timeText = timeMatch ? timeMatch[0].trim() : null;
-  if (hasDaily && timeText) return `Adding a daily schedule (${timeText})`;
-  if (hasDaily) return "Adding a daily schedule";
-  if (hasWeekly && timeText) return `Adding a weekly schedule (${timeText})`;
-  if (hasWeekly) return "Adding a weekly schedule";
-  if (cronish) return "Setting schedule from cron expression";
-  if (hasEvery && timeText) return `Setting schedule: ${message.trim()}`;
-  if (timeText) return `Setting schedule: ${timeText}`;
-  return `Setting schedule: ${message.trim()}`;
-}
-
-function isSummaryRelevant(summary: string, userMessage: string): boolean {
-  const STOPWORDS = new Set([
-    "from",
-    "with",
-    "into",
-    "data",
-    "flow",
-    "workflow",
-    "process",
-    "send",
-    "sending",
-    "add",
-    "adding",
-    "pulling",
-    "using",
-    "this",
-    "that",
-    "your",
-    "work",
-    "steps",
-    "step",
-  ]);
-
-  const tokens = userMessage
-    .toLowerCase()
-    .split(/[^a-z0-9]+/i)
-    .filter((w) => w.length >= 4 && !STOPWORDS.has(w));
-  if (tokens.length === 0) return true;
-
-  const lowerSummary = summary.toLowerCase();
-  const matches = tokens.filter((t) => lowerSummary.includes(t));
-  return matches.length > 0;
-}
-
-function deriveEditIntent(message: string, options?: { fallback?: string }): string {
-  const fallback = options?.fallback ?? "Updating your workflow…";
-  if (!message || message.trim().length === 0) return fallback;
-
-  const ensureEllipsis = (value: string) => (value.endsWith("…") ? value : `${value}…`);
-  const normalized = message.toLowerCase();
-  const scheduleIntent = deriveScheduleStatus(message);
-  if (scheduleIntent) return ensureEllipsis(scheduleIntent);
-
-  if (/retry|retries|fallback|failover/.test(normalized)) {
-    return ensureEllipsis("Adding retries and fallback paths");
-  }
-  if (/rename|re-number|renumber/.test(normalized)) {
-    return ensureEllipsis("Renaming steps and re-numbering");
-  }
-  if (/(map|mapping|sync|transform|convert).*(field|column|property|data)/.test(normalized)) {
-    return ensureEllipsis("Mapping fields into your outputs");
-  }
-  if (/template/.test(normalized) && /(sms|email|message|notification)/.test(normalized)) {
-    return ensureEllipsis("Updating templates with mapped fields");
-  }
-  if (/branch|path|conditional|decision/.test(normalized)) {
-    return ensureEllipsis("Updating branch logic and step graph");
-  }
-  if (/input|form|capture|collect/.test(normalized)) {
-    return ensureEllipsis("Recomputing required inputs");
-  }
-
-  const snippet = message.trim().replace(/\s+/g, " ");
-  const compact = snippet.length > 120 ? `${snippet.slice(0, 117)}…` : snippet;
-  return ensureEllipsis(`Updating workflow: ${compact}`);
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<{ result: T | null; timedOut: boolean }> {
@@ -216,6 +140,58 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<{
       // No-op: caller handles fallback behavior
     }
   }
+}
+
+function hashIntentValue(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function buildIntentCacheKey(params: {
+  automationVersionId: string;
+  userMessage: string;
+  workflowUpdatedAt?: string | null;
+  workflowSummary?: string | null;
+  contextSummary?: string | null;
+  hasExistingWorkflow?: boolean;
+  intakeNotes?: string | null | undefined;
+}): string {
+  const parts = [
+    params.automationVersionId,
+    params.userMessage,
+    params.workflowUpdatedAt ?? "workflow-updated-at-missing",
+    params.workflowSummary ?? "workflow-summary-missing",
+    params.contextSummary ?? "context-summary-missing",
+    String(params.hasExistingWorkflow ?? "unknown"),
+  ];
+  if (params.intakeNotes) {
+    parts.push(hashIntentValue(params.intakeNotes));
+  }
+  return hashIntentValue(parts.join("|"));
+}
+
+function getCachedIntent(key: string): IntentSummary | null {
+  const cached = intentCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAt > INTENT_CACHE_TTL_MS) {
+    intentCache.delete(key);
+    return null;
+  }
+  return cached.summary;
+}
+
+function setCachedIntent(key: string, summary: IntentSummary) {
+  intentCache.set(key, { summary, cachedAt: Date.now() });
+}
+
+function shouldEmitIntentUpgrade(summary: string | null | undefined, generic: string): boolean {
+  if (!summary) return false;
+  const trimmed = summary.trim();
+  if (!trimmed) return false;
+  const normalized = trimmed.toLowerCase();
+  const genericNormalized = generic.trim().toLowerCase();
+  if (normalized === genericNormalized) return false;
+  if (normalized.startsWith(genericNormalized)) return false;
+  return true;
 }
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
@@ -285,7 +261,10 @@ export async function POST(request: Request, { params }: { params: { id: string 
         : undefined;
 
     const clientMessageId = payload.clientMessageId?.trim();
-    const runId = clientMessageId || randomUUID();
+    const runId = payload.runId?.trim() ?? clientMessageId;
+    if (!runId) {
+      throw new ApiError(400, "runId is required");
+    }
 
     if (streaming && sse) {
       (async () => {
@@ -293,12 +272,6 @@ export async function POST(request: Request, { params }: { params: { id: string 
         let statusCount = 0;
         copilotDebug("copilot_chat.sse_runner_started", { runId });
         try {
-          await sse.send("status", {
-            runId,
-            requestId: "bootstrap",
-            phase: "connected",
-            message: "Connected — starting…",
-          });
           await runCopilotChat({
             request,
             params,
@@ -377,7 +350,11 @@ async function runCopilotChat({
 }): Promise<CopilotRunResult> {
   void request;
   const clientMessageId = payload.clientMessageId?.trim();
-  const runId = runIdOverride || clientMessageId || randomUUID();
+  const runIdCandidate = runIdOverride || payload.runId?.trim() || clientMessageId;
+  if (!runIdCandidate) {
+    throw new ApiError(400, "runId is required");
+  }
+  const runId: string = runIdCandidate;
   const requestId = randomUUID();
   const baseTrace = createCopilotTrace({
     runId,
@@ -389,12 +366,19 @@ async function runCopilotChat({
   });
   baseTrace.event("run.started", { automationVersionId: params.id });
 
-  const clampStatus = (value: string) => (value.length > 110 ? `${value.slice(0, 107)}...` : value);
-  const emitStatus = (phase: string, message: string, meta?: Record<string, unknown>) =>
-    callbacks?.onStatus?.({ runId, requestId, phase, message: clampStatus(message), meta });
+  const planner = new ProgressPlanner({
+    runId,
+    requestId,
+    onEmit: (payload: ProgressEvent) => {
+      if (!validateStatusPayload(payload)) {
+        logger.warn("Invalid status payload skipped", payload);
+        return;
+      }
+      callbacks?.onStatus?.(payload);
+    },
+  });
   const emitError = (message: string, code?: number | string) =>
     callbacks?.onError?.({ runId, requestId, message, code });
-  emitStatus("understanding", "Got it — working on this…");
 
   const existingRun =
     clientMessageId &&
@@ -426,7 +410,7 @@ async function runCopilotChat({
       automationVersionId: params.id,
       detail,
     });
-    emitStatus("saving", "Replaying saved result…", { replay: true });
+    planner.emit("saving", "Replaying saved result…", { replay: true }, "replay");
     callbacks?.onResult?.({ ...replay, runId } as CopilotRunResult);
     return { ...replay, runId } as CopilotRunResult;
   }
@@ -503,7 +487,6 @@ async function runCopilotChat({
   // #endregion
   const understandingTrace = baseTrace.phase("understanding");
   understandingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
-  emitStatus("understanding", "Reviewing conversation and notes…", { messageCount: normalizedMessages.length });
 
   const latestUserMessage = [...normalizedMessages].reverse().find((message) => message.role === "user");
   if (latestUserMessage && isOffTopic(latestUserMessage.content)) {
@@ -516,58 +499,76 @@ async function runCopilotChat({
   }
 
   const contextSummary = buildConversationSummary(normalizedMessages, intakeNotes);
+  const workflowUpdatedAtIso = detail.version.updatedAt ? new Date(detail.version.updatedAt).toISOString() : null;
   const currentBlueprint = currentWorkflow ?? createEmptyWorkflowSpec();
   const userMessageContent = latestUserMessage?.content ?? trimmedContent;
-  const deterministicEditIntent = deriveEditIntent(userMessageContent, { fallback: "Updating your workflow…" });
+  const genericIntentSummary = "updating your workflow…";
   let intentSummary: IntentSummary | null = null;
-  let intentStatusEmitted = false;
-  const lastAssistantMessage = [...normalizedMessages].reverse().find((message) => message.role === "assistant");
-  const scheduleStatus = deriveScheduleStatus(userMessageContent);
+  const hasExistingWorkflow =
+    (currentWorkflow.steps?.length ?? 0) > 0 || Boolean(currentWorkflow.summary?.trim()?.length);
+  const existingWorkflowSummary = currentWorkflow.summary?.trim() || null;
+  const intentContextSummary = [
+    hasExistingWorkflow
+      ? `Existing workflow: ${existingWorkflowSummary ?? "Not specified yet"}`
+      : "Existing workflow: none yet (initial build)",
+    `User wants to change/add: ${userMessageContent}`,
+  ].join("\n");
 
-  if (scheduleStatus) {
-    intentSummary = { intent_summary: scheduleStatus };
-    intentStatusEmitted = true;
-    emitStatus("understanding", scheduleStatus);
+  planner.setIntentSummary(genericIntentSummary);
+  planner.emit(
+    "understanding",
+    undefined,
+    { messageCount: normalizedMessages.length },
+    "intent-initial"
+  );
+
+  const intentCacheKey = buildIntentCacheKey({
+    automationVersionId: params.id,
+    userMessage: userMessageContent,
+    workflowUpdatedAt: workflowUpdatedAtIso,
+    workflowSummary: existingWorkflowSummary,
+    contextSummary: intentContextSummary,
+    hasExistingWorkflow,
+    intakeNotes: intakeNotes ?? null,
+  });
+
+  const cachedIntent = getCachedIntent(intentCacheKey);
+
+  if (cachedIntent) {
+    intentSummary = cachedIntent;
+    if (shouldEmitIntentUpgrade(cachedIntent.intent_summary, genericIntentSummary)) {
+      planner.setIntentSummary(cachedIntent.intent_summary);
+      planner.emit(
+        "understanding",
+        `Got it — ${cachedIntent.intent_summary}`,
+        { messageCount: normalizedMessages.length, cache: true },
+        "intent-llm"
+      );
+    }
     copilotDebug("copilot_chat.intent_summary_emitted", {
       runId,
       userMessage: userMessageContent,
-      previousAssistantMessage: lastAssistantMessage?.content ?? null,
-      intentSummary: scheduleStatus,
-      deterministic: true,
+      intentSummary: cachedIntent.intent_summary,
+      source: "cache",
     });
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId,
-        hypothesisId: "H-intent",
-        location: "copilot/chat/route.ts:runCopilotChat",
-        message: "intent_summary_emitted",
-        data: {
-          userMessage: userMessageContent,
-          previousAssistantMessage: lastAssistantMessage?.content ?? null,
-          intentSummary: scheduleStatus,
-          deterministic: true,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
-  } else {
-    const previousAssistantMessage =
-      lastAssistantMessage?.content ??
-      (intakeNotes ? "Missing schedule; user likely answering schedule" : undefined);
-    let summary: IntentSummary | null = null;
+    baseTrace.event("intent_summary.emitted", {
+      source: "cache",
+      summary: cachedIntent.intent_summary,
+    });
+  }
+
+  if (!intentSummary) {
     let summaryTimedOut = false;
+    let summary: IntentSummary | null = null;
     try {
       const intentResult = await withTimeout<IntentSummary | null>(
         generateIntentSummary(userMessageContent, {
-          previousAssistantMessage,
-          intakeNotes,
+          intakeNotes: intakeNotes ?? undefined,
+          workflowSummary: existingWorkflowSummary ?? undefined,
+          contextSummary: intentContextSummary,
+          hasExistingWorkflow,
         }),
-        300
+        3000
       );
       summary = intentResult.result;
       summaryTimedOut = intentResult.timedOut;
@@ -576,79 +577,37 @@ async function runCopilotChat({
       logger.warn("generateIntentSummary failed", { error });
     }
 
-    if (summary && !intentStatusEmitted) {
-      if (!isSummaryRelevant(summary.intent_summary, userMessageContent)) {
-        copilotDebug("copilot_chat.intent_summary_rejected_irrelevant", {
-          runId,
-          userMessage: userMessageContent,
-          previousAssistantMessage: previousAssistantMessage ?? null,
-          intentSummary: summary.intent_summary,
-        });
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: "debug-session",
-            runId,
-            hypothesisId: "H-intent",
-            location: "copilot/chat/route.ts:runCopilotChat",
-            message: "intent_summary_rejected_irrelevant",
-            data: {
-              userMessage: userMessageContent,
-              previousAssistantMessage: previousAssistantMessage ?? null,
-              intentSummary: summary.intent_summary,
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
-      } else {
-        intentStatusEmitted = true;
-        emitStatus("understanding", summary.intent_summary);
-        copilotDebug("copilot_chat.intent_summary_emitted", {
-          runId,
-          userMessage: userMessageContent,
-          previousAssistantMessage: previousAssistantMessage ?? null,
-          intentSummary: summary.intent_summary,
-          deterministic: false,
-        });
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: "debug-session",
-            runId,
-            hypothesisId: "H-intent",
-            location: "copilot/chat/route.ts:runCopilotChat",
-            message: "intent_summary_emitted",
-            data: {
-              userMessage: userMessageContent,
-              previousAssistantMessage: previousAssistantMessage ?? null,
-              intentSummary: summary.intent_summary,
-              deterministic: false,
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
+    if (summary) {
+      setCachedIntent(intentCacheKey, summary);
+      if (shouldEmitIntentUpgrade(summary.intent_summary, genericIntentSummary)) {
+        planner.setIntentSummary(summary.intent_summary);
+        planner.emit(
+          "understanding",
+          `Got it — ${summary.intent_summary}`,
+          { messageCount: normalizedMessages.length },
+          "intent-llm"
+        );
       }
-    }
-
-    if (!intentStatusEmitted) {
-      const fallbackIntent = intentSummary?.intent_summary && intentSummary.intent_summary.length > 0
-        ? intentSummary.intent_summary
-        : deterministicEditIntent;
-      intentSummary = { intent_summary: fallbackIntent };
-      intentStatusEmitted = true;
-      emitStatus("understanding", fallbackIntent);
-      copilotDebug("copilot_chat.intent_summary_fallback", {
+      copilotDebug("copilot_chat.intent_summary_emitted", {
         runId,
         userMessage: userMessageContent,
-        previousAssistantMessage: previousAssistantMessage ?? null,
-        intentSummary: fallbackIntent,
+        intentSummary: summary.intent_summary,
+        source: "llm",
         timedOut: summaryTimedOut,
+      });
+      baseTrace.event("intent_summary.emitted", {
+        source: "llm",
+        summary: summary.intent_summary,
+        timedOut: summaryTimedOut,
+      });
+    } else {
+      copilotDebug("copilot_chat.intent_summary_failed", {
+        runId,
+        userMessage: userMessageContent,
+        timedOut: summaryTimedOut,
+      });
+      baseTrace.event("intent_summary.failed", {
+        reason: summaryTimedOut ? "timeout" : "null_result",
       });
     }
   }
@@ -656,7 +615,7 @@ async function runCopilotChat({
   const existingAnalysisRaw =
     (await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id })) ?? null;
   const mostRecentUserMessageId = [...messages].reverse().find((message) => message.role === "user")?.id ?? null;
-  const workflowUpdatedAt = detail.version.updatedAt ? new Date(detail.version.updatedAt).toISOString() : null;
+  const workflowUpdatedAt = workflowUpdatedAtIso;
   const staleAnalysis =
     (existingAnalysisRaw?.workflowUpdatedAt && workflowUpdatedAt && existingAnalysisRaw.workflowUpdatedAt !== workflowUpdatedAt) ||
     (existingAnalysisRaw?.lastUserMessageId && mostRecentUserMessageId && existingAnalysisRaw.lastUserMessageId !== mostRecentUserMessageId);
@@ -679,8 +638,8 @@ async function runCopilotChat({
 
   if (directCommand && latestUserMessage) {
     commandExecuted = true;
-    emitStatus("drafting", "Applying direct command to the workflow…");
     const command = parseCommand(latestUserMessage.content);
+    planner.emit("drafting", "Applying direct command…", { command: command.type }, "direct-command");
     const commandResult = executeCommand(currentWorkflow, command);
     if (!commandResult.success) {
       const error = new ApiError(400, commandResult.error ?? "Command failed");
@@ -715,12 +674,9 @@ async function runCopilotChat({
       const draftingTextBase =
         (intentSummary?.intent_summary && intentSummary.intent_summary.length > 0
           ? intentSummary.intent_summary
-          : deterministicEditIntent) ?? "Updating your workflow…";
-      const draftingStatusText = draftingTextBase.endsWith("…") ? draftingTextBase : `${draftingTextBase}…`;
-      emitStatus("drafting", draftingStatusText, {
-        intakeNotes: Boolean(intakeNotes),
-        messages: normalizedMessages.length,
-      });
+          : genericIntentSummary) ?? "Updating your workflow…";
+      planner.setIntentSummary(draftingTextBase);
+      planner.emit("drafting", undefined, { intakeNotes: Boolean(intakeNotes), messages: normalizedMessages.length }, "drafting");
       const draftingTrace = trace.phase("drafting");
       draftingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
 
@@ -767,7 +723,8 @@ async function runCopilotChat({
         requirementsText: detail.version.requirementsText ?? undefined,
         memorySummary: analysisState.memory?.summary_compact ?? null,
         memoryFacts: analysisState.memory?.facts ?? {},
-        onStatus: ({ phase, text }) => emitStatus(phase, text),
+        onStatus: ({ phase, text }) => planner.emit(phase as any, text, undefined, `builder-${phase}`),
+        trace: baseTrace,
       });
       updatedRequirementsText = newRequirementsText;
 
@@ -807,9 +764,7 @@ async function runCopilotChat({
 
       const numberedWorkflow = applyStepNumbers(aiGeneratedWorkflow);
       draftingTrace.event("workflow.stepNumbering.completed", { stepCount: numberedWorkflow.steps.length });
-      emitStatus("structuring", "Adding edge cases + step numbers…", {
-        stepCount: numberedWorkflow.steps.length,
-      });
+      planner.emit("structuring", undefined, { stepCount: numberedWorkflow.steps.length }, "structuring");
       aiTasks = generatedTasks;
 
       const taskSyncSpan = draftingTrace.spanStart("task.sync", { taskCount: aiTasks.length });
@@ -834,12 +789,15 @@ async function runCopilotChat({
         })),
       };
       const trimmedFollowUp = followUpQuestion?.trim();
-      const nextFollowUp = chooseFollowUpQuestion({
-        candidate: trimmedFollowUp,
-        memory: analysisState.memory ?? createEmptyMemory(),
-        workflow: workflowWithTasks,
-        userMessage: userMessageContent,
-      });
+      const hasGoalContext = Boolean(intakeNotes?.trim()?.length || detail.version.requirementsText?.trim()?.length);
+      const nextFollowUp = hasGoalContext
+        ? undefined
+        : chooseFollowUpQuestion({
+            candidate: trimmedFollowUp,
+            memory: analysisState.memory ?? createEmptyMemory(),
+            workflow: workflowWithTasks,
+            userMessage: userMessageContent,
+          });
 
       analysisState = {
         ...analysisState,
@@ -853,7 +811,7 @@ async function runCopilotChat({
 
       responseMessage = nextFollowUp ? `${chatResponse} ${nextFollowUp}`.trim() : chatResponse;
 
-      copilotDebug("copilot_chat.llm_response", {
+      baseTrace.event("copilot_chat.llm_response", {
         automationVersionId: params.id,
         chatResponse,
         followUpQuestion: trimmedFollowUp,
@@ -887,9 +845,8 @@ async function runCopilotChat({
   const savingTextBase =
     (intentSummary?.intent_summary && intentSummary.intent_summary.length > 0
       ? intentSummary.intent_summary
-      : deterministicEditIntent) ?? "Saving draft and messages…";
-  const savingText = savingTextBase.endsWith("…") ? savingTextBase : `${savingTextBase}…`;
-  emitStatus("saving", savingText, { stepCount: validatedWorkflow.steps?.length ?? 0 });
+      : genericIntentSummary) ?? "Saving draft and messages…";
+  planner.emit("saving", savingTextBase, { stepCount: validatedWorkflow.steps?.length ?? 0 }, "saving");
   const savingTrace = trace.phase("saving");
   const saveSpan = savingTrace.spanStart("workflow.save", { stepCount: validatedWorkflow.steps?.length ?? 0 });
 
@@ -1079,7 +1036,7 @@ async function runCopilotChat({
     persistenceError: analysisPersistenceError,
   });
 
-  emitStatus("saving", "Run complete — preparing result…", {
+  planner.emit("saving", "Run complete — preparing result…", {
     stepCount: validatedWorkflow.steps?.length ?? 0,
     persistenceError: analysisPersistenceError,
   });
