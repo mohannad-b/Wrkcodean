@@ -148,6 +148,8 @@ export function StudioChat({
     done: "Run complete",
     error: "Run failed. Retry?",
   };
+  const runUsedServerMessageRef = useRef<Map<string, boolean>>(new Map());
+  const runCopySourceLoggedRef = useRef<Map<string, boolean>>(new Map());
 
   const getUserInitials = () => {
     if (!profile) return "ME";
@@ -557,12 +559,12 @@ export function StudioChat({
               hypothesisId: "H4-display",
               location: "StudioChat.tsx:pushDisplayLine",
               message: "line added",
-              data: { targetRunId, line, count: lines.length + 1 },
+              data: { targetRunId, line, count: lines.length },
               timestamp: Date.now(),
             }),
           }).catch(() => {});
           // #endregion
-          return { ...status, text: line, displayLines: lines.slice(-6) };
+          return { ...status, text: line, displayLines: lines };
         });
       };
 
@@ -598,6 +600,9 @@ export function StudioChat({
           error: "error",
         };
         const mappedPhase = payload.phase && phaseMap[payload.phase] ? phaseMap[payload.phase] : undefined;
+        if (mappedPhase) {
+          updateRunMessage((status) => ({ ...status, phase: mappedPhase }));
+        }
         if (payload.phase && !mappedPhase) {
           fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
             method: "POST",
@@ -615,10 +620,48 @@ export function StudioChat({
         }
         runSeenServerStatusRef.current.set(targetRunId, true);
         clearHeartbeatTimers(targetRunId);
-        const displayText =
-          mappedPhase && PHASE_COPY[mappedPhase]
-            ? PHASE_COPY[mappedPhase]
-            : payload.message ?? PHASE_COPY[mappedPhase ?? "understanding"] ?? payload.message ?? "";
+        const trimmedMessage = payload.message?.trim() ?? "";
+        const useServerMessage = trimmedMessage.length > 0;
+        let displayText = useServerMessage
+          ? trimmedMessage
+          : mappedPhase && PHASE_COPY[mappedPhase]
+          ? PHASE_COPY[mappedPhase]
+          : PHASE_COPY[mappedPhase ?? "understanding"] ?? trimmedMessage;
+        if (useServerMessage) {
+          const already = runUsedServerMessageRef.current.get(targetRunId) ?? false;
+          runUsedServerMessageRef.current.set(targetRunId, true);
+          if (!already && !runCopySourceLoggedRef.current.get(targetRunId)) {
+            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: "debug-session",
+                runId,
+                hypothesisId: "H1-status-flow",
+                location: "StudioChat.tsx:applyStatusFromEvent",
+                message: "copilot_chat.progress_copy_source",
+                data: { source: "server" },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            runCopySourceLoggedRef.current.set(targetRunId, true);
+          }
+        } else if (!runCopySourceLoggedRef.current.get(targetRunId)) {
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId,
+              hypothesisId: "H1-status-flow",
+              location: "StudioChat.tsx:applyStatusFromEvent",
+              message: "copilot_chat.progress_copy_source",
+              data: { source: "phase_copy" },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          runCopySourceLoggedRef.current.set(targetRunId, true);
+        }
         updateRunMessage((status) => ({
           ...status,
           phase: mappedPhase ?? status.phase,
@@ -1762,7 +1805,6 @@ function RunBubble({
   const showErrorLine = isError && status.errorMessage && status.errorMessage !== status.text;
   const hasSseEvents = DEBUG_UI_ENABLED && (sseEvents?.length ?? 0) > 0;
   const displayLines = status.displayLines?.length ? status.displayLines : status.text ? [status.text] : [];
-  const lastEvent = displayLines[displayLines.length - 1];
 
   return (
     <div className="w-full">
@@ -1780,6 +1822,7 @@ function RunBubble({
           <span className="text-gray-900">Copilot run</span>
           <span className="uppercase tracking-wide text-gray-500">{status.phase}</span>
         </div>
+        {/* TODO: show full history while debugging; reintroduce cap/scroll once sequence is confirmed */}
         <div className="text-xs text-gray-700 space-y-1">
           {displayLines.map((line, idx) => (
             <div className="flex items-start gap-2" key={`${message.id}-line-${idx}`}>
@@ -1894,9 +1937,6 @@ function RunBubble({
           </div>
         ) : null}
 
-        {lastEvent && status.phase !== "error" ? (
-          <div className="mt-2 text-[10px] text-gray-400">{lastEvent}</div>
-        ) : null}
       </div>
       <span className="text-[10px] text-gray-400 px-1 block mt-1">{formatTimestamp(message.createdAt)}</span>
     </div>

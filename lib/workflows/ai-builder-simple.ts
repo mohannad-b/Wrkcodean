@@ -20,6 +20,11 @@ type ConversationMessage = {
   content: string;
 };
 
+type BuildStatusUpdate = {
+  phase: string;
+  text: string;
+};
+
 interface BuildBlueprintParams {
   userMessage: string;
   currentBlueprint: Blueprint;
@@ -28,6 +33,7 @@ interface BuildBlueprintParams {
   requirementsText?: string | null;
   memorySummary?: string | null;
   memoryFacts?: Record<string, unknown>;
+  onStatus?: (payload: BuildStatusUpdate) => void;
 }
 
 export type AITask = {
@@ -121,8 +127,10 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     requirementsText,
     memorySummary,
     memoryFacts,
+    onStatus,
   } = params;
   const currentBlueprint = currentWorkflow ?? blueprintInput;
+  const emitStatus = (phase: string, text: string) => onStatus?.({ phase, text });
 
   const windowedHistory = conversationHistory.slice(-8);
   const userPrompt = buildCompactPrompt({
@@ -132,6 +140,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     memorySummary,
     memoryFacts,
   });
+  emitStatus("analysis", "Extracting requirements from your last message…");
 
   const messages: ConversationMessage[] = [
     { role: "system", content: WORKFLOW_SYSTEM_PROMPT_COMPACT },
@@ -156,6 +165,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
   });
 
   try {
+    emitStatus("generation", "Drafting updated workflow from context…");
     const completion = await openai.chat.completions.create({
       model: WORKFLOW_MODEL,
       temperature: 0.3,
@@ -201,6 +211,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
               relatedSteps: [step.stepNumber || `step_${idx + 1}`],
               systemType: step.systemsInvolved?.[0] || "unspecified",
             }));
+    emitStatus("tasks", "Recomputing required inputs and tasks…");
 
     const normalizedBranches = Array.isArray(workflowBlock?.branches)
       ? workflowBlock.branches
@@ -216,6 +227,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     const preservedWorkflow = preserveEssentialData(currentBlueprint, normalizedSteps, normalizedBranches, normalizedSections);
     
     const numberedBlueprint = applyStepNumbers(preservedWorkflow.blueprint);
+    emitStatus("structuring", "Updating step graph and renumbering…");
     const { blueprint: sanitizedBlueprintRaw, summary: sanitizationSummary } = sanitizeBlueprintTopology(numberedBlueprint);
 
     // Fallback: if no steps survived parsing/sanitization, seed a minimal draft (multi-step) so UI is never blank
@@ -223,6 +235,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       sanitizedBlueprintRaw.steps.length > 0
         ? sanitizedBlueprintRaw
         : buildFallbackBlueprint(sanitizedBlueprintRaw);
+    emitStatus("validation", "Validating blueprint schema…");
 
     const chatResponse = normalizeChatResponse(aiResponse.chatResponse);
     const followUpQuestion =
@@ -248,6 +261,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       model: WORKFLOW_MODEL,
     });
 
+    emitStatus("finalizing", "Preparing draft response…");
     return {
       blueprint: sanitizedBlueprint,
       workflow: sanitizedBlueprint,

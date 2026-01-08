@@ -108,6 +108,116 @@ function isStreamRequest(request: Request) {
   return streamParam === "1" || accept.includes("text/event-stream");
 }
 
+function deriveScheduleStatus(message: string): string | null {
+  const lower = message.toLowerCase();
+  const hasDaily = /daily/.test(lower);
+  const hasWeekly = /weekly/.test(lower);
+  const hasEvery = /\bevery\b/.test(lower);
+  const timeMatch = message.match(/\b(\d{1,2})(:\d{2})?\s?(am|pm)?\b/i);
+  const cronish = /(\*|\d+)\s+(\*|\d+)\s+(\*|\d+)\s+(\*|\d+)\s+(\*|\d+)/.test(message);
+  if (!(hasDaily || hasWeekly || hasEvery || timeMatch || cronish)) {
+    return null;
+  }
+  const timeText = timeMatch ? timeMatch[0].trim() : null;
+  if (hasDaily && timeText) return `Adding a daily schedule (${timeText})`;
+  if (hasDaily) return "Adding a daily schedule";
+  if (hasWeekly && timeText) return `Adding a weekly schedule (${timeText})`;
+  if (hasWeekly) return "Adding a weekly schedule";
+  if (cronish) return "Setting schedule from cron expression";
+  if (hasEvery && timeText) return `Setting schedule: ${message.trim()}`;
+  if (timeText) return `Setting schedule: ${timeText}`;
+  return `Setting schedule: ${message.trim()}`;
+}
+
+function isSummaryRelevant(summary: string, userMessage: string): boolean {
+  const STOPWORDS = new Set([
+    "from",
+    "with",
+    "into",
+    "data",
+    "flow",
+    "workflow",
+    "process",
+    "send",
+    "sending",
+    "add",
+    "adding",
+    "pulling",
+    "using",
+    "this",
+    "that",
+    "your",
+    "work",
+    "steps",
+    "step",
+  ]);
+
+  const tokens = userMessage
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter((w) => w.length >= 4 && !STOPWORDS.has(w));
+  if (tokens.length === 0) return true;
+
+  const lowerSummary = summary.toLowerCase();
+  const matches = tokens.filter((t) => lowerSummary.includes(t));
+  return matches.length > 0;
+}
+
+function deriveEditIntent(message: string, options?: { fallback?: string }): string {
+  const fallback = options?.fallback ?? "Updating your workflow…";
+  if (!message || message.trim().length === 0) return fallback;
+
+  const ensureEllipsis = (value: string) => (value.endsWith("…") ? value : `${value}…`);
+  const normalized = message.toLowerCase();
+  const scheduleIntent = deriveScheduleStatus(message);
+  if (scheduleIntent) return ensureEllipsis(scheduleIntent);
+
+  if (/retry|retries|fallback|failover/.test(normalized)) {
+    return ensureEllipsis("Adding retries and fallback paths");
+  }
+  if (/rename|re-number|renumber/.test(normalized)) {
+    return ensureEllipsis("Renaming steps and re-numbering");
+  }
+  if (/(map|mapping|sync|transform|convert).*(field|column|property|data)/.test(normalized)) {
+    return ensureEllipsis("Mapping fields into your outputs");
+  }
+  if (/template/.test(normalized) && /(sms|email|message|notification)/.test(normalized)) {
+    return ensureEllipsis("Updating templates with mapped fields");
+  }
+  if (/branch|path|conditional|decision/.test(normalized)) {
+    return ensureEllipsis("Updating branch logic and step graph");
+  }
+  if (/input|form|capture|collect/.test(normalized)) {
+    return ensureEllipsis("Recomputing required inputs");
+  }
+
+  const snippet = message.trim().replace(/\s+/g, " ");
+  const compact = snippet.length > 120 ? `${snippet.slice(0, 117)}…` : snippet;
+  return ensureEllipsis(`Updating workflow: ${compact}`);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<{ result: T | null; timedOut: boolean }> {
+  let timeoutId: NodeJS.Timeout;
+  let timedOut = false;
+
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      resolve(null);
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([promise, timeoutPromise]);
+    return { result, timedOut };
+  } finally {
+    clearTimeout(timeoutId!);
+    if (timedOut) {
+      // No-op: caller handles fallback behavior
+    }
+  }
+}
+
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   const streaming = isStreamRequest(request);
   const sse = streaming ? createSSEStream({ signal: request.signal }) : null;
@@ -265,6 +375,7 @@ async function runCopilotChat({
   callbacks?: CopilotCallbacks;
   runIdOverride?: string;
 }): Promise<CopilotRunResult> {
+  void request;
   const clientMessageId = payload.clientMessageId?.trim();
   const runId = runIdOverride || clientMessageId || randomUUID();
   const requestId = randomUUID();
@@ -293,7 +404,22 @@ async function runCopilotChat({
       clientMessageId,
     }));
 
-  if (existingRun) {
+  if (existingRun && existingRun.automationVersionId === params.id) {
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId,
+        hypothesisId: "H1-idempotent",
+        location: "copilot/chat/route.ts:runCopilotChat",
+        message: "idempotent replay detected",
+        data: { clientMessageId, assistantMessageId: existingRun.assistantMessageId },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
     const replay = await buildIdempotentResponse({
       run: existingRun,
       tenantId: session.tenantId,
@@ -303,6 +429,28 @@ async function runCopilotChat({
     emitStatus("saving", "Replaying saved result…", { replay: true });
     callbacks?.onResult?.({ ...replay, runId } as CopilotRunResult);
     return { ...replay, runId } as CopilotRunResult;
+  }
+
+  if (existingRun && existingRun.automationVersionId !== params.id) {
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId,
+        hypothesisId: "H1-idempotent",
+        location: "copilot/chat/route.ts:runCopilotChat",
+        message: "idempotent run ignored due to version mismatch",
+        data: {
+          clientMessageId,
+          existingAutomationVersionId: existingRun.automationVersionId,
+          currentAutomationVersionId: params.id,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
   }
 
   const currentWorkflow = detail.workflowView?.workflowSpec ?? createEmptyWorkflowSpec();
@@ -334,6 +482,25 @@ async function runCopilotChat({
         content: message.role === "assistant" ? parseCopilotReply(message.content).displayText : message.content,
       }))
   );
+  // #region agent log
+  fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "debug-session",
+      runId,
+      hypothesisId: "H2-payload",
+      location: "copilot/chat/route.ts:runCopilotChat",
+      message: "normalized messages ready",
+      data: {
+        clientMessageId: clientMessageId ?? null,
+        messageCount: normalizedMessages.length,
+        latestUserPreview: normalizedMessages.findLast((m) => m.role === "user")?.content.slice(0, 160) ?? null,
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   const understandingTrace = baseTrace.phase("understanding");
   understandingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
   emitStatus("understanding", "Reviewing conversation and notes…", { messageCount: normalizedMessages.length });
@@ -351,14 +518,140 @@ async function runCopilotChat({
   const contextSummary = buildConversationSummary(normalizedMessages, intakeNotes);
   const currentBlueprint = currentWorkflow ?? createEmptyWorkflowSpec();
   const userMessageContent = latestUserMessage?.content ?? trimmedContent;
+  const deterministicEditIntent = deriveEditIntent(userMessageContent, { fallback: "Updating your workflow…" });
   let intentSummary: IntentSummary | null = null;
   let intentStatusEmitted = false;
-  generateIntentSummary(userMessageContent).then((summary) => {
-    intentSummary = summary;
-    if (!summary || intentStatusEmitted) return;
+  const lastAssistantMessage = [...normalizedMessages].reverse().find((message) => message.role === "assistant");
+  const scheduleStatus = deriveScheduleStatus(userMessageContent);
+
+  if (scheduleStatus) {
+    intentSummary = { intent_summary: scheduleStatus };
     intentStatusEmitted = true;
-    emitStatus("understanding", `Got it — ${summary.intent_summary}`);
-  });
+    emitStatus("understanding", scheduleStatus);
+    copilotDebug("copilot_chat.intent_summary_emitted", {
+      runId,
+      userMessage: userMessageContent,
+      previousAssistantMessage: lastAssistantMessage?.content ?? null,
+      intentSummary: scheduleStatus,
+      deterministic: true,
+    });
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId,
+        hypothesisId: "H-intent",
+        location: "copilot/chat/route.ts:runCopilotChat",
+        message: "intent_summary_emitted",
+        data: {
+          userMessage: userMessageContent,
+          previousAssistantMessage: lastAssistantMessage?.content ?? null,
+          intentSummary: scheduleStatus,
+          deterministic: true,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+  } else {
+    const previousAssistantMessage =
+      lastAssistantMessage?.content ??
+      (intakeNotes ? "Missing schedule; user likely answering schedule" : undefined);
+    let summary: IntentSummary | null = null;
+    let summaryTimedOut = false;
+    try {
+      const intentResult = await withTimeout<IntentSummary | null>(
+        generateIntentSummary(userMessageContent, {
+          previousAssistantMessage,
+          intakeNotes,
+        }),
+        300
+      );
+      summary = intentResult.result;
+      summaryTimedOut = intentResult.timedOut;
+      intentSummary = summary ?? intentSummary;
+    } catch (error) {
+      logger.warn("generateIntentSummary failed", { error });
+    }
+
+    if (summary && !intentStatusEmitted) {
+      if (!isSummaryRelevant(summary.intent_summary, userMessageContent)) {
+        copilotDebug("copilot_chat.intent_summary_rejected_irrelevant", {
+          runId,
+          userMessage: userMessageContent,
+          previousAssistantMessage: previousAssistantMessage ?? null,
+          intentSummary: summary.intent_summary,
+        });
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId,
+            hypothesisId: "H-intent",
+            location: "copilot/chat/route.ts:runCopilotChat",
+            message: "intent_summary_rejected_irrelevant",
+            data: {
+              userMessage: userMessageContent,
+              previousAssistantMessage: previousAssistantMessage ?? null,
+              intentSummary: summary.intent_summary,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+      } else {
+        intentStatusEmitted = true;
+        emitStatus("understanding", summary.intent_summary);
+        copilotDebug("copilot_chat.intent_summary_emitted", {
+          runId,
+          userMessage: userMessageContent,
+          previousAssistantMessage: previousAssistantMessage ?? null,
+          intentSummary: summary.intent_summary,
+          deterministic: false,
+        });
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId,
+            hypothesisId: "H-intent",
+            location: "copilot/chat/route.ts:runCopilotChat",
+            message: "intent_summary_emitted",
+            data: {
+              userMessage: userMessageContent,
+              previousAssistantMessage: previousAssistantMessage ?? null,
+              intentSummary: summary.intent_summary,
+              deterministic: false,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+      }
+    }
+
+    if (!intentStatusEmitted) {
+      const fallbackIntent = intentSummary?.intent_summary && intentSummary.intent_summary.length > 0
+        ? intentSummary.intent_summary
+        : deterministicEditIntent;
+      intentSummary = { intent_summary: fallbackIntent };
+      intentStatusEmitted = true;
+      emitStatus("understanding", fallbackIntent);
+      copilotDebug("copilot_chat.intent_summary_fallback", {
+        runId,
+        userMessage: userMessageContent,
+        previousAssistantMessage: previousAssistantMessage ?? null,
+        intentSummary: fallbackIntent,
+        timedOut: summaryTimedOut,
+      });
+    }
+  }
 
   const existingAnalysisRaw =
     (await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id })) ?? null;
@@ -419,16 +712,37 @@ async function runCopilotChat({
     });
   } else {
     try {
-      const draftingText =
-        intentSummary?.intent_summary && intentSummary.intent_summary.length > 0
-          ? `Drafting steps for ${intentSummary.intent_summary}…`
-          : "Drafting steps for your workflow…";
-      emitStatus("drafting", draftingText, {
+      const draftingTextBase =
+        (intentSummary?.intent_summary && intentSummary.intent_summary.length > 0
+          ? intentSummary.intent_summary
+          : deterministicEditIntent) ?? "Updating your workflow…";
+      const draftingStatusText = draftingTextBase.endsWith("…") ? draftingTextBase : `${draftingTextBase}…`;
+      emitStatus("drafting", draftingStatusText, {
         intakeNotes: Boolean(intakeNotes),
         messages: normalizedMessages.length,
       });
       const draftingTrace = trace.phase("drafting");
       draftingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
+
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "debug-session",
+          runId,
+          hypothesisId: "H3-llm",
+          location: "copilot/chat/route.ts:runCopilotChat",
+          message: "llm build starting",
+          data: {
+            userMessagePreview: userMessageContent.slice(0, 200),
+            historyCount: normalizedMessages.length,
+            hasIntakeNotes: Boolean(intakeNotes),
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
 
       const buildSpan = draftingTrace.spanStart("llm.buildWorkflowFromChat", {
         messageCount: normalizedMessages.length,
@@ -453,6 +767,7 @@ async function runCopilotChat({
         requirementsText: detail.version.requirementsText ?? undefined,
         memorySummary: analysisState.memory?.summary_compact ?? null,
         memoryFacts: analysisState.memory?.facts ?? {},
+        onStatus: ({ phase, text }) => emitStatus(phase, text),
       });
       updatedRequirementsText = newRequirementsText;
 
@@ -460,6 +775,27 @@ async function runCopilotChat({
         tasksReturned: generatedTasks.length,
         stepsReturned: aiGeneratedWorkflow.steps?.length ?? 0,
       });
+
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "debug-session",
+          runId,
+          hypothesisId: "H3-llm",
+          location: "copilot/chat/route.ts:runCopilotChat",
+          message: "llm build completed",
+          data: {
+            chatResponsePreview: (chatResponse ?? "").slice(0, 160),
+            followUpPreview: followUpQuestion?.slice(0, 160) ?? null,
+            stepCount: aiGeneratedWorkflow.steps?.length ?? 0,
+            taskCount: generatedTasks.length,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
 
       copilotDebug("copilot_chat.post_build_metrics", {
         automationVersionId: params.id,
@@ -548,16 +884,16 @@ async function runCopilotChat({
     stepCount: validatedWorkflow.steps?.length ?? 0,
     sectionCount: validatedWorkflow.sections?.length ?? 0,
   });
-  const savingText =
-    intentSummary?.intent_summary && intentSummary.intent_summary.length > 0
-      ? `Saving ${intentSummary.intent_summary} draft…`
-      : "Saving draft and messages…";
-  emitStatus("saving", savingText, { stepCount: validatedWorkflow.steps?.length ?? 0 });
+  const savingTextBase =
+    (intentSummary?.intent_summary && intentSummary.intent_summary.length > 0
+      ? intentSummary.intent_summary
+      : deterministicEditIntent) ?? "Saving draft and messages…";
+  const savingText = savingTextBase.endsWith("…") ? savingTextBase : `${savingTextBase}…`;
   emitStatus("saving", savingText, { stepCount: validatedWorkflow.steps?.length ?? 0 });
   const savingTrace = trace.phase("saving");
   const saveSpan = savingTrace.spanStart("workflow.save", { stepCount: validatedWorkflow.steps?.length ?? 0 });
 
-  const updatePayload: { workflowJson: Workflow; requirementsText?: string | null; updatedAt: Date } = {
+  const updatePayload: any = {
     workflowJson: validatedWorkflow,
     updatedAt: new Date(),
   };
@@ -750,7 +1086,7 @@ async function runCopilotChat({
 
   const result: CopilotRunResult = {
     runId,
-    workflow: withLegacyWorkflowAlias(validatedWorkflow),
+    workflow: withLegacyWorkflowAlias(validatedWorkflow) as any,
     message: assistantMessage,
     tasks: updatedTasks,
     completion: completionState,
