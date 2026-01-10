@@ -62,7 +62,11 @@ describe("GET /api/automation-versions/[id]/copilot/analysis", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.analysis.readiness.score).toBe(0);
-    expect(payload.analysis.todos).toEqual([]);
+    expect(payload.analysis.todos.length).toBeGreaterThanOrEqual(4);
+    expect(payload.analysis.todos.filter((todo: any) => todo.status === "open").length).toBeGreaterThanOrEqual(4);
+    expect(payload.analysis.readiness.stateItemsMissing).toEqual(
+      expect.arrayContaining(["business_requirements", "business_objectives", "success_criteria", "systems"])
+    );
     expect(Object.keys(payload.analysis.sections)).toHaveLength(8);
   });
 

@@ -24,6 +24,9 @@ interface BuildBlueprintParams {
   currentWorkflow?: Blueprint;
   conversationHistory?: ConversationMessage[];
   requirementsText?: string | null;
+  requirementsStatusHint?: string | null;
+  followUpMode?: "technical_opt_in" | null;
+  knownFactsHint?: string | null;
 }
 
 export type AITask = {
@@ -113,13 +116,22 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     currentWorkflow,
     conversationHistory = [],
     requirementsText,
+    requirementsStatusHint,
+    followUpMode,
+    knownFactsHint,
   } = params;
   const currentBlueprint = currentWorkflow ?? blueprintInput;
 
   const messages: ConversationMessage[] = [
     { role: "system", content: WORKFLOW_SYSTEM_PROMPT },
     ...conversationHistory.slice(-10),
-    { role: "user", content: formatWorkflowPrompt(userMessage, currentBlueprint, requirementsText) },
+    {
+      role: "user",
+      content: formatWorkflowPrompt(userMessage, currentBlueprint, requirementsText, requirementsStatusHint, {
+        followUpMode,
+        knownFactsHint,
+      }),
+    },
   ];
 
   try {

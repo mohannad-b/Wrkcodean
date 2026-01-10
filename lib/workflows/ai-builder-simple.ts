@@ -33,6 +33,9 @@ interface BuildBlueprintParams {
   requirementsText?: string | null;
   memorySummary?: string | null;
   memoryFacts?: Record<string, unknown>;
+  requirementsStatusHint?: string | null;
+  followUpMode?: "technical_opt_in" | null;
+  knownFactsHint?: string | null;
   onStatus?: (payload: BuildStatusUpdate) => void;
   trace?: import("@/lib/ai/copilot-trace").CopilotTrace;
 }
@@ -128,6 +131,9 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     requirementsText,
     memorySummary,
     memoryFacts,
+    requirementsStatusHint,
+    followUpMode,
+    knownFactsHint,
     onStatus,
     trace,
   } = params;
@@ -141,6 +147,9 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     requirementsText,
     memorySummary,
     memoryFacts,
+    requirementsStatusHint,
+    followUpMode,
+    knownFactsHint,
   });
   emitStatus("analysis", "Extracting requirements from your last message…");
 
@@ -556,6 +565,9 @@ type CompactPromptArgs = {
   requirementsText?: string | null;
   memorySummary?: string | null;
   memoryFacts?: Record<string, unknown>;
+  requirementsStatusHint?: string | null;
+  followUpMode?: "technical_opt_in" | null;
+  knownFactsHint?: string | null;
 };
 
 function buildCompactPrompt({
@@ -564,6 +576,9 @@ function buildCompactPrompt({
   requirementsText,
   memorySummary,
   memoryFacts,
+  requirementsStatusHint,
+  followUpMode,
+  knownFactsHint,
 }: CompactPromptArgs): string {
   const parts: string[] = [];
 
@@ -582,6 +597,18 @@ function buildCompactPrompt({
   const clippedRequirements = requirementsText?.trim();
   if (clippedRequirements) {
     parts.push(`LATEST REQUIREMENTS (trimmed):\n${truncate(clippedRequirements, 800)}`);
+  }
+
+  if (requirementsStatusHint?.trim()) {
+    parts.push(`REQUIREMENTS STATUS (what’s missing):\n${truncate(requirementsStatusHint.trim(), 600)}`);
+  }
+
+  if (knownFactsHint?.trim()) {
+    parts.push(`KNOWN FACTS (do not re-ask unless unclear):\n${truncate(knownFactsHint.trim(), 600)}`);
+  }
+
+  if (followUpMode === "technical_opt_in") {
+    parts.push("FOLLOWUP MODE: technical_opt_in (ask consent before technical details)");
   }
 
   parts.push(`CURRENT WORKFLOW (compact JSON):\n${summarizeBlueprintCompact(currentBlueprint)}`);

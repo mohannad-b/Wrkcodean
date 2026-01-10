@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Sparkles, Paperclip, Lightbulb, Loader2, X, FileText, Image as ImageIcon } from "lucide-react";
+import { Send, Sparkles, Paperclip, Loader2, X, FileText, Image as ImageIcon } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
@@ -29,7 +29,7 @@ export interface CopilotMessage {
   createdAt: string;
   optimistic?: boolean;
   transient?: boolean;
-  kind?: "system_run";
+  kind?: "system_run" | "proceed_cta";
   runStatus?: {
     phase: RunPhase;
     text: string;
@@ -44,6 +44,9 @@ export interface CopilotMessage {
     displayLines?: string[];
     completed?: boolean;
   };
+  proceedMeta?: {
+    uiStyle?: string | null;
+  };
 }
 
 interface StudioChatProps {
@@ -57,14 +60,15 @@ interface StudioChatProps {
   onTasksUpdate?: (tasks: Task[]) => void;
   injectedMessage?: CopilotMessage | null;
   onInjectedMessageConsumed?: () => void;
-  onSuggestNextSteps?: () => void;
-  isRequestingSuggestions?: boolean;
-  suggestionStatus?: string | null;
   onWorkflowUpdatingChange?: (isUpdating: boolean) => void;
   analysis?: CopilotAnalysisState | null;
   analysisLoading?: boolean;
   onRefreshAnalysis?: () => void | Promise<void>;
   analysisUnavailable?: boolean;
+  onProceedToBuild?: () => void;
+  proceedToBuildDisabled?: boolean;
+  proceedToBuildReason?: string | null;
+  proceedingToBuild?: boolean;
 }
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
@@ -97,11 +101,14 @@ export function StudioChat({
   onTasksUpdate,
   injectedMessage = null,
   onInjectedMessageConsumed,
-  onSuggestNextSteps,
-  isRequestingSuggestions = false,
-  suggestionStatus = null,
   onWorkflowUpdatingChange,
   onRefreshAnalysis,
+  analysis,
+  analysisLoading = false,
+  onProceedToBuild,
+  proceedToBuildDisabled = false,
+  proceedToBuildReason = null,
+  proceedingToBuild = false,
 }: StudioChatProps) {
   const { profile } = useUserProfile();
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
@@ -142,6 +149,8 @@ export function StudioChat({
   const FORCE_JSON = false;
   const runUsedServerMessageRef = useRef<Map<string, boolean>>(new Map());
   const runCopySourceLoggedRef = useRef<Map<string, boolean>>(new Map());
+  const [localAnalysis, setLocalAnalysis] = useState<CopilotAnalysisState | null>(analysis ?? null);
+  const [localAnalysisLoading, setLocalAnalysisLoading] = useState(false);
 
   const getUserInitials = () => {
     if (!profile) return "ME";
@@ -234,6 +243,41 @@ export function StudioChat({
   useEffect(() => {
     onConversationChange?.(durableMessages);
   }, [durableMessages, onConversationChange]);
+
+  useEffect(() => {
+    if (analysis) {
+      setLocalAnalysis(analysis);
+    }
+  }, [analysis]);
+
+  const refreshAnalysis = useCallback(async () => {
+    if (!automationVersionId) return;
+    setLocalAnalysisLoading(true);
+    try {
+      if (onRefreshAnalysis) {
+        await onRefreshAnalysis();
+      }
+      const response = await fetch(`/api/automation-versions/${automationVersionId}/copilot/analysis`, { cache: "no-store" });
+      if (response.ok) {
+        const payload = await response.json();
+        setLocalAnalysis(payload.analysis ?? null);
+      }
+    } catch (error) {
+      logger.error("[STUDIO-CHAT] Failed to refresh analysis", error);
+    } finally {
+      setLocalAnalysisLoading(false);
+    }
+  }, [automationVersionId, onRefreshAnalysis]);
+
+  useEffect(() => {
+    if (!analysis && automationVersionId) {
+      void refreshAnalysis();
+    }
+  }, [analysis, automationVersionId, refreshAnalysis]);
+
+  const effectiveAnalysis = analysis ?? localAnalysis;
+  const analysisState =
+    analysisLoading || localAnalysisLoading ? "loading" : effectiveAnalysis ? "ready" : "idle";
 
   // Auto-trigger pipeline disabled by default; reserved for future use.
 
@@ -892,6 +936,25 @@ export function StudioChat({
           setMessages((prev) => dropTransientMessages(prev));
         }
 
+        if (data.proceedReady && data.proceedMessage) {
+          const proceedId = `${responseRunId}-proceed`;
+          setMessages((prev) => {
+            const durable = dropTransientMessages(prev);
+            if (durable.some((msg) => msg.id === proceedId)) {
+              return durable;
+            }
+            const proceedBubble: CopilotMessage = {
+              id: proceedId,
+              role: "assistant",
+              content: data.proceedMessage,
+              createdAt: new Date().toISOString(),
+              kind: "proceed_cta",
+              proceedMeta: { uiStyle: data.proceedUiStyle ?? "success" },
+            };
+            return [...durable, proceedBubble];
+          });
+        }
+
         if (data.tasks && isLatest) {
           onTasksUpdate?.(data.tasks);
           logger.debug("[STUDIO-CHAT] Copilot chat tasks applied", { taskCount: data.tasks.length });
@@ -1528,16 +1591,23 @@ export function StudioChat({
 
 
   return (
-    <div className="flex flex-col h-full bg-[#F9FAFB] border-r border-gray-200 overflow-hidden" data-testid="copilot-pane">
+    <div
+      className="flex flex-col h-full bg-[#F9FAFB] border-r border-gray-200 overflow-hidden"
+      data-testid="copilot-pane"
+      data-analysis-state={analysisState}
+      data-has-analysis={effectiveAnalysis ? "true" : "false"}
+    >
       {/* Header */}
       <div className="p-4 border-b border-gray-200 bg-white flex flex-col gap-3 shadow-sm z-10">
-        <div className="flex items-center gap-2">
-          <div className="bg-gradient-to-br from-[#E43632] to-[#FF5F5F] text-white p-1.5 rounded-lg shadow-sm animate-pulse">
-            <Sparkles size={16} fill="currentColor" />
-          </div>
-          <div>
-            <span className="font-bold text-sm text-[#0A0A0A] block leading-none">WRK Copilot</span>
-            <span className="text-[10px] text-gray-400 font-medium">AI Assistant</span>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <div className="bg-gradient-to-br from-[#E43632] to-[#FF5F5F] text-white p-1.5 rounded-lg shadow-sm animate-pulse">
+              <Sparkles size={16} fill="currentColor" />
+            </div>
+            <div>
+              <span className="font-bold text-sm text-[#0A0A0A] block leading-none">WRK Copilot</span>
+              <span className="text-[10px] text-gray-400 font-medium">AI Assistant</span>
+            </div>
           </div>
         </div>
       </div>
@@ -1574,7 +1644,39 @@ export function StudioChat({
               )}
 
               <div className={`max-w-[85%] space-y-2 ${msg.role === "user" ? "items-end flex flex-col" : ""}`}>
-                {msg.kind === "system_run" ? (
+                {/* Proceed-ready success bubble + CTA */}
+                {msg.kind === "proceed_cta" ? (
+                  <div className="p-4 text-sm shadow-sm relative leading-relaxed rounded-2xl rounded-tl-sm border bg-emerald-50 border-emerald-200 text-emerald-900">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-semibold text-[13px]">Proceed to build</span>
+                      <span className="text-[11px] uppercase tracking-wide text-emerald-700">Ready</span>
+                    </div>
+                    <p className="mt-2 text-[13px]">{msg.content}</p>
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="h-8 text-[12px] bg-emerald-600 text-white hover:bg-emerald-700"
+                        onClick={onProceedToBuild}
+                        disabled={
+                          proceedToBuildDisabled || proceedingToBuild || disabled || !automationVersionId
+                        }
+                      >
+                        {proceedingToBuild ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                            Submitting…
+                          </>
+                        ) : (
+                          "Proceed to Build"
+                        )}
+                      </Button>
+                      {proceedToBuildDisabled && proceedToBuildReason ? (
+                        <span className="text-[11px] text-emerald-900/80">{proceedToBuildReason}</span>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : msg.kind === "system_run" ? (
                   <RunBubble
                     message={msg}
                     onRetry={() => handleRunRetry(msg.id)}
@@ -1607,27 +1709,6 @@ export function StudioChat({
 
       {/* Action + Input Area */}
       <div className="p-4 bg-white border-t border-gray-200 space-y-3">
-        <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              onClick={onSuggestNextSteps}
-              disabled={isRequestingSuggestions || actionButtonsDisabled}
-              className="text-xs font-semibold"
-            >
-              {isRequestingSuggestions ? (
-                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-              ) : (
-                <Lightbulb className="mr-2 h-3 w-3" />
-              )}
-              Suggest next steps
-            </Button>
-            {suggestionStatus ? (
-              <p className="text-[11px] text-gray-500">{suggestionStatus}</p>
-            ) : null}
-          </div>
-        </div>
-
         {/* Hidden file input */}
         <input
           type="file"

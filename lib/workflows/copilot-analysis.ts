@@ -29,11 +29,22 @@ export type CopilotTodoCategory =
   | "exceptions"
   | "other";
 
+export type CoreTodoKey = "business_requirements" | "business_objectives" | "success_criteria" | "systems";
+export type CopilotTodoSource = "user" | "ai" | "system";
+
 export interface CopilotTodoItem {
   id: string;
+  key?: CoreTodoKey | string;
   category: CopilotTodoCategory;
   description: string;
   status: "open" | "resolved";
+  confidence?: number;
+  source?: CopilotTodoSource;
+  value?: string | null;
+  evidence?: string | null;
+  question?: string | null;
+  askedAt?: string | null;
+  resolvedAt?: string | null;
   blockingStateItem?: string;
 }
 
@@ -94,6 +105,9 @@ export type CopilotMemoryFacts = {
   human_review?: string | null;
   success_criteria?: string | null;
   samples?: string | null;
+  proceed_ready?: boolean;
+  proceed_reason?: string | null;
+  proceed_ready_workflow_updated_at?: string | null;
 };
 
 export interface CopilotChecklistItem {
@@ -137,11 +151,12 @@ export interface BlueprintProgressSnapshot {
 export const COPILOT_ANALYSIS_VERSION = "v1";
 
 export function createEmptyCopilotAnalysisState(): CopilotAnalysisState {
+  const todos = ensureCoreTodos([]);
   return {
     sections: createEmptySectionsSnapshot(),
-    todos: [],
+    todos,
     humanTouchpoints: [],
-    readiness: createEmptyReadiness(),
+    readiness: computeReadinessFromTodos(todos),
     memory: createEmptyMemory(),
     version: COPILOT_ANALYSIS_VERSION,
     lastUpdatedAt: new Date().toISOString(),
@@ -266,6 +281,102 @@ export function createEmptyReadiness(): CopilotReadiness {
     stateItemsSatisfied: [],
     stateItemsMissing: [],
     blockingTodos: [],
+  };
+}
+
+export const CORE_TODO_KEYS: CoreTodoKey[] = [
+  "business_requirements",
+  "business_objectives",
+  "success_criteria",
+  "systems",
+];
+
+export const CORE_TODO_DEFINITIONS: Record<
+  CoreTodoKey,
+  { category: CopilotTodoCategory; description: string; question: string }
+> = {
+  business_requirements: {
+    category: "business_requirements",
+    description: "Capture the business requirements and must-haves for this automation.",
+    question: "What are the business requirements or must-haves for this automation?",
+  },
+  business_objectives: {
+    category: "business_objectives",
+    description: "Clarify the business goal or objective this automation supports.",
+    question: "What is the primary business goal or objective this automation should achieve?",
+  },
+  success_criteria: {
+    category: "success_criteria",
+    description: "Define success criteria, KPIs, or SLAs for this automation.",
+    question: "How will you measure success? Any KPIs or SLAs?",
+  },
+  systems: {
+    category: "systems",
+    description: "List the systems and tools involved in this workflow.",
+    question: "Which systems or tools are involved in this workflow?",
+  },
+};
+
+export function isCoreTodoKey(key?: string | null): key is CoreTodoKey {
+  if (!key) return false;
+  return CORE_TODO_KEYS.includes(key.trim().toLowerCase() as CoreTodoKey);
+}
+
+function normalizeTodoKey(key?: string | null) {
+  return key?.trim().toLowerCase() ?? null;
+}
+
+export function ensureCoreTodos(existing: CopilotTodoItem[]): CopilotTodoItem[] {
+  const byKey = new Map<string, CopilotTodoItem>();
+  (existing ?? []).forEach((todo) => {
+    const normalized = normalizeTodoKey(todo.key ?? todo.id ?? todo.category);
+    if (normalized) {
+      byKey.set(normalized, { ...todo, key: normalized });
+    }
+  });
+
+  CORE_TODO_KEYS.forEach((key) => {
+    const normalized = normalizeTodoKey(key)!;
+    const def = CORE_TODO_DEFINITIONS[key];
+    const existingTodo = byKey.get(normalized);
+    if (!existingTodo) {
+      byKey.set(normalized, {
+        id: key,
+        key,
+        category: def.category,
+        description: def.description,
+        question: def.question,
+        status: "open",
+        confidence: 0,
+        askedAt: null,
+        resolvedAt: null,
+      });
+    } else {
+      byKey.set(normalized, {
+        ...existingTodo,
+        key: existingTodo.key ?? key,
+        category: existingTodo.category ?? def.category,
+        description: existingTodo.description ?? def.description,
+        question: existingTodo.question ?? def.question,
+      });
+    }
+  });
+
+  return Array.from(byKey.values());
+}
+
+export function computeReadinessFromTodos(todos: CopilotTodoItem[]): CopilotReadiness {
+  const ensured = ensureCoreTodos(todos ?? []);
+  const missing = ensured.filter((todo) => isCoreTodoKey(todo.key ?? todo.id) && todo.status !== "resolved");
+  const satisfied = ensured.filter((todo) => isCoreTodoKey(todo.key ?? todo.id) && todo.status === "resolved");
+  const totalCore = CORE_TODO_KEYS.length;
+  const score = totalCore === 0 ? 100 : Math.round((satisfied.length / totalCore) * 100);
+
+  return {
+    score,
+    stateItemsSatisfied: satisfied.map((todo) => todo.key ?? todo.id),
+    stateItemsMissing: missing.map((todo) => todo.key ?? todo.id),
+    blockingTodos: missing.map((todo) => todo.id),
   };
 }
 

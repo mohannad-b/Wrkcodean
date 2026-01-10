@@ -316,12 +316,16 @@ Return ONLY valid JSON in this exact envelope:
 # CHAT RESPONSE RULES
 - Never summarize the full process—the canvas already shows it.
 - Keep acknowledgements ≤ 2 sentences total.
+- Honor KNOWN FACTS; do not re-ask trigger/schedule/destination/success criteria that are already stated unless a contradiction appears.
 - Only ask a follow-up when a concrete, unresolved requirement would change the workflow structure (e.g., missing system access method, missing notification channel, missing upload mechanism).
 - If schedule, retries, goals, or other requirements already exist in the current workflow or prior messages, do NOT re-ask or reconfirm them.
 - If no such unresolved requirement exists, set "followUpQuestion" to null.
 - Follow-ups must never be confirmations, never be about already-stated goals, and never be generic.
+- If REQUIREMENTS STATUS indicates missing info, ask ONE targeted clarifying question to resolve the next focus. Do not ask generic questions. Do not reconfirm known info.
+- If FOLLOWUP MODE is "technical_opt_in" and technical_opt_in is not yet true, ask ONLY the consent question: "We’ve got enough to run this. Want me to lock it in, or do you want to answer 1–2 technical questions to make it bulletproof?" If consent is granted, ask the single most relevant technical question aligned to the next focus.
 - Assume defaults aggressively unless a decision materially affects execution.
 - Use the user's terminology (systems, teams, acronyms).
+- When you ask a follow-up question, append a brief invitation for other requirements: "(Also feel free to add any other requirements you care about.)" Skip this invitation for the technical_opt_in consent question.
 
 Example:
 {
@@ -431,6 +435,10 @@ RULES:
 - If you must assume, state the assumption and ask to confirm.
 - Keep follow-up questions under ~20 words and never in bullets.
 - Preserve existing steps/IDs; only add or tweak what the user requested. Keep step numbering and connections intact.
+- If REQUIREMENTS STATUS is provided, aim the single follow-up at the next focus and avoid repeating confirmed details.
+- Honor KNOWN FACTS and do not re-ask trigger/schedule/destination/success criteria already stated unless contradictory.
+- If FOLLOWUP MODE is "technical_opt_in" and technical_opt_in is not yet true, ask ONLY the consent question: "We’ve got enough to run this. Want me to lock it in, or do you want to answer 1–2 technical questions to make it bulletproof?" After consent, ask one technical question aligned to the next focus.
+- When you ask a follow-up question, append a brief invitation for other requirements: "(Also feel free to add any other requirements you care about.)" Skip this invitation for the technical_opt_in consent question.
 - Populate workflow sections only when empty; use the user's terminology.
 - Return valid JSON only.`.trim();
 
@@ -455,7 +463,13 @@ Output ONLY the updated step in valid JSON format.`;
 /**
  * Formats the user prompt sent to the AI with optional workflow context.
  */
-export function formatWorkflowPrompt(userMessage: string, currentWorkflow?: Workflow | null, requirementsText?: string | null): string {
+export function formatWorkflowPrompt(
+  userMessage: string,
+  currentWorkflow?: Workflow | null,
+  requirementsText?: string | null,
+  requirementsStatusHint?: string | null,
+  options?: { followUpMode?: "technical_opt_in" | null; knownFactsHint?: string | null }
+): string {
   const parts: string[] = [];
   
   if (requirementsText?.trim()) {
@@ -467,6 +481,21 @@ export function formatWorkflowPrompt(userMessage: string, currentWorkflow?: Work
   }
   
   parts.push(`USER REQUEST:\n${userMessage}`);
+
+  const followUpMode = options?.followUpMode;
+  const knownFactsHint = options?.knownFactsHint;
+
+  if (knownFactsHint?.trim()) {
+    parts.push(`KNOWN FACTS (do not re-ask unless unclear):\n${knownFactsHint.trim()}`);
+  }
+
+  if (requirementsStatusHint?.trim()) {
+    parts.push(`REQUIREMENTS STATUS (what’s still missing):\n${requirementsStatusHint.trim()}`);
+  }
+
+  if (followUpMode === "technical_opt_in") {
+    parts.push("FOLLOWUP MODE: technical_opt_in (ask for consent before technical details)");
+  }
   
   if (currentWorkflow && currentWorkflow.steps?.length > 0) {
     parts.push("\nRemember: Make MINIMAL changes. Preserve all existing structure unless explicitly asked to change it.");

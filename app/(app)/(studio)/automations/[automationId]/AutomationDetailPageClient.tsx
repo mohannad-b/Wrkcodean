@@ -6,6 +6,7 @@ import { logger } from "@/lib/logger";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
+import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -37,7 +38,7 @@ import {
 } from "lucide-react";
 import type { Connection, Node, Edge, EdgeChange, NodeChange } from "reactflow";
 import { StudioChat, type CopilotMessage } from "@/components/automations/StudioChat";
-import type { CopilotAnalysisState } from "@/lib/workflows/copilot-analysis";
+import { isCoreTodoKey, type CopilotAnalysisState } from "@/lib/workflows/copilot-analysis";
 import type { StudioCanvasProps } from "@/components/StudioCanvas";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 import { EdgeInspector } from "@/components/automations/EdgeInspector";
@@ -102,19 +103,6 @@ type SanitizationSummaryPayload = {
   trimmedConnections: number;
   attachedOrphans: number;
 };
-
-type SuggestionStreamEvent =
-  | { status: "thinking" }
-  | { status: "message"; content: string }
-  | {
-      status: "complete";
-      payload: {
-        telemetry?: {
-          sanitizationSummary?: SanitizationSummaryPayload;
-        };
-      };
-    }
-  | { status: "error"; message?: string };
 
 function formatSanitizationSummary(summary?: SanitizationSummaryPayload | null): string {
   if (!summary) {
@@ -486,8 +474,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [proceedingToBuild, setProceedingToBuild] = useState(false);
   const [isSynthesizingWorkflow, setIsSynthesizingWorkflow] = useState(false);
   const [isOptimizingFlow, setIsOptimizingFlow] = useState(false);
-  const [isRequestingSuggestions, setIsRequestingSuggestions] = useState(false);
-  const [suggestionStatus, setSuggestionStatus] = useState<string | null>(null);
   const [isSwitchingVersion, setIsSwitchingVersion] = useState(false);
   const completionRef = useRef<ReturnType<typeof getWorkflowCompletionState> | null>(null);
   const preserveSelectionRef = useRef(false);
@@ -1385,77 +1371,6 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     }
   }, [refreshAutomationPreservingSelection, selectedVersion?.id, toast]);
 
-  const handleSuggestNextSteps = useCallback(async () => {
-    if (!selectedVersion?.id) {
-      toast({ title: "Select a version", description: "Choose a version before requesting suggestions.", variant: "error" });
-      return;
-    }
-    setIsRequestingSuggestions(true);
-    setIsSynthesizingWorkflow(true);
-    setSuggestionStatus("Evaluating workflow…");
-    const decoder = new TextDecoder();
-    let telemetrySummary: SanitizationSummaryPayload | null = null;
-
-    try {
-      const response = await fetch(`/api/automation-versions/${selectedVersion.id}/copilot/suggest-next-steps`, {
-        method: "POST",
-      });
-      if (!response.ok || !response.body) {
-        const data = await response.text().catch(() => "");
-        throw new Error(data || "Unable to suggest next steps.");
-      }
-
-      const reader = response.body.getReader();
-      let buffer = "";
-      let completed = false;
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          break;
-        }
-        buffer += decoder.decode(value, { stream: true });
-        let boundary: number;
-        while ((boundary = buffer.indexOf("\n\n")) !== -1) {
-          const chunk = buffer.slice(0, boundary).trim();
-          buffer = buffer.slice(boundary + 2);
-          if (!chunk.startsWith("data:")) {
-            continue;
-          }
-          const event = JSON.parse(chunk.slice(5)) as SuggestionStreamEvent;
-          if (event.status === "thinking") {
-            setSuggestionStatus("Evaluating workflow…");
-          } else if (event.status === "message") {
-            setSuggestionStatus(event.content);
-          } else if (event.status === "complete") {
-            telemetrySummary = event.payload.telemetry?.sanitizationSummary ?? null;
-            completed = true;
-            break;
-          } else if (event.status === "error") {
-            throw new Error(event.message ?? "Unable to suggest next steps.");
-          }
-        }
-        if (completed) {
-          break;
-        }
-      }
-
-      await refreshAutomationPreservingSelection();
-      toast({
-        title: "Suggestions added",
-        description: formatSanitizationSummary(telemetrySummary),
-        variant: "success",
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to suggest next steps.";
-      toast({ title: "Unable to suggest next steps", description: message, variant: "error" });
-    } finally {
-      setSuggestionStatus(null);
-      setIsRequestingSuggestions(false);
-      setIsSynthesizingWorkflow(false);
-    }
-  }, [refreshAutomationPreservingSelection, selectedVersion?.id, toast]);
-
   const handleViewTaskStep = useCallback(
     (stepNumber: string) => {
       if (!workflow || !stepNumber) {
@@ -1725,21 +1640,58 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     { id: "systems", label: "Systems", sectionKey: "systems" as WorkflowSectionKey },
   ] as const;
 
-  const checklistItems = useMemo<WorkflowChecklistItem[]>(() => {
-    return REQUIRED_CHECKLIST_ITEMS.map((item) => {
-      // Check if section exists and has content
-      const hasContent = item.sectionKey && workflow?.sections?.some(
-        (s) => s.key === item.sectionKey && s.content?.trim().length > 0
-      );
-      
-      return {
-        id: item.id,
-        label: item.label,
-        sectionKey: item.sectionKey,
-        completed: hasContent ?? false,
-      };
+  const gateResolvedMap = useMemo(() => {
+    const todos =
+      copilotAnalysis?.todos?.filter((todo) => {
+        const key = (todo.key ?? todo.id) as string | undefined;
+        return key ? isCoreTodoKey(key) : false;
+      }) ?? [];
+    const checklist = copilotAnalysis?.memory?.checklist ?? {};
+    const sections = workflow?.sections ?? [];
+
+    const isResolved = (key: string) => {
+      const todo = todos.find((t) => (t.key ?? t.id) === key);
+      const checklistItem = (checklist as any)?.[key];
+      const sectionContent = sections.some((s) => s.key === key && s.content?.trim());
+      return (todo?.status === "resolved") || checklistItem?.confirmed === true || sectionContent;
+    };
+
+    return REQUIRED_CHECKLIST_ITEMS.reduce<Record<string, boolean>>((acc, item) => {
+      acc[item.id] = isResolved(item.id);
+      return acc;
+    }, {});
+  }, [copilotAnalysis, workflow]);
+
+  const [gateCompleted, setGateCompleted] = useState<Record<string, boolean>>({
+    business_requirements: false,
+    business_objectives: false,
+    success_criteria: false,
+    systems: false,
+  });
+
+  useEffect(() => {
+    setGateCompleted((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      Object.entries(gateResolvedMap).forEach(([key, resolved]) => {
+        if (resolved && !prev[key]) {
+          next[key] = true;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
     });
-  }, [workflow]);
+  }, [gateResolvedMap]);
+
+  const checklistItems = useMemo<WorkflowChecklistItem[]>(() => {
+    return REQUIRED_CHECKLIST_ITEMS.map((item) => ({
+      id: item.id,
+      label: item.label,
+      sectionKey: item.sectionKey,
+      completed: gateCompleted[item.id] ?? false,
+    }));
+  }, [gateCompleted]);
+
   // Check if all 4 required items are completed
   const requiredItemsComplete = useMemo(() => {
     return checklistItems.every((item) => item.completed);
@@ -2033,29 +1985,58 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
       <div className="border-b border-gray-100 bg-white px-6 py-3 z-20 relative">
         <div className="flex items-center gap-6 min-w-max overflow-x-auto no-scrollbar">
           {checklistItems.map((item) => {
-            const chipVisual = (
-              <div className="flex items-center gap-2">
-                {item.completed ? (
-                  <div className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                  </div>
-                ) : (
-                  <div className="h-5 w-5 rounded-full border-2 border-gray-300" />
+            const checked = item.completed;
+            return (
+              <motion.div
+                key={item.id}
+                layout
+                role="checkbox"
+                aria-checked={checked}
+                aria-label={`${item.label} ${checked ? "complete" : "incomplete"}`}
+                tabIndex={0}
+                className={cn(
+                  "flex items-center gap-2 rounded-full px-3 py-1.5 border text-xs font-semibold transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-300",
+                  checked
+                    ? "border-emerald-200 bg-emerald-50 shadow-[0_4px_12px_rgba(16,185,129,0.15)]"
+                    : "border-gray-200 bg-white/40"
                 )}
-                <span
-                  className={cn(
-                    "text-xs font-semibold transition-colors duration-300",
-                    item.completed ? "text-[#0A0A0A]" : "text-gray-500"
-                  )}
+                animate={checked ? { scale: 1, opacity: 1 } : { scale: 1, opacity: 1 }}
+                transition={{ type: "spring", stiffness: 360, damping: 24 }}
+              >
+                <div className="relative h-5 w-5">
+                  <AnimatePresence initial={false} mode="wait">
+                    {checked ? (
+                      <motion.div
+                        key="checked"
+                        initial={{ scale: 0.8, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        exit={{ scale: 0.8, opacity: 0 }}
+                        transition={{ type: "spring", stiffness: 520, damping: 30 }}
+                        className="absolute inset-0 flex items-center justify-center rounded-full bg-emerald-100 text-emerald-600"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+                      </motion.div>
+                    ) : (
+                      <motion.div
+                        key="unchecked"
+                        initial={{ scale: 1, opacity: 1 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        exit={{ scale: 0.9, opacity: 0 }}
+                        transition={{ duration: 0.18 }}
+                        className="absolute inset-0 rounded-full border-2 border-gray-300"
+                        aria-hidden
+                      />
+                    )}
+                  </AnimatePresence>
+                </div>
+                <motion.span
+                  className="text-xs font-semibold"
+                  animate={{ color: checked ? "#0A0A0A" : "#6B7280" }}
+                  transition={{ duration: 0.18 }}
                 >
                   {item.label}
-                </span>
-              </div>
-            );
-            return (
-              <div key={item.id} className="flex items-center gap-2">
-                {chipVisual}
-              </div>
+                </motion.span>
+              </motion.div>
             );
           })}
           <div className="flex items-center gap-3 flex-wrap">
@@ -2149,14 +2130,15 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             onTasksUpdate={(tasks) => handleTasksUpdate(tasks as unknown as VersionTask[])}
             injectedMessage={injectedChatMessage}
             onInjectedMessageConsumed={() => setInjectedChatMessage(null)}
-            onSuggestNextSteps={handleSuggestNextSteps}
-            isRequestingSuggestions={isRequestingSuggestions}
-            suggestionStatus={suggestionStatus}
             onWorkflowUpdatingChange={setIsSynthesizingWorkflow}
             analysis={copilotAnalysis}
             analysisLoading={copilotAnalysisLoading}
             analysisUnavailable={copilotAnalysisError}
             onRefreshAnalysis={() => refreshAnalysis(selectedVersion?.id ?? null)}
+            onProceedToBuild={handleProceedToBuild}
+            proceedToBuildDisabled={proceedButtonDisabled}
+            proceedToBuildReason={proceedDisabledReason}
+            proceedingToBuild={proceedingToBuild}
           />
         </div>
 

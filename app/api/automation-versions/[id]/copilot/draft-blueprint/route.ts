@@ -240,8 +240,6 @@ export async function POST(request: Request, { params }: { params: { id: string 
         const nextFollowUp = chooseFollowUpQuestion({
           candidate: trimmedFollowUp,
           memory: analysisState.memory ?? createEmptyMemory(),
-          workflow: workflowWithTasks,
-          userMessage: userMessageContent,
         });
 
         analysisState = {
@@ -487,42 +485,26 @@ function buildConversationSummary(messages: CopilotMessage[], intakeNotes?: stri
 type FollowUpChoiceArgs = {
   candidate?: string | null;
   memory: CopilotMemory;
-  workflow: Workflow;
-  userMessage: string;
 };
 
-function chooseFollowUpQuestion({ candidate, memory, workflow, userMessage }: FollowUpChoiceArgs): string | null {
+function chooseFollowUpQuestion({ candidate, memory }: FollowUpChoiceArgs): string | null {
   const trimmed = candidate?.trim();
   const normalizedCandidate = trimmed ? normalizeQuestionText(trimmed) : null;
   const reachedCap = memory.question_count >= 10;
 
   if (reachedCap) {
-    return "This looks complete — want me to finalize or tweak anything?";
-  }
-
-  const mergedFacts = mergeFacts(memory.facts ?? {}, workflow, userMessage);
-  const stage = computeStage(mergedFacts, memory.question_count);
-
-  if (trimmed && normalizedCandidate && !memory.asked_questions_normalized.includes(normalizedCandidate)) {
-    const assumptionCandidate = pickStageQuestion(stage, mergedFacts);
-    if (assumptionCandidate) {
-      const normalizedAssumption = normalizeQuestionText(assumptionCandidate);
-      if (!memory.asked_questions_normalized.includes(normalizedAssumption)) {
-        return assumptionCandidate;
-      }
-    }
-    return trimmed;
-  }
-
-  const fallback = pickStageQuestion(stage, mergedFacts);
-  if (!fallback) {
     return null;
   }
-  const normalizedFallback = normalizeQuestionText(fallback);
-  if (memory.asked_questions_normalized.includes(normalizedFallback)) {
+
+  if (!trimmed || !normalizedCandidate) {
     return null;
   }
-  return fallback;
+
+  if (memory.asked_questions_normalized.includes(normalizedCandidate)) {
+    return null;
+  }
+
+  return trimmed;
 }
 
 type RefreshMemoryArgs = {
@@ -635,23 +617,6 @@ function computeStage(facts: CopilotMemory["facts"], questionCount: number): Cop
   if (!hasSystems) return "systems";
 
   return facts.samples === "required" ? "samples" : "done";
-}
-
-function pickStageQuestion(stage: CopilotMemory["stage"], facts: CopilotMemory["facts"]): string | null {
-  switch (stage) {
-    case "requirements":
-      return `I'm assuming this runs daily around 8am to ${facts.primary_outcome ?? "deliver the main result"} — okay?`;
-    case "objectives":
-      return `I'm assuming the business goal is ${facts.primary_outcome ?? "saving time"} — right?`;
-    case "success":
-      return "I'll target under 5% errors and finish within 10 minutes — sound right?";
-    case "systems":
-      return `I'll drop results into ${facts.storage_destination ?? "Google Sheets"} and notify ops on retries — good?`;
-    case "samples":
-      return "Do you want to share one sample file to calibrate?";
-    default:
-      return null;
-  }
 }
 
 function buildMemorySummary(
