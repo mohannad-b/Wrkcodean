@@ -65,7 +65,7 @@ export function createSSEStream(options: SSEOptions = {}): SSEStream {
     enqueue(async () => {
       if (closed) return;
       const currentSeq = seq++;
-      const shouldAttachSeq = event === "status" || event === "result" || event === "error";
+      const shouldAttachSeq = event === "status" || event === "result" || event === "error" || event === "message";
       const enriched =
         shouldAttachSeq && data && typeof data === "object"
           ? { ...(data as Record<string, unknown>), seq: currentSeq }
@@ -73,8 +73,8 @@ export function createSSEStream(options: SSEOptions = {}): SSEStream {
           ? { data, seq: currentSeq }
           : data;
       const payload = typeof enriched === "string" ? enriched : JSON.stringify(enriched);
-      await write(`event: ${event}\n`);
-      await write(`data: ${payload}\n\n`);
+      const chunk = `event: ${event}\n` + `data: ${payload}\n\n`;
+      await write(chunk);
     });
 
   const response = (init?: ResponseInit) => {

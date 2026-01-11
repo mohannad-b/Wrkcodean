@@ -7,7 +7,6 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import { motion } from "motion/react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import type { WorkflowUpdates } from "@/lib/workflows/ai-updates";
 import type { Workflow } from "@/lib/workflows/types";
 import { workflowToNodes } from "@/lib/workflows/canvas-utils";
@@ -18,6 +17,18 @@ import { appendDisplayLine } from "./progress-reducer";
 
 const DEBUG_UI_ENABLED =
   process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_DEBUG_COPILOT_UI === "true";
+const INGEST_URL = process.env.NEXT_PUBLIC_COPILOT_INGEST_URL;
+
+const ingest = (payload: Record<string, unknown>) => {
+  if (!INGEST_URL) return;
+  fetch(INGEST_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    keepalive: true,
+  }).catch(() => {});
+};
+const agentLog = (payload: Record<string, unknown>) => ingest(payload);
 
 type ChatRole = "user" | "assistant" | "system";
 type RunPhase = "connected" | "understanding" | "drafting" | "structuring" | "drawing" | "saving" | "done" | "error";
@@ -29,6 +40,7 @@ export interface CopilotMessage {
   createdAt: string;
   optimistic?: boolean;
   transient?: boolean;
+  clientMessageId?: string | null;
   kind?: "system_run" | "proceed_cta";
   runStatus?: {
     phase: RunPhase;
@@ -64,6 +76,16 @@ interface StudioChatProps {
   analysis?: CopilotAnalysisState | null;
   analysisLoading?: boolean;
   onRefreshAnalysis?: () => void | Promise<void>;
+  onBuildActivityUpdate?: (activity: {
+    runId: string;
+    phase: string;
+    lastLine: string | null;
+    lines: string[];
+    startedAt: number;
+    completedAt: number | null;
+    errorMessage: string | null;
+    isRunning: boolean;
+  } | null) => void;
   analysisUnavailable?: boolean;
   onProceedToBuild?: () => void;
   proceedToBuildDisabled?: boolean;
@@ -90,6 +112,89 @@ type ApiCopilotMessage = {
 const formatTimestamp = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 
+type RunProgressState = {
+  runId: string;
+  phase: string;
+  lastLine: string | null;
+  lines: string[];
+  startedAt: number;
+  completedAt: number | null;
+  errorMessage: string | null;
+};
+
+const mapRunPhase = (phase?: string | null): string => {
+  const normalized = (phase ?? "").toLowerCase();
+  switch (normalized) {
+    case "connecting":
+    case "connected":
+      return "Connecting";
+    case "understanding":
+      return "Understanding request";
+    case "structuring":
+    case "clarifying":
+      return "Clarifying";
+    case "drafting":
+      return "Drafting";
+    case "requirements":
+      return "Requirements";
+    case "tasks":
+    case "drawing":
+      return "Generating tasks";
+    case "validating":
+    case "cleaning":
+      return "Validating & cleaning";
+    case "saving":
+      return "Saving";
+    case "done":
+      return "Ready";
+    case "error":
+      return "Error";
+    default:
+      return "Understanding request";
+  }
+};
+
+const mergeTranscript = (existing: CopilotMessage[], incoming: CopilotMessage[]) => {
+  const byId = new Map<string, CopilotMessage>();
+  const byClient = new Map<string, CopilotMessage>();
+  existing
+    .filter((m) => m.kind !== "system_run")
+    .forEach((m) => {
+      if (m.clientMessageId) byClient.set(m.clientMessageId, m);
+      byId.set(m.id, m);
+    });
+
+  incoming.forEach((m) => {
+    if (m.clientMessageId && byClient.has(m.clientMessageId)) {
+      byId.delete(byClient.get(m.clientMessageId)!.id);
+    } else if (m.clientMessageId) {
+      byClient.set(m.clientMessageId, m);
+    }
+
+    // Fallback: match optimistic user bubbles without clientMessageId
+    if (!m.clientMessageId && m.role === "user") {
+      const optimistic = existing.find(
+        (msg) =>
+          msg.optimistic &&
+          msg.role === "user" &&
+          msg.content.trim() === m.content.trim() &&
+          Math.abs(new Date(msg.createdAt).getTime() - new Date(m.createdAt).getTime()) < 15_000
+      );
+      if (optimistic) {
+        byId.delete(optimistic.id);
+      }
+    }
+
+    byId.set(m.id, m);
+  });
+
+  const merged = Array.from(byId.values()).sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+
+  return merged.length ? merged : [INITIAL_AI_MESSAGE];
+};
+
 export function StudioChat({
   automationVersionId,
   workflowEmpty,
@@ -103,6 +208,7 @@ export function StudioChat({
   onInjectedMessageConsumed,
   onWorkflowUpdatingChange,
   onRefreshAnalysis,
+  onBuildActivityUpdate,
   analysis,
   analysisLoading = false,
   onProceedToBuild,
@@ -135,6 +241,8 @@ export function StudioChat({
     string,
     { slow?: number; slower?: number; slowest?: number }
   >>(new Map());
+  const activeControllerRef = useRef<AbortController | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
   const runSeenServerStatusRef = useRef<Map<string, boolean>>(new Map());
   const runCompletedRef = useRef<Map<string, boolean>>(new Map());
   const lastSeqByRunIdRef = useRef<Map<string, number>>(new Map());
@@ -167,10 +275,26 @@ export function StudioChat({
     return profile.email.charAt(0).toUpperCase();
   };
 
-  const dropTransientMessages = useCallback(
-    (list: CopilotMessage[]) => list.filter((message) => !message.transient),
-    []
-  );
+  const renderMessages = useMemo(() => {
+    const seen = new Set<string>();
+    return messages.filter((message) => {
+      if (!message?.id) return false;
+      if (message.kind === "system_run") return false;
+      if (seen.has(message.id)) return false;
+      seen.add(message.id);
+      return true;
+    });
+  }, [messages]);
+  const [showRunDetails, setShowRunDetails] = useState(false);
+  const [runProgress, setRunProgress] = useState<{
+    runId: string;
+    phase: string;
+    lastLine: string | null;
+    lines: string[];
+    startedAt: number;
+    completedAt: number | null;
+    errorMessage: string | null;
+  } | null>(null);
 
   const mapApiMessage = useCallback(
     (message: ApiCopilotMessage): CopilotMessage => ({
@@ -178,8 +302,41 @@ export function StudioChat({
       role: message.role,
       content: message.role === "assistant" ? stripWorkflowBlocks(message.content) : message.content,
       createdAt: message.createdAt,
+      clientMessageId: (message as any)?.clientMessageId ?? null,
     }),
     []
+  );
+
+  const loadMessages = useCallback(
+    async (options: { mergeWithExisting?: boolean; silent?: boolean } = {}) => {
+      if (!automationVersionId) {
+        setMessages([INITIAL_AI_MESSAGE]);
+        return;
+      }
+
+      const { mergeWithExisting = true, silent = false } = options;
+      if (!silent) {
+        setIsLoadingThread(true);
+      }
+
+      try {
+        const response = await fetch(`/api/automation-versions/${automationVersionId}/messages`, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("Failed to load messages");
+        }
+        const data: { messages: ApiCopilotMessage[] } = await response.json();
+        const mapped = data.messages.map(mapApiMessage);
+        setMessages((prev) => mergeTranscript(mergeWithExisting ? prev : [], mapped));
+      } catch (error) {
+        logger.error("[STUDIO-CHAT] Failed to load messages", error);
+        setMessages([INITIAL_AI_MESSAGE]);
+      } finally {
+        if (!silent) {
+          setIsLoadingThread(false);
+        }
+      }
+    },
+    [automationVersionId, mapApiMessage]
   );
 
   useEffect(() => {
@@ -187,40 +344,34 @@ export function StudioChat({
   }, [messages]);
 
   useEffect(() => {
+    onBuildActivityUpdate?.(
+      runProgress
+        ? {
+            ...runProgress,
+            isRunning: !runProgress.completedAt,
+          }
+        : null
+    );
+  }, [onBuildActivityUpdate, runProgress]);
+
+  useEffect(() => {
+    let cancelled = false;
     if (!automationVersionId) {
       setMessages([INITIAL_AI_MESSAGE]);
+      setRunProgress(null);
       setIsLoadingThread(false);
       return;
     }
 
-    let cancelled = false;
-    const loadMessages = async () => {
-      setIsLoadingThread(true);
-      try {
-        const response = await fetch(`/api/automation-versions/${automationVersionId}/messages`, { cache: "no-store" });
-        if (!response.ok) {
-          throw new Error("Failed to load messages");
-        }
-        const data: { messages: ApiCopilotMessage[] } = await response.json();
-        if (cancelled) return;
-        const mapped = data.messages.map(mapApiMessage);
-        setMessages(mapped.length > 0 ? mapped : [INITIAL_AI_MESSAGE]);
-      } catch (error) {
-        logger.error("[STUDIO-CHAT] Failed to load messages", error);
-        if (cancelled) return;
-        setMessages([INITIAL_AI_MESSAGE]);
-      } finally {
-        if (!cancelled) {
-          setIsLoadingThread(false);
-        }
-      }
-    };
+    void (async () => {
+      await loadMessages({ mergeWithExisting: false });
+      if (cancelled) return;
+    })();
 
-    loadMessages();
     return () => {
       cancelled = true;
     };
-  }, [automationVersionId, mapApiMessage]);
+  }, [automationVersionId, loadMessages]);
 
   useEffect(() => {
     if (prevWorkflowEmptyRef.current && !workflowEmpty) {
@@ -238,7 +389,10 @@ export function StudioChat({
     prevWorkflowEmptyRef.current = workflowEmpty;
   }, [workflowEmpty]);
 
-  const durableMessages = useMemo(() => dropTransientMessages(messages), [messages, dropTransientMessages]);
+  const durableMessages = useMemo(
+    () => messages.filter((message) => message.kind !== "system_run"),
+    [messages]
+  );
 
   useEffect(() => {
     onConversationChange?.(durableMessages);
@@ -334,6 +488,85 @@ export function StudioChat({
     return mimeType.startsWith("image/");
   };
 
+  const updateRunMessage = useCallback(
+    (targetRunId: string, updater: (status: CopilotMessage["runStatus"]) => CopilotMessage["runStatus"]) => {
+      let computedStatus: CopilotMessage["runStatus"] | null = null;
+      if (activeRunIdRef.current && targetRunId !== activeRunIdRef.current) {
+        return;
+      }
+
+      setMessages((prev) => {
+        const existing = prev.find((msg) => msg.kind === "system_run" && msg.id === targetRunId);
+        const currentStatus =
+          existing?.runStatus ??
+          ({
+            phase: "drafting",
+            text: "",
+            errorMessage: null,
+            retryable: false,
+            collapsed: false,
+            displayLines: existing?.runStatus?.displayLines ?? [],
+          } as CopilotMessage["runStatus"]);
+        const nextStatus = updater(currentStatus);
+        computedStatus = nextStatus;
+        const withoutRunMessages = prev.filter((msg) => !(msg.kind === "system_run" && msg.id === targetRunId));
+        const runMessage: CopilotMessage = {
+          id: existing?.id ?? targetRunId,
+          role: "assistant",
+          content: "",
+          createdAt: existing?.createdAt ?? new Date().toISOString(),
+          kind: "system_run",
+          runStatus: nextStatus,
+        };
+        return [...withoutRunMessages, runMessage];
+      });
+
+      setRunProgress((prev) => {
+        const status = computedStatus ?? {
+          phase: "drafting",
+          text: "",
+          errorMessage: null,
+          retryable: false,
+          collapsed: false,
+          displayLines: [],
+        };
+
+        const base: RunProgressState =
+          prev && prev.runId === targetRunId
+            ? prev
+            : {
+                runId: targetRunId,
+                phase: "Connecting",
+                lastLine: null,
+                lines: [],
+                startedAt: Date.now(),
+                completedAt: null,
+                errorMessage: null,
+              };
+
+        const phaseLabel = mapRunPhase(status.phase);
+        const candidateLine =
+          status.errorMessage ??
+          status.text ??
+          (status.displayLines && status.displayLines[status.displayLines.length - 1]) ??
+          base.lastLine;
+        const nextLines =
+          candidateLine != null ? appendDisplayLine(base.lines, candidateLine).slice(-10) : base.lines;
+        const completed = Boolean(status.completed) || phaseLabel === "Done" || phaseLabel === "Error";
+
+        return {
+          ...base,
+          phase: phaseLabel,
+          lastLine: candidateLine,
+          lines: nextLines,
+          completedAt: completed ? Date.now() : base.completedAt,
+          errorMessage: status.errorMessage ?? (phaseLabel === "Error" ? candidateLine : base.errorMessage),
+        };
+      });
+    },
+    []
+  );
+
   const sendMessage = useCallback(
     async (
       messageContent: string,
@@ -350,25 +583,30 @@ export function StudioChat({
       }
 
       const isRetry = Boolean(options?.reuseRunId);
-      const optimisticMessageId = isRetry ? options?.reuseRunId ?? null : `temp-${Date.now()}`;
+      const makeTempId = () =>
+        (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `temp-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+      const optimisticMessageId = isRetry ? options?.reuseRunId ?? null : makeTempId();
       const requestId = pendingRequestIdRef.current + 1;
       pendingRequestIdRef.current = requestId;
-      const runId = options?.reuseRunId ?? optimisticMessageId ?? `temp-${Date.now()}`;
+      const runId = options?.reuseRunId ?? optimisticMessageId ?? makeTempId();
       const clientMessageId = options?.reuseRunId && isRetry ? `${runId}-retry-${Date.now()}` : runId;
       const initialText = source === "seed" ? "Understanding…" : isRetry ? "Understanding…" : "Understanding…";
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: "debug-session",
-          runId,
-          hypothesisId: "H-stream-default",
-          location: "StudioChat.tsx:sendMessage",
-          message: "copilot_chat.streaming_default_on",
-          data: { clientMessageId },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
+      if (activeControllerRef.current) {
+        activeControllerRef.current.abort();
+        activeControllerRef.current = null;
+      }
+      activeRunIdRef.current = runId;
+      ingest({
+        sessionId: "debug-session",
+        runId,
+        hypothesisId: "H-stream-default",
+        location: "StudioChat.tsx:sendMessage",
+        message: "copilot_chat.streaming_default_on",
+        data: { clientMessageId },
+        timestamp: Date.now(),
+      });
 
       lastSentContentRef.current = trimmed;
       runContentRef.current.set(runId, trimmed);
@@ -388,21 +626,9 @@ export function StudioChat({
             content: trimmed,
             createdAt: new Date().toISOString(),
             optimistic: true,
+            clientMessageId,
           };
 
-      const baseRunStatus: CopilotMessage["runStatus"] = {
-        phase: "understanding",
-        text: initialText,
-        errorMessage: null,
-        retryable: false,
-        persistenceError: false,
-        debugDetails: null,
-        collapsed: false,
-        debugLines: [],
-        runId,
-        displayLines: [],
-        completed: false,
-      };
       runSeenServerStatusRef.current.set(runId, false);
       sseFirstChunkByRunIdRef.current.set(runId, false);
       lastSeqByRunIdRef.current.set(runId, 0);
@@ -410,69 +636,57 @@ export function StudioChat({
         runSseEventsRef.current.set(runId, []);
       }
       runCompletedRef.current.set(runId, false);
+      setRunProgress({
+        runId,
+        phase: "Connecting",
+        lastLine: initialText,
+        lines: [initialText],
+        startedAt: Date.now(),
+        completedAt: null,
+        errorMessage: null,
+      });
 
       setMessages((prev) => {
-        const durable = dropTransientMessages(prev);
-        const existingIndex = durable.findIndex((msg) => msg.id === runId && msg.kind === "system_run");
-        const next: CopilotMessage[] = [...durable];
+        const next: CopilotMessage[] = prev.filter((msg) => msg.id !== optimisticMessage?.id);
         if (optimisticMessage) {
           next.push(optimisticMessage);
         }
-        if (existingIndex >= 0) {
-          next[existingIndex] = {
-            ...next[existingIndex],
-            kind: "system_run",
-            role: "assistant",
-            runStatus: baseRunStatus,
-            createdAt: next[existingIndex].createdAt,
-          };
-        } else {
-          next.push({
-            id: runId,
-            role: "assistant",
-            kind: "system_run",
-            content: "",
-            createdAt: new Date().toISOString(),
-            runStatus: baseRunStatus,
-          });
-        }
-        return next;
+        return next.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
       });
 
-      const updateRunMessage = (
+      const updateRunProgress = (
         targetRunId: string,
-        updater: (status: NonNullable<CopilotMessage["runStatus"]>) => CopilotMessage["runStatus"]
+        updater: (status: {
+          runId: string;
+          phase: string;
+          lastLine: string | null;
+          lines: string[];
+          startedAt: number;
+          completedAt: number | null;
+          errorMessage: string | null;
+        }) => typeof runProgress
       ) => {
-        setMessages((prev) => {
-          const next = dropTransientMessages(prev).map((msg) => {
-            if (msg.id !== targetRunId || msg.kind !== "system_run") return msg;
-            const currentStatus: NonNullable<CopilotMessage["runStatus"]> =
-              msg.runStatus ?? {
-                phase: "understanding",
-                text: "Understanding…",
-                errorMessage: null,
-                retryable: false,
-                persistenceError: false,
-                debugDetails: null,
-                collapsed: false,
-                debugLines: [],
-                runId: targetRunId,
-              };
-            return { ...msg, runStatus: updater(currentStatus) };
-          });
-          return next;
+        setRunProgress((prev) => {
+          const current =
+            prev ??
+            ({
+              runId: targetRunId,
+              phase: "Connecting",
+              lastLine: null,
+              lines: [],
+              startedAt: Date.now(),
+              completedAt: null,
+              errorMessage: null,
+            } as any);
+          return updater(current as any) as any;
         });
       };
 
       const appendDebugLine = (line: string, targetRunId: string = runId) => {
         if (!DEBUG_UI_ENABLED) return;
-        updateRunMessage(targetRunId, (status) => {
-          const nextLines = [...(status.debugLines ?? []), line.slice(0, 160)];
-          return {
-            ...status,
-            debugLines: nextLines.slice(-40),
-            collapsed: status.collapsed ?? true,
-          };
+        updateRunProgress(targetRunId, (status) => {
+          const nextLines = [...status.lines, line.slice(0, 160)].slice(-10);
+          return { ...status, lines: nextLines, lastLine: line };
         });
       };
 
@@ -511,6 +725,9 @@ export function StudioChat({
       };
 
       const shouldProcessEvent = (targetRunId: string | undefined, seq?: number) => {
+        if (targetRunId && activeRunIdRef.current && targetRunId !== activeRunIdRef.current) {
+          return false;
+        }
         if (!seq || !targetRunId) return true;
         const last = lastSeqByRunIdRef.current.get(targetRunId) ?? 0;
         if (seq <= last) {
@@ -537,44 +754,9 @@ export function StudioChat({
 
       const pushDisplayLine = (line: string, targetRunId: string) => {
         if (runCompletedRef.current.get(targetRunId)) return;
-        updateRunMessage(targetRunId, (status) => {
-          if (status.completed) return status;
-          const lines = [...(status.displayLines ?? [])];
-          const nextLines = appendDisplayLine(lines, line);
-          if (nextLines === lines) {
-            // #region agent log
-            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                sessionId: "debug-session",
-                runId,
-                hypothesisId: "H4-display",
-                location: "StudioChat.tsx:pushDisplayLine",
-                message: "dedupe skip",
-                data: { targetRunId, line },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-            // #endregion
-            return { ...status, text: line, displayLines: lines };
-          }
-          // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sessionId: "debug-session",
-              runId,
-              hypothesisId: "H4-display",
-              location: "StudioChat.tsx:pushDisplayLine",
-              message: "line added",
-              data: { targetRunId, line, count: nextLines.length },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          // #endregion
-          return { ...status, text: line, displayLines: nextLines };
+        updateRunProgress(targetRunId, (status) => {
+          const nextLines = appendDisplayLine(status.lines, line).slice(-10);
+          return { ...status, lastLine: line, lines: nextLines };
         });
       };
 
@@ -608,10 +790,15 @@ export function StudioChat({
           drawing: "drawing",
           done: "done",
           error: "error",
+          chat_ready: "connected",
         };
         const mappedPhase = payload.phase && phaseMap[payload.phase] ? phaseMap[payload.phase] : undefined;
         if (mappedPhase) {
           updateRunMessage(targetRunId, (status) => ({ ...status, phase: mappedPhase }));
+        }
+        if (payload.phase === "chat_ready") {
+          setIsSending(false);
+          setIsAwaitingReply(false);
         }
         if (payload.phase && !mappedPhase) {
           fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
@@ -754,6 +941,32 @@ export function StudioChat({
             timestamp: Date.now(),
           }),
         }).catch(() => {});
+      };
+
+      const upsertAssistantMessage = (apiMessage: ApiCopilotMessage, targetRunId: string) => {
+        const assistantMessage = mapApiMessage(apiMessage);
+        setMessages((prev) => {
+          const withoutDuplicate = prev.filter((msg) => msg.id !== assistantMessage.id);
+          const merged = [...withoutDuplicate, assistantMessage].sort(
+            (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+          );
+          return merged;
+        });
+        updateRunMessage(targetRunId, (status) => ({ ...status, text: status.text ?? "Reply sent" }));
+        setIsAwaitingReply(false);
+        setIsSending(false);
+      };
+
+      const applyMessagePayload = (rawData: { message?: ApiCopilotMessage; seq?: number }, responseRunId: string) => {
+        if (!rawData?.message) return;
+        if (!shouldProcessEvent(responseRunId, rawData.seq)) return;
+        recordSseEvent("message", {
+          runId: responseRunId,
+          seq: rawData.seq,
+          message: rawData.message.content,
+          phase: "message",
+        });
+        upsertAssistantMessage(rawData.message, responseRunId);
       };
 
       const applyResultPayload = async (
@@ -924,24 +1137,14 @@ export function StudioChat({
         }
 
         if (data.message && isLatest && stepCount !== 0) {
-          const assistantMessage = mapApiMessage(data.message);
-          setMessages((prev) => {
-            const durable = dropTransientMessages(prev);
-            const merged = [...durable, assistantMessage].sort(
-              (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-            );
-            return merged;
-          });
-        } else {
-          setMessages((prev) => dropTransientMessages(prev));
+          upsertAssistantMessage(data.message, responseRunId);
         }
 
         if (data.proceedReady && data.proceedMessage) {
           const proceedId = `${responseRunId}-proceed`;
           setMessages((prev) => {
-            const durable = dropTransientMessages(prev);
-            if (durable.some((msg) => msg.id === proceedId)) {
-              return durable;
+            if (prev.some((msg) => msg.id === proceedId)) {
+              return prev;
             }
             const proceedBubble: CopilotMessage = {
               id: proceedId,
@@ -951,7 +1154,7 @@ export function StudioChat({
               kind: "proceed_cta",
               proceedMeta: { uiStyle: data.proceedUiStyle ?? "success" },
             };
-            return [...durable, proceedBubble];
+            return [...prev, proceedBubble];
           });
         }
 
@@ -1027,7 +1230,7 @@ export function StudioChat({
         if (finalPhase === "done") {
           const timer = window.setTimeout(() => {
             setMessages((prev) =>
-              dropTransientMessages(prev).map((msg) =>
+              prev.map((msg) =>
                 msg.id === runId && msg.kind === "system_run"
                   ? {
                       ...msg,
@@ -1048,6 +1251,9 @@ export function StudioChat({
           analysisSaved: !persistenceError,
         });
         receivedTerminalEvent = true;
+        if (isLatest) {
+          await loadMessages({ mergeWithExisting: true, silent: true });
+        }
         return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
       };
 
@@ -1071,6 +1277,7 @@ export function StudioChat({
           return false;
         }
         const controller = new AbortController();
+        activeControllerRef.current = controller;
         const idleTimeoutMs = 60_000;
         const maxTimeoutMs = 70_000;
         let idleTimer: number | null = null;
@@ -1329,6 +1536,8 @@ export function StudioChat({
 
                 if (effectiveType === "status") {
                   applyStatusFromEvent({ ...parsed, runId: eventRunId });
+                } else if (effectiveType === "message") {
+                  applyMessagePayload(parsed, eventRunId);
                 } else if (effectiveType === "result") {
                   terminalType = "result";
                   await applyResultPayload(parsed, eventRunId, "sse");
@@ -1420,6 +1629,11 @@ export function StudioChat({
           // #endregion
           logger.warn("[STUDIO-CHAT] SSE stream failed, falling back", error);
           return false;
+        }
+        finally {
+          if (activeControllerRef.current === controller) {
+            activeControllerRef.current = null;
+          }
         }
       };
 
@@ -1523,9 +1737,9 @@ export function StudioChat({
     [
       automationVersionId,
       disabled,
-      dropTransientMessages,
       isAwaitingReply,
       isSending,
+      loadMessages,
       mapApiMessage,
       onProgressUpdate,
       onRefreshAnalysis,
@@ -1561,6 +1775,10 @@ export function StudioChat({
     },
     [sendMessage]
   );
+
+  const runHasError = Boolean(runProgress?.errorMessage);
+  const runIsActive = runProgress ? !runProgress.completedAt && !runProgress.errorMessage : false;
+  const runIsDone = runProgress ? !runProgress.errorMessage && Boolean(runProgress.completedAt) : false;
 
   useEffect(() => {
     if (!injectedMessage || !automationVersionId) return;
@@ -1624,83 +1842,80 @@ export function StudioChat({
             </div>
           ) : (
             <>
-              {messages.map((msg) => (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              key={msg.id}
-              className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
-            >
-              {msg.role === "assistant" && (
-                <div className="w-8 h-8 rounded-full bg-white border border-gray-200 flex items-center justify-center text-[#E43632] shadow-sm shrink-0 mt-0.5">
-                  <Sparkles size={14} />
-                </div>
-              )}
-              {msg.role === "user" && (
-                <Avatar className="w-8 h-8 mt-0.5 border-2 border-white shadow-sm shrink-0">
-                  {profile?.avatarUrl ? <AvatarImage src={profile.avatarUrl} alt={profile.name} /> : null}
-                  <AvatarFallback>{getUserInitials()}</AvatarFallback>
-                </Avatar>
-              )}
+              {renderMessages.map((msg) => {
+                if (msg.kind === "system_run") return null;
+                return (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    key={msg.id}
+                    className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
+                  >
+                    {msg.role === "assistant" && (
+                      <div className="w-8 h-8 rounded-full bg-white border border-gray-200 flex items-center justify-center text-[#E43632] shadow-sm shrink-0 mt-0.5">
+                        <Sparkles size={14} />
+                      </div>
+                    )}
+                    {msg.role === "user" && (
+                      <Avatar className="w-8 h-8 mt-0.5 border-2 border-white shadow-sm shrink-0">
+                        {profile?.avatarUrl ? <AvatarImage src={profile.avatarUrl} alt={profile.name} /> : null}
+                        <AvatarFallback>{getUserInitials()}</AvatarFallback>
+                      </Avatar>
+                    )}
 
-              <div className={`max-w-[85%] space-y-2 ${msg.role === "user" ? "items-end flex flex-col" : ""}`}>
-                {/* Proceed-ready success bubble + CTA */}
-                {msg.kind === "proceed_cta" ? (
-                  <div className="p-4 text-sm shadow-sm relative leading-relaxed rounded-2xl rounded-tl-sm border bg-emerald-50 border-emerald-200 text-emerald-900">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="font-semibold text-[13px]">Proceed to build</span>
-                      <span className="text-[11px] uppercase tracking-wide text-emerald-700">Ready</span>
+                    <div className={`max-w-[85%] space-y-2 ${msg.role === "user" ? "items-end flex flex-col" : ""}`}>
+                      {/* Proceed-ready success bubble + CTA */}
+                      {msg.kind === "proceed_cta" ? (
+                        <div className="p-4 text-sm shadow-sm relative leading-relaxed rounded-2xl rounded-tl-sm border bg-emerald-50 border-emerald-200 text-emerald-900">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-semibold text-[13px]">Proceed to build</span>
+                            <span className="text-[11px] uppercase tracking-wide text-emerald-700">Ready</span>
+                          </div>
+                          <p className="mt-2 text-[13px]">{msg.content}</p>
+                          <div className="mt-3 flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="h-8 text-[12px] bg-emerald-600 text-white hover:bg-emerald-700"
+                              onClick={onProceedToBuild}
+                              disabled={
+                                proceedToBuildDisabled || proceedingToBuild || disabled || !automationVersionId
+                              }
+                            >
+                              {proceedingToBuild ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                                  Submitting…
+                                </>
+                              ) : (
+                                "Proceed to Build"
+                              )}
+                            </Button>
+                            {proceedToBuildDisabled && proceedToBuildReason ? (
+                              <span className="text-[11px] text-emerald-900/80">{proceedToBuildReason}</span>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div
+                            className={`p-4 text-sm shadow-sm relative leading-relaxed ${
+                              msg.role === "user"
+                                ? "bg-white text-[#0A0A0A] rounded-2xl rounded-tr-sm border border-gray-200"
+                                : "bg-[#F3F4F6] text-[#0A0A0A] rounded-2xl rounded-tl-sm border border-transparent"
+                            }`}
+                          >
+                            <p className="whitespace-pre-wrap">{msg.content}</p>
+                          </div>
+                          <span className="text-[10px] text-gray-400 px-1 block">
+                            {msg.optimistic ? "Sending…" : formatTimestamp(msg.createdAt)}
+                          </span>
+                        </>
+                      )}
                     </div>
-                    <p className="mt-2 text-[13px]">{msg.content}</p>
-                    <div className="mt-3 flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        className="h-8 text-[12px] bg-emerald-600 text-white hover:bg-emerald-700"
-                        onClick={onProceedToBuild}
-                        disabled={
-                          proceedToBuildDisabled || proceedingToBuild || disabled || !automationVersionId
-                        }
-                      >
-                        {proceedingToBuild ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
-                            Submitting…
-                          </>
-                        ) : (
-                          "Proceed to Build"
-                        )}
-                      </Button>
-                      {proceedToBuildDisabled && proceedToBuildReason ? (
-                        <span className="text-[11px] text-emerald-900/80">{proceedToBuildReason}</span>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : msg.kind === "system_run" ? (
-                  <RunBubble
-                    message={msg}
-                    onRetry={() => handleRunRetry(msg.id)}
-                    sseEvents={DEBUG_UI_ENABLED ? runSseEventsRef.current.get(msg.id) ?? [] : undefined}
-                  />
-                ) : (
-                  <>
-                    <div
-                      className={`p-4 text-sm shadow-sm relative leading-relaxed ${
-                        msg.role === "user"
-                          ? "bg-white text-[#0A0A0A] rounded-2xl rounded-tr-sm border border-gray-200"
-                          : "bg-[#F3F4F6] text-[#0A0A0A] rounded-2xl rounded-tl-sm border border-transparent"
-                      }`}
-                    >
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
-                    </div>
-                    <span className="text-[10px] text-gray-400 px-1 block">
-                      {msg.optimistic ? "Sending…" : formatTimestamp(msg.createdAt)}
-                    </span>
-                  </>
-                )}
-              </div>
-            </motion.div>
-              ))}
+                  </motion.div>
+                );
+              })}
             </>
           )}
           {!isLoadingThread && <div ref={scrollEndRef} />}
@@ -1793,6 +2008,7 @@ export function StudioChat({
   );
 }
 
+
 const WORKFLOW_BLOCK_REGEX = /```json workflow_updates[\s\S]*?```/gi;
 
 function stripWorkflowBlocks(content: string): string {
@@ -1804,177 +2020,3 @@ function stripWorkflowBlocks(content: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
-
-type RunSseEvent = { seq?: number; eventType: string; phase?: string; message?: string; timestamp: string };
-
-function RunBubble({
-  message,
-  onRetry,
-  sseEvents,
-}: {
-  message: CopilotMessage;
-  onRetry: () => void;
-  sseEvents?: RunSseEvent[];
-}) {
-  const status = message.runStatus;
-  const [showDebug, setShowDebug] = useState(false);
-  const [showDebugLines, setShowDebugLines] = useState(false);
-  const [showSseEvents, setShowSseEvents] = useState(false);
-
-  if (!status) return null;
-
-  const isError = status.phase === "error";
-  const showErrorLine = isError && status.errorMessage && status.errorMessage !== status.text;
-  const hasSseEvents = DEBUG_UI_ENABLED && (sseEvents?.length ?? 0) > 0;
-  const displayLines = status.displayLines?.length ? status.displayLines : status.text ? [status.text] : [];
-
-  return (
-    <div className="w-full">
-      <div
-        className={cn(
-          "p-4 text-sm shadow-sm relative leading-relaxed rounded-2xl rounded-tl-sm border",
-          isError
-            ? "bg-red-50 border-red-200 text-red-900"
-            : status.persistenceError
-            ? "bg-amber-50 border-amber-200 text-amber-900"
-            : "bg-[#F3F4F6] border-transparent text-[#0A0A0A]"
-        )}
-      >
-        <div className="flex items-center justify-between text-xs font-semibold mb-1">
-          <span className="text-gray-900">Copilot run</span>
-        </div>
-        {displayLines.length === 0 ? (
-          <div className="text-xs text-gray-700">
-            <span className="font-medium">{status.text}</span>
-          </div>
-        ) : (
-          <div className="text-xs text-gray-700 space-y-1">
-            {displayLines.map((line, idx) => (
-              <div className="flex items-start gap-2" key={`${message.id}-line-${idx}`}>
-                <span className="mt-1 block h-1.5 w-1.5 rounded-full bg-gray-400" />
-                <span className="font-medium">{line}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {status.phase === "done" && status.stepCount !== undefined ? (
-          <div className="mt-2 text-xs font-semibold text-emerald-700">Flow updated ({status.stepCount} steps)</div>
-        ) : null}
-
-        {status.persistenceError ? (
-          <div className="mt-2 rounded-md border border-amber-200 bg-white/60 text-amber-800 p-2 text-[11px] space-y-1">
-            <div className="flex items-center justify-between">
-              <span>Analysis save failed.</span>
-              <button
-                type="button"
-                className="text-[11px] font-semibold underline"
-                onClick={() => setShowDebug((prev) => !prev)}
-              >
-                {showDebug ? "Hide debug" : "Debug details"}
-              </button>
-            </div>
-            {showDebug ? (
-              <pre className="text-[10px] bg-amber-50 border border-amber-200 rounded-md p-2 overflow-x-auto">
-                {JSON.stringify(status.debugDetails ?? {}, null, 2)}
-              </pre>
-            ) : null}
-          </div>
-        ) : null}
-
-        {isError && (
-          <div className="mt-3 flex items-center justify-between gap-2">
-            {showErrorLine ? (
-              <span className="text-xs font-semibold text-red-800">
-                {status.errorMessage ?? "Run failed. Retry?"}
-              </span>
-            ) : (
-              <span className="text-xs font-semibold text-red-800">Run failed. Retry?</span>
-            )}
-            {status.retryable ? (
-              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={onRetry}>
-                Retry
-              </Button>
-            ) : null}
-          </div>
-        )}
-
-        {DEBUG_UI_ENABLED && (status.debugLines?.length || status.runId || hasSseEvents) ? (
-          <div className="mt-3 border-t border-gray-200 pt-2">
-            <div className="flex items-center justify-between text-[11px] text-gray-600">
-              <span className="font-semibold">Debug</span>
-              <button
-                type="button"
-                className="text-[11px] underline"
-                onClick={() => setShowDebugLines((prev) => !prev)}
-              >
-                {showDebugLines ? "Hide" : "Show"}
-              </button>
-            </div>
-            {showDebugLines ? (
-              <div className="mt-1 space-y-1 text-[11px] text-gray-700">
-                {status.runId ? (
-                  <div className="font-mono text-[10px] text-gray-500">runId: {status.runId}</div>
-                ) : null}
-                {(status.debugLines ?? []).map((line, idx) => (
-                  <div key={`${message.id}-dbg-${idx}`} className="font-mono text-[10px] text-gray-600 truncate">
-                    {line}
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {hasSseEvents ? (
-              <div className="mt-3 border-t border-gray-200 pt-2">
-                <div className="flex items-center justify-between text-[11px] text-gray-600">
-                  <span className="font-semibold">SSE</span>
-                  <button
-                    type="button"
-                    className="text-[11px] underline"
-                    onClick={() => setShowSseEvents((prev) => !prev)}
-                  >
-                    {showSseEvents ? "Hide" : "Show"}
-                  </button>
-                </div>
-                {showSseEvents ? (
-                  <div className="mt-1 space-y-1 text-[11px] text-gray-700">
-                    {(sseEvents ?? []).map((evt, idx) => (
-                      <div key={`${message.id}-sse-${idx}`} className="flex items-center gap-2">
-                        <span className="font-mono text-[10px] text-gray-500 w-10">
-                          {evt.seq !== undefined ? `#${evt.seq}` : "-"}
-                        </span>
-                        <div className="flex-1 truncate">
-                          <span className="font-semibold mr-1">{evt.eventType}</span>
-                          {evt.phase ? <span className="text-gray-500 mr-1">{evt.phase}</span> : null}
-                          {evt.message ? <span className="text-gray-700">{evt.message}</span> : null}
-                        </div>
-                        <span className="text-[9px] text-gray-400">
-                          {new Date(evt.timestamp).toLocaleTimeString(undefined, {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            second: "2-digit",
-                          })}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="mt-4 flex items-center gap-2">
-          <span
-            className={cn(
-              "text-[11px] uppercase tracking-wide text-gray-500",
-              status.phase !== "done" && status.phase !== "error" ? "animate-pulse" : ""
-            )}
-          >
-            {status.phase}
-          </span>
-        </div>
-      </div>
-      <span className="text-[10px] text-gray-400 px-1 block mt-1">{formatTimestamp(message.createdAt)}</span>
-    </div>
-  );
-}
-

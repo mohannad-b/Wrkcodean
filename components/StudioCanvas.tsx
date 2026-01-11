@@ -35,6 +35,14 @@ export interface StudioCanvasProps {
   onEdgeUpdate?: (oldEdge: Edge, connection: Connection) => void;
   emptyState?: React.ReactNode;
   isSynthesizing?: boolean;
+  buildActivity?: {
+    runId: string;
+    phase: string;
+    lastLine: string | null;
+    lines: string[];
+    isRunning: boolean;
+    completedAt: number | null;
+  } | null;
 }
 
 export const StudioCanvas: React.FC<StudioCanvasProps> = ({ 
@@ -47,9 +55,13 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
   onEdgeClick,
   onEdgeUpdate,
   emptyState,
-  isSynthesizing = false 
+  isSynthesizing = false,
+  buildActivity = null,
 }) => {
   const [rfInstance, setRfInstance] = React.useState<ReactFlowInstance | null>(null);
+  const [showDetails, setShowDetails] = React.useState(false);
+  const [visible, setVisible] = React.useState(false);
+  const hideTimerRef = React.useRef<NodeJS.Timeout | null>(null);
 
   React.useEffect(() => {
     if (rfInstance && nodes.length > 0) {
@@ -61,9 +73,55 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
     }
     return undefined;
   }, [rfInstance, nodes.length, isSynthesizing]);
+
+  React.useEffect(() => {
+    if (!buildActivity) {
+      setVisible(false);
+      return;
+    }
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+    setVisible(true);
+    if (!buildActivity.isRunning && !showDetails) {
+      hideTimerRef.current = setTimeout(() => setVisible(false), 1500);
+    }
+    return () => {
+      if (hideTimerRef.current) {
+        clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    };
+  }, [buildActivity, showDetails]);
+
+  const phaseLabel = React.useMemo(() => {
+    const normalized = (buildActivity?.phase ?? "").toLowerCase();
+    switch (normalized) {
+      case "understanding":
+        return "Understanding";
+      case "clarifying":
+        return "Clarifying";
+      case "drafting":
+        return "Drafting";
+      case "requirements":
+        return "Requirements";
+      case "tasks":
+        return "Tasks";
+      case "saving":
+        return "Saving";
+      case "ready":
+      case "done":
+        return "Ready";
+      case "error":
+        return "Error";
+      default:
+        return "Working";
+    }
+  }, [buildActivity]);
   
   return (
-    <div className="w-full h-full bg-[#F9FAFB]">
+    <div className="w-full h-full bg-[#F9FAFB] relative">
       {/* Synthesizing Indicator */}
       {isSynthesizing && (
         <div 
@@ -108,6 +166,49 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
           </div>
         ) : null}
       </ReactFlow>
+
+      {visible && buildActivity ? (
+        <div className="pointer-events-none absolute bottom-6 left-0 right-0 flex justify-center z-50">
+          <div className="pointer-events-auto bg-gray-900/70 text-white px-4 py-3 rounded-xl shadow-lg backdrop-blur-sm max-w-xl w-full mx-8">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs uppercase tracking-wide text-gray-200">Build Activity</div>
+                <div className="flex items-center gap-2">
+                  {buildActivity.isRunning ? (
+                    <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                  ) : (
+                    <span className="inline-flex h-2 w-2 rounded-full bg-gray-300" />
+                  )}
+                  <span className="text-sm font-semibold">
+                    {buildActivity.isRunning ? "Building in the background — keep chatting." : "Ready"}
+                  </span>
+                  <span className="text-xs text-gray-200">{phaseLabel}</span>
+                </div>
+                {buildActivity.lastLine ? (
+                  <div className="text-xs text-gray-100 mt-1 line-clamp-2">{buildActivity.lastLine}</div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="text-[11px] text-gray-200 underline"
+                onClick={() => setShowDetails((prev) => !prev)}
+              >
+                {showDetails ? "Hide details" : "Details"}
+              </button>
+            </div>
+            {showDetails ? (
+              <div className="mt-2 bg-black/30 rounded-md p-2 text-[11px] text-gray-100 max-h-40 overflow-auto space-y-1">
+                {buildActivity.lines.slice(-10).map((line, idx) => (
+                  <div key={`ba-line-${idx}`} className="flex items-start gap-2">
+                    <span className="mt-1 block h-1 w-1 rounded-full bg-gray-400" />
+                    <span className="leading-snug">{line}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

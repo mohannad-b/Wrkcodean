@@ -474,6 +474,16 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [proceedingToBuild, setProceedingToBuild] = useState(false);
   const [isSynthesizingWorkflow, setIsSynthesizingWorkflow] = useState(false);
   const [isOptimizingFlow, setIsOptimizingFlow] = useState(false);
+  const [buildActivity, setBuildActivity] = useState<{
+    runId: string;
+    phase: string;
+    lastLine: string | null;
+    lines: string[];
+    startedAt: number;
+    completedAt: number | null;
+    errorMessage: string | null;
+    isRunning: boolean;
+  } | null>(null);
   const [isSwitchingVersion, setIsSwitchingVersion] = useState(false);
   const completionRef = useRef<ReturnType<typeof getWorkflowCompletionState> | null>(null);
   const preserveSelectionRef = useRef(false);
@@ -2135,6 +2145,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             analysisLoading={copilotAnalysisLoading}
             analysisUnavailable={copilotAnalysisError}
             onRefreshAnalysis={() => refreshAnalysis(selectedVersion?.id ?? null)}
+            onBuildActivityUpdate={setBuildActivity}
             onProceedToBuild={handleProceedToBuild}
             proceedToBuildDisabled={proceedButtonDisabled}
             proceedToBuildReason={proceedDisabledReason}
@@ -2258,6 +2269,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 onNodeClick={handleNodeClick}
                 onEdgeClick={handleEdgeClick}
                 isSynthesizing={isSynthesizingWorkflow}
+                buildActivity={buildActivity}
                 emptyState={
                   canvasState === "empty"
                     ? (

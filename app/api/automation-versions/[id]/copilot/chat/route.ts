@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { randomUUID, createHash } from "crypto";
 import { ApiError, handleApiError, requireTenantSession } from "@/lib/api/context";
 import { can } from "@/lib/auth/rbac";
@@ -13,7 +13,13 @@ import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { createCopilotTrace } from "@/lib/ai/copilot-trace";
 import { logAudit } from "@/lib/audit/log";
 import { db } from "@/db";
-import { automationVersions, copilotMessages, tasks as tasksTable, type CopilotRun } from "@/db/schema";
+import {
+  automationVersions,
+  copilotMessages,
+  tasks as tasksTable,
+  type CopilotRun,
+  type CopilotMessage as CopilotMessageRow,
+} from "@/db/schema";
 import { createEmptyWorkflowSpec } from "@/lib/workflows/factory";
 import type { Workflow } from "@/lib/workflows/types";
 import { WorkflowSchema } from "@/lib/workflows/schema";
@@ -21,6 +27,7 @@ import { applyStepNumbers } from "@/lib/workflows/step-numbering";
 import { parseCommand, isDirectCommand } from "@/lib/workflows/command-parser";
 import { executeCommand } from "@/lib/workflows/command-executor";
 import { buildWorkflowFromChat, type AITask } from "@/lib/workflows/ai-builder-simple";
+import type { SanitizationSummary } from "@/lib/workflows/sanitizer";
 import { syncAutomationTasks } from "@/lib/workflows/task-sync";
 import { getWorkflowCompletionState } from "@/lib/workflows/completion";
 import { evaluateWorkflowProgress } from "@/lib/ai/workflow-progress";
@@ -48,6 +55,7 @@ import { createSSEStream } from "@/lib/http/sse";
 import { generateIntentSummary, type IntentSummary } from "@/lib/ai/intent-summary";
 import { ProgressPlanner, type ProgressEvent, validateStatusPayload } from "../progress-planner";
 import { evaluateCoreTodos, type CoreTodoJudgeResult } from "@/lib/ai/core-todo-judge";
+import { generateCopilotChatReply } from "@/lib/ai/copilot-chat-reply";
 
 const ChatRequestSchema = z.object({
   content: z.string().min(1).max(8000),
@@ -63,6 +71,7 @@ type CopilotMessage = {
   role: "user" | "assistant";
   content: string;
 };
+type AssistantMessageRow = CopilotMessageRow;
 
 const MAX_MESSAGES = 10;
 const MAX_MESSAGE_CHARS = 4000;
@@ -114,6 +123,13 @@ type CopilotErrorPayload = {
   code?: number | string;
 };
 
+type CopilotMessageEventPayload = {
+  runId: string;
+  requestId: string;
+  message: Awaited<ReturnType<typeof createCopilotMessage>>;
+  displayText: string;
+};
+
 const INTENT_CACHE_TTL_MS = 15 * 60 * 1000;
 const intentCache = new Map<
   string,
@@ -134,7 +150,19 @@ type CopilotCallbacks = {
   onStatus?: (payload: CopilotStatusPayload) => void;
   onResult?: (payload: CopilotRunResult) => void;
   onError?: (payload: CopilotErrorPayload) => void;
+  onMessage?: (payload: CopilotMessageEventPayload) => void;
 };
+
+function stripTrailingQuestion(text: string): string {
+  if (!text?.trim()) return "";
+  return text.replace(/[\s\n]*[^?.!]*\?\s*$/m, "").trim();
+}
+
+function ensureSingleQuestion(chatResponse: string, followUp: string | null | undefined): string {
+  if (!followUp?.trim()) return chatResponse;
+  const preface = stripTrailingQuestion(chatResponse);
+  return preface ? `${preface} ${followUp}` : followUp;
+}
 
 function isStreamRequest(request: Request) {
   const url = new URL(request.url);
@@ -437,6 +465,108 @@ function buildKnownFactsHint({
   return lines.slice(0, maxLines).join("\n");
 }
 
+function composeFollowUpAndMessage({
+  chatResponse,
+  followUpQuestion,
+  analysisState,
+  latestUserMessage,
+  followUpMode,
+  baseTrace,
+}: {
+  chatResponse: string | null | undefined;
+  followUpQuestion: string | null | undefined;
+  analysisState: CopilotAnalysisState;
+  latestUserMessage: string;
+  followUpMode: string | null;
+  baseTrace: ReturnType<typeof createCopilotTrace>;
+}) {
+  const trimmedFollowUp = followUpQuestion?.trim();
+  const baseMemory = analysisState.memory ?? createEmptyMemory();
+  const checklistForDecision = ensureChecklist(baseMemory);
+  const scrubbedChatResponse = scrubResponseMessage({
+    response: chatResponse ?? "",
+    lastQuestionText: baseMemory.lastQuestionText ?? null,
+    checklist: checklistForDecision,
+  });
+  if (scrubbedChatResponse !== (chatResponse ?? "")) {
+    baseTrace.event("copilot.chat_response_scrubbed_base", {
+      before: (chatResponse ?? "").slice(0, 300),
+      after: scrubbedChatResponse.slice(0, 300),
+    });
+  }
+  const clarifierFollowUp =
+    trimmedFollowUp && normalizeQuestionText(trimmedFollowUp) !== normalizeQuestionText(scrubbedChatResponse)
+      ? { question: trimmedFollowUp, key: null }
+      : null;
+
+  const nextFollowUpResult =
+    clarifierFollowUp
+      ? chooseFollowUpQuestion({
+          candidate: clarifierFollowUp.question,
+          memory: baseMemory,
+          latestUserMessage,
+        })
+      : { question: null, key: null, droppedReason: null };
+
+  let nextFollowUp = nextFollowUpResult.question ?? null;
+  let nextFollowUpKey = nextFollowUpResult.key ?? null;
+  const candidateDroppedReason = nextFollowUpResult.droppedReason ?? null;
+
+  if (nextFollowUp && scrubbedChatResponse.trim().endsWith("?")) {
+    const normalizedExisting = normalizeQuestionText(scrubbedChatResponse);
+    const normalizedCandidate = normalizeQuestionText(nextFollowUp);
+    if (normalizedExisting === normalizedCandidate) {
+      nextFollowUp = null;
+      nextFollowUpKey = null;
+    }
+  }
+
+  let followUpSkippedReason: string | null = null;
+  if (clarifierFollowUp && !nextFollowUp) {
+    followUpSkippedReason = candidateDroppedReason ?? "clarifier-dropped-or-duplicate";
+  } else if (!clarifierFollowUp && !nextFollowUp) {
+    followUpSkippedReason = candidateDroppedReason ?? "none-selected";
+  } else if (nextFollowUpKey && checklistForDecision[nextFollowUpKey]?.confirmed) {
+    followUpSkippedReason = "confirmed-key";
+    nextFollowUp = null;
+    nextFollowUpKey = null;
+  }
+
+  if (nextFollowUpKey === "success_criteria") {
+    const askedSuccessBefore =
+      (baseMemory.asked_questions_normalized ?? []).some((q) => q.includes("success") || q.includes("kpi")) ?? false;
+    const successKnown = Boolean(baseMemory.facts?.success_criteria || checklistForDecision.success_criteria?.value);
+    if (checklistForDecision.success_criteria?.confirmed || (askedSuccessBefore && successKnown)) {
+      followUpSkippedReason = "success-already-known";
+      nextFollowUp = null;
+      nextFollowUpKey = null;
+    }
+  }
+
+  if (
+    nextFollowUp &&
+    followUpMode !== "technical_opt_in" &&
+    !hasInvitationLine(nextFollowUp) &&
+    !hasOtherRequirementsLanguage(latestUserMessage)
+  ) {
+    nextFollowUp = `${nextFollowUp.trim()} ${FOLLOW_UP_INVITATION}`.trim();
+  }
+
+  const responseMessage =
+    nextFollowUp && nextFollowUp.trim().length > 0
+      ? `${scrubbedChatResponse.trim()} ${nextFollowUp.trim()}`.trim()
+      : scrubbedChatResponse;
+
+  return {
+    responseMessage,
+    nextFollowUp,
+    nextFollowUpKey,
+    followUpSkippedReason,
+    candidateDroppedReason,
+    scrubbedChatResponse,
+  };
+}
+
 function getCachedTodoJudge(key: string): CoreTodoJudgeResult | null {
   const cached = todoJudgeCache.get(key);
   if (!cached) return null;
@@ -480,12 +610,6 @@ export async function POST(request: Request, { params }: { params: { id: string 
   };
 
   try {
-    const session = await requireTenantSession();
-
-    if (!can(session, "automation:metadata:update", { type: "automation_version", tenantId: session.tenantId })) {
-      throw new ApiError(403, "Forbidden");
-    }
-
     let payload: ChatRequest;
     let rawBody: any;
     try {
@@ -499,35 +623,6 @@ export async function POST(request: Request, { params }: { params: { id: string 
       throw new ApiError(400, "Invalid request body.");
     }
 
-    try {
-      ensureRateLimit({
-        key: buildRateLimitKey("copilot:chat", session.tenantId),
-        limit: Number(process.env.COPILOT_DRAFTS_PER_HOUR ?? 20),
-        windowMs: 60 * 60 * 1000,
-      });
-    } catch {
-      throw new ApiError(429, "Too many workflows requested. Please wait before trying again.");
-    }
-
-    const detail = await getAutomationVersionDetail(session.tenantId, params.id);
-    if (!detail) {
-      throw new ApiError(404, "Automation version not found.");
-    }
-
-    const callbacks: CopilotCallbacks | undefined =
-      streaming && sse
-        ? (() => {
-            let statusCount = 0;
-            const onStatus = (status: CopilotStatusPayload) => {
-              statusCount += 1;
-              return void sse.send("status", status);
-            };
-            const onResult = (result: CopilotRunResult) => void sse.send("result", result);
-            const onError = (err: CopilotErrorPayload) => void sse.send("error", err);
-            return { onStatus, onResult, onError };
-          })()
-        : undefined;
-
     const clientMessageId = payload.clientMessageId?.trim();
     const runId = payload.runId?.trim() ?? clientMessageId;
     if (!runId) {
@@ -535,11 +630,48 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     if (streaming && sse) {
+      const callbacks: CopilotCallbacks = {
+        onStatus: (status: CopilotStatusPayload) => void sse.send("status", status),
+        onResult: (result: CopilotRunResult) => void sse.send("result", result),
+        onError: (err: CopilotErrorPayload) => void sse.send("error", err),
+        onMessage: (payload: CopilotMessageEventPayload) => void sse.send("message", payload),
+      };
+
+      queueMicrotask(() =>
+        void sse.send("status", {
+          runId,
+          requestId: "preflight",
+          phase: "connecting",
+          message: "Connected — drafting…",
+        })
+      );
+
       (async () => {
         const runnerStartedAt = Date.now();
         let statusCount = 0;
         copilotDebug("copilot_chat.sse_runner_started", { runId });
         try {
+          const session = await requireTenantSession();
+
+          if (!can(session, "automation:metadata:update", { type: "automation_version", tenantId: session.tenantId })) {
+            throw new ApiError(403, "Forbidden");
+          }
+
+          try {
+            ensureRateLimit({
+              key: buildRateLimitKey("copilot:chat", session.tenantId),
+              limit: Number(process.env.COPILOT_DRAFTS_PER_HOUR ?? 20),
+              windowMs: 60 * 60 * 1000,
+            });
+          } catch {
+            throw new ApiError(429, "Too many workflows requested. Please wait before trying again.");
+          }
+
+          const detail = await getAutomationVersionDetail(session.tenantId, params.id);
+          if (!detail) {
+            throw new ApiError(404, "Automation version not found.");
+          }
+
           await runCopilotChat({
             request,
             params,
@@ -555,6 +687,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
                 },
                 onResult: callbacks.onResult,
                 onError: callbacks.onError,
+                onMessage: callbacks.onMessage,
               } as CopilotCallbacks),
             runIdOverride: runId,
           });
@@ -580,6 +713,37 @@ export async function POST(request: Request, { params }: { params: { id: string 
       copilotDebug("copilot_chat.sse_response_returned", { runId });
       return sse.response();
     }
+
+    const session = await requireTenantSession();
+
+    if (!can(session, "automation:metadata:update", { type: "automation_version", tenantId: session.tenantId })) {
+      throw new ApiError(403, "Forbidden");
+    }
+
+    try {
+      ensureRateLimit({
+        key: buildRateLimitKey("copilot:chat", session.tenantId),
+        limit: Number(process.env.COPILOT_DRAFTS_PER_HOUR ?? 20),
+        windowMs: 60 * 60 * 1000,
+      });
+    } catch {
+      throw new ApiError(429, "Too many workflows requested. Please wait before trying again.");
+    }
+
+    const detail = await getAutomationVersionDetail(session.tenantId, params.id);
+    if (!detail) {
+      throw new ApiError(404, "Automation version not found.");
+    }
+
+    const callbacks: CopilotCallbacks | undefined =
+      streaming && sse
+        ? {
+            onStatus: (status: CopilotStatusPayload) => void sse.send("status", status),
+            onResult: (result: CopilotRunResult) => void sse.send("result", result),
+            onError: (err: CopilotErrorPayload) => void sse.send("error", err),
+            onMessage: (payload: CopilotMessageEventPayload) => void sse.send("message", payload),
+          }
+        : undefined;
 
     const result = await runCopilotChat({
       request,
@@ -647,6 +811,121 @@ async function runCopilotChat({
   });
   const emitError = (message: string, code?: number | string) =>
     callbacks?.onError?.({ runId, requestId, message, code });
+  const earlyAckMessage = "Got it - drafting your workflow now.";
+  let assistantMessage: AssistantMessageRow | null = null;
+  let replyFinalized = false;
+  const ackTimeoutMs = 500;
+  let ackTimer: NodeJS.Timeout | null = null;
+  const composeAssistantReply = (
+    chatResponse: string | null | undefined,
+    followUp: string | null | undefined
+  ): { content: string; followUpAppended: boolean } => {
+    const base = (chatResponse ?? "").trim();
+    const follow = (followUp ?? "").trim();
+    // Drop any question-bearing sentences from the base when a follow-up is present.
+    const sentencePattern = /[^.?!]+[.?!]?/g;
+    const sentences = base.match(sentencePattern) ?? [];
+    const filteredBase =
+      follow.length > 0
+        ? sentences.filter((s) => !s.includes("?")).join(" ").replace(/\s+/g, " ").trim()
+        : base;
+
+    let output = filteredBase;
+    let followUpAppended = false;
+
+    if (follow.length > 0 && !output.toLowerCase().includes(follow.toLowerCase())) {
+      output = output ? `${output}\n${follow}` : follow;
+      followUpAppended = true;
+    } else if (!output && follow.length > 0) {
+      output = follow;
+      followUpAppended = true;
+    }
+
+    // Enforce a single question sentence maximum.
+    const questionSentences = output.match(/[^.?!]*\?[^.?!]*/g) ?? [];
+    if (questionSentences.length > 1) {
+      const lastQuestion = questionSentences[questionSentences.length - 1].trim();
+      const withoutQuestions = output.replace(/[^.?!]*\?[^.?!]*/g, "").replace(/\s+/g, " ").trim();
+      output = withoutQuestions ? `${withoutQuestions}\n${lastQuestion}` : lastQuestion;
+    }
+
+    // Ensure the "feel free" line appears at most once.
+    const invite = "Also feel free to add any other requirements you care about.";
+    const inviteRegex = new RegExp(invite.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    const inviteMatches = output.match(inviteRegex) ?? [];
+    if (inviteMatches.length > 1) {
+      output = output.replace(inviteRegex, "").trim();
+      output = output ? `${output}\n${invite}` : invite;
+    }
+
+    const content = (output || earlyAckMessage).trim();
+    copilotDebug("copilot_chat.composed_reply", {
+      runId,
+      length: content.length,
+      followUpAppended,
+    });
+    return { content, followUpAppended };
+  };
+  const persistAssistantMessage = async (
+    content: string,
+    emit = true,
+    finalize = false
+  ): Promise<AssistantMessageRow> => {
+    if (replyFinalized && assistantMessage && assistantMessage.content !== content) {
+      return assistantMessage;
+    }
+    if (replyFinalized && !assistantMessage) {
+      throw new ApiError(500, "Assistant message missing");
+    }
+
+    const needsCreation = !assistantMessage;
+    const needsUpdate = assistantMessage ? assistantMessage.content !== content : false;
+
+    if (needsCreation) {
+      assistantMessage = await createCopilotMessage({
+        tenantId: session.tenantId,
+        automationVersionId: params.id,
+        role: "assistant",
+        content,
+        createdBy: null,
+      });
+    } else if (needsUpdate && assistantMessage) {
+      const [updated] = await db
+        .update(copilotMessages)
+        .set({ content })
+        .where(
+          and(
+            eq(copilotMessages.tenantId, session.tenantId),
+            eq(copilotMessages.automationVersionId, params.id),
+            eq(copilotMessages.id, assistantMessage.id)
+          )
+        )
+        .returning();
+      assistantMessage = updated ?? { ...assistantMessage, content };
+    }
+
+    if (emit && (needsCreation || needsUpdate) && assistantMessage) {
+      callbacks?.onMessage?.({ runId, requestId, message: assistantMessage, displayText: content });
+    }
+
+    if (!assistantMessage) {
+      throw new ApiError(500, "Failed to persist assistant message");
+    }
+
+    if (finalize) {
+      replyFinalized = true;
+    }
+
+    return assistantMessage;
+  };
+  const getAssistantMessageOrThrow = (): AssistantMessageRow => {
+    if (!assistantMessage) {
+      const error = new ApiError(500, "Failed to prepare assistant response.");
+      emitError(error.message, error.status);
+      throw error;
+    }
+    return assistantMessage;
+  };
 
   const existingRun =
     clientMessageId &&
@@ -765,6 +1044,65 @@ async function runCopilotChat({
     emitError(error.message, error.status);
     throw error;
   }
+
+  let responseMessage = "";
+  let responseFollowUp: string | null = null;
+  let responseFollowUpKey: string | null = null;
+  let scrubbedChatResponse = "";
+  let followUpSkippedReason: string | null = null;
+  let followUpCandidateDroppedReason: string | null = null;
+  let commandExecuted = false;
+  let workflowWithTasks: Workflow;
+  let aiTasks: AITask[] = [];
+  let updatedRequirementsText: string | null | undefined;
+  let builderFollowUpQuestion: string | null = null;
+  let builderChatResponse: string | null = null;
+  let sanitizationSummary: SanitizationSummary | string | null | undefined;
+
+  const fastReplyPromise = generateCopilotChatReply({
+    userMessage: latestUserMessage?.content ?? trimmedContent,
+    conversationHistory: normalizedMessages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    })),
+    knownFactsHint: undefined,
+    requirementsStatusHint: undefined,
+    followUpMode: null,
+  });
+
+  ackTimer = setTimeout(() => {
+    if (replyFinalized) return;
+    void persistAssistantMessage(earlyAckMessage);
+  }, ackTimeoutMs);
+
+  fastReplyPromise
+    .then(async (fastReplyResult) => {
+      const composedFastReply = composeAssistantReply(
+        fastReplyResult?.chatResponse ?? earlyAckMessage,
+        fastReplyResult?.followUpQuestion ?? null
+      );
+      responseMessage = composedFastReply.content;
+      responseFollowUp = fastReplyResult?.followUpQuestion?.trim() || null;
+      if (!replyFinalized) {
+        await persistAssistantMessage(responseMessage, true, true);
+        callbacks?.onStatus?.({
+          runId,
+          requestId,
+          phase: "chat_ready",
+          message: "Chat reply ready",
+          seq: 0,
+        });
+      }
+    })
+    .catch((error) => {
+      logger.warn("generateCopilotChatReply (fast path) failed", { error });
+    })
+    .finally(() => {
+      if (ackTimer) {
+        clearTimeout(ackTimer);
+        ackTimer = null;
+      }
+    });
 
   const contextSummary = buildConversationSummary(normalizedMessages, intakeNotes);
   const workflowUpdatedAtIso = detail.version.updatedAt ? new Date(detail.version.updatedAt).toISOString() : null;
@@ -906,11 +1244,6 @@ async function runCopilotChat({
   });
 
   const directCommand = Boolean(latestUserMessage?.content && isDirectCommand(latestUserMessage.content));
-  let responseMessage = "";
-  let commandExecuted = false;
-  let workflowWithTasks: Workflow;
-  let aiTasks: AITask[] = [];
-  let updatedRequirementsText: string | null | undefined;
   const todoHash = hashTodoState(analysisState.todos);
   const conversationHash = hashConversationSummary(contextSummary);
   let requirementsStatusHint: string | null = null;
@@ -926,6 +1259,7 @@ async function runCopilotChat({
   let proceedBasicsMet = false;
   let proceedThresholdMet = false;
   let proceedStickyUsed = false;
+  let staleRun = false;
 
   const trace = baseTrace;
 
@@ -1041,14 +1375,7 @@ async function runCopilotChat({
         hasIntakeNotes: Boolean(intakeNotes),
       });
 
-      const {
-        workflow: aiGeneratedWorkflow,
-        tasks: generatedTasks,
-        chatResponse,
-        followUpQuestion,
-        sanitizationSummary,
-        requirementsText: newRequirementsText,
-      } = await buildWorkflowFromChat({
+      const heavyBuildPromise = buildWorkflowFromChat({
         userMessage: userMessageContent,
         currentWorkflow,
         currentBlueprint,
@@ -1065,6 +1392,81 @@ async function runCopilotChat({
         onStatus: ({ phase, text }) => planner.emit(phase as any, text, undefined, `builder-${phase}`),
         trace: baseTrace,
       });
+
+      const chatReplyPromise = generateCopilotChatReply({
+        userMessage: userMessageContent,
+        conversationHistory: normalizedMessages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+        knownFactsHint,
+        requirementsStatusHint,
+        followUpMode,
+      });
+
+      const chatReply = await chatReplyPromise;
+      if (chatReply) {
+        const composed = composeFollowUpAndMessage({
+          chatResponse: chatReply.chatResponse,
+          followUpQuestion: chatReply.followUpQuestion,
+          analysisState,
+          latestUserMessage: userMessageContent,
+          followUpMode,
+          baseTrace,
+        });
+        responseMessage = composed.responseMessage;
+        responseFollowUp = composed.nextFollowUp;
+        responseFollowUpKey = composed.nextFollowUpKey;
+        followUpSkippedReason = composed.followUpSkippedReason;
+        followUpCandidateDroppedReason = composed.candidateDroppedReason;
+        scrubbedChatResponse = composed.scrubbedChatResponse;
+        if (responseMessage && responseFollowUp) {
+          responseMessage = ensureSingleQuestion(responseMessage, responseFollowUp);
+        }
+      }
+
+      const {
+        workflow: aiGeneratedWorkflow,
+        tasks: generatedTasks,
+        chatResponse,
+        followUpQuestion,
+        sanitizationSummary: builderSanitizationSummary,
+        requirementsText: newRequirementsText,
+      } = await heavyBuildPromise;
+
+      const latestUserMessageRow = await db
+        .select({ id: copilotMessages.id })
+        .from(copilotMessages)
+        .where(
+          and(
+            eq(copilotMessages.tenantId, session.tenantId),
+            eq(copilotMessages.automationVersionId, params.id),
+            eq(copilotMessages.role, "user")
+          )
+        )
+        .orderBy(desc(copilotMessages.createdAt))
+        .limit(1);
+      const latestUserMessageId = latestUserMessageRow[0]?.id ?? null;
+      staleRun =
+        Boolean(latestUserMessageId && latestUserMessageId !== userMessage.id) ||
+        Boolean(existingAnalysisRaw?.lastUserMessageId && existingAnalysisRaw.lastUserMessageId !== userMessage.id);
+
+      if (staleRun) {
+        draftingTrace.event("workflow.stale_skipped", {
+          latestUserMessageId,
+          currentUserMessageId: userMessage.id,
+        });
+        copilotDebug("copilot_chat.stale_run_detected", {
+          automationVersionId: params.id,
+          runId,
+          latestUserMessageId,
+          currentUserMessageId: userMessage.id,
+        });
+      }
+
+      builderFollowUpQuestion = followUpQuestion ?? null;
+      builderChatResponse = chatResponse ?? null;
+      sanitizationSummary = builderSanitizationSummary;
       updatedRequirementsText = newRequirementsText;
 
       draftingTrace.spanEnd(buildSpan, {
@@ -1106,19 +1508,28 @@ async function runCopilotChat({
       planner.emit("structuring", undefined, { stepCount: numberedWorkflow.steps.length }, "structuring");
       aiTasks = generatedTasks;
 
-      const taskSyncSpan = draftingTrace.spanStart("task.sync", { taskCount: aiTasks.length });
-      const taskAssignments = await syncAutomationTasks({
-        tenantId: session.tenantId,
-        automationVersionId: params.id,
-        aiTasks,
-        blueprint: numberedWorkflow,
-        workflow: numberedWorkflow,
-      });
-      const tasksAssignedCount = Object.values(taskAssignments).reduce(
-        (total, ids) => total + (ids?.length ?? 0),
-        0
-      );
-      draftingTrace.spanEnd(taskSyncSpan, { tasksAssignedCount });
+      let taskAssignments: Record<string, string[]> = {};
+
+      if (!staleRun) {
+        const taskSyncSpan = draftingTrace.spanStart("task.sync", { taskCount: aiTasks.length });
+        taskAssignments = await syncAutomationTasks({
+          tenantId: session.tenantId,
+          automationVersionId: params.id,
+          aiTasks,
+          blueprint: numberedWorkflow,
+          workflow: numberedWorkflow,
+        });
+        const tasksAssignedCount = Object.values(taskAssignments).reduce(
+          (total, ids) => total + (ids?.length ?? 0),
+          0
+        );
+        draftingTrace.spanEnd(taskSyncSpan, { tasksAssignedCount });
+      } else {
+        draftingTrace.event("task.sync.skipped_stale_run", {
+          taskCount: aiTasks.length,
+          latestUserMessageId,
+        });
+      }
 
       workflowWithTasks = {
         ...numberedWorkflow,
@@ -1190,96 +1601,44 @@ async function runCopilotChat({
         });
       }
 
-      const trimmedFollowUp = followUpQuestion?.trim();
-      const baseMemory = analysisState.memory ?? createEmptyMemory();
-      const checklistForDecision = ensureChecklist(baseMemory);
-      const scrubbedChatResponse = scrubResponseMessage({
-        response: chatResponse ?? "",
-        lastQuestionText: baseMemory.lastQuestionText ?? null,
-        checklist: checklistForDecision,
-      });
-      if (scrubbedChatResponse !== (chatResponse ?? "")) {
-        baseTrace.event("copilot.chat_response_scrubbed_base", {
-          before: (chatResponse ?? "").slice(0, 300),
-          after: scrubbedChatResponse.slice(0, 300),
+      if (!responseMessage) {
+        const composed = composeFollowUpAndMessage({
+          chatResponse: builderChatResponse ?? chatResponse,
+          followUpQuestion: builderFollowUpQuestion ?? followUpQuestion,
+          analysisState,
+          latestUserMessage: userMessageContent,
+          followUpMode,
+          baseTrace,
         });
-      }
-      const clarifierFollowUp =
-        trimmedFollowUp && normalizeQuestionText(trimmedFollowUp) !== normalizeQuestionText(scrubbedChatResponse)
-          ? { question: trimmedFollowUp, key: null }
-          : null;
-
-      const nextFollowUpResult =
-        clarifierFollowUp
-          ? chooseFollowUpQuestion({
-              candidate: clarifierFollowUp.question,
-              memory: baseMemory,
-              latestUserMessage: userMessageContent,
-            })
-          : { question: null, key: null, droppedReason: null };
-
-      let nextFollowUp = nextFollowUpResult.question ?? null;
-      let nextFollowUpKey = nextFollowUpResult.key ?? null;
-      const candidateDroppedReason = nextFollowUpResult.droppedReason ?? null;
-
-      if (nextFollowUp && scrubbedChatResponse.trim().endsWith("?")) {
-        const normalizedExisting = normalizeQuestionText(scrubbedChatResponse);
-        const normalizedCandidate = normalizeQuestionText(nextFollowUp);
-        if (normalizedExisting === normalizedCandidate) {
-          nextFollowUp = null;
-          nextFollowUpKey = null;
-        }
+        const composedReply = composeAssistantReply(composed.responseMessage, composed.nextFollowUp);
+        responseMessage = composedReply.content;
+        responseFollowUp = composed.nextFollowUp;
+        responseFollowUpKey = composed.nextFollowUpKey;
+        followUpSkippedReason = composed.followUpSkippedReason;
+        followUpCandidateDroppedReason = composed.candidateDroppedReason;
+        scrubbedChatResponse = composed.scrubbedChatResponse;
       }
 
-      let followUpSkippedReason: string | null = null;
-      if (clarifierFollowUp && !nextFollowUp) {
-        followUpSkippedReason = candidateDroppedReason ?? "clarifier-dropped-or-duplicate";
-      } else if (!clarifierFollowUp && !nextFollowUp) {
-        followUpSkippedReason = candidateDroppedReason ?? "none-selected";
-      } else if (nextFollowUpKey && checklistForDecision[nextFollowUpKey]?.confirmed) {
-        followUpSkippedReason = "confirmed-key";
-        nextFollowUp = null;
-        nextFollowUpKey = null;
+      if (!replyFinalized && responseMessage) {
+        await persistAssistantMessage(responseMessage, true, true);
       }
 
-      if (nextFollowUpKey === "success_criteria") {
-        const askedSuccessBefore =
-          (baseMemory.asked_questions_normalized ?? []).some((q) => q.includes("success") || q.includes("kpi")) ?? false;
-        const successKnown = Boolean(baseMemory.facts?.success_criteria || checklistForDecision.success_criteria?.value);
-        if (checklistForDecision.success_criteria?.confirmed || (askedSuccessBefore && successKnown)) {
-          followUpSkippedReason = "success-already-known";
-          nextFollowUp = null;
-          nextFollowUpKey = null;
-        }
-      }
-
-      if (
-        nextFollowUp &&
-        followUpMode !== "technical_opt_in" &&
-        !hasInvitationLine(nextFollowUp) &&
-        !hasOtherRequirementsLanguage(userMessageContent)
-      ) {
-        nextFollowUp = `${nextFollowUp.trim()} ${FOLLOW_UP_INVITATION}`.trim();
-      }
-
+      const baseMemory = analysisState.memory ?? createEmptyMemory();
+      ensureChecklist(baseMemory);
       analysisState = {
         ...analysisState,
         memory: refreshMemoryState({
           previous: baseMemory,
           workflow: workflowWithTasks,
           lastUserMessage: userMessageContent,
-          appliedFollowUp: nextFollowUp,
-          followUpKey: nextFollowUpKey,
+          appliedFollowUp: responseFollowUp,
+          followUpKey: responseFollowUpKey,
         }),
       };
 
-      responseMessage =
-        nextFollowUp && nextFollowUp.trim().length > 0
-          ? `${scrubbedChatResponse.trim()} ${nextFollowUp.trim()}`.trim()
-          : scrubbedChatResponse;
-      if (nextFollowUp && nextFollowUp.trim().length > 0 && analysisState.memory?.lastQuestionKey) {
+      if (responseFollowUp && responseFollowUp.trim().length > 0 && analysisState.memory?.lastQuestionKey) {
         baseTrace.event("copilot.follow_up_asked", {
-          question: nextFollowUp,
+          question: responseFollowUp,
           key: analysisState.memory?.lastQuestionKey,
         });
       }
@@ -1287,27 +1646,27 @@ async function runCopilotChat({
       baseTrace.event("copilot.follow_up_decision", {
         judgeFollowUp: null,
         judgeFollowUpKey: null,
-        clarifierFollowUp: clarifierFollowUp?.question ?? null,
-        chosenFollowUp: nextFollowUp ?? null,
-        chosenFollowUpKey: nextFollowUpKey ?? null,
+        clarifierFollowUp: builderFollowUpQuestion ?? null,
+        chosenFollowUp: responseFollowUp ?? null,
+        chosenFollowUpKey: responseFollowUpKey ?? null,
         whySkipped: followUpSkippedReason,
         lastQuestionKey: analysisState.memory?.lastQuestionKey ?? null,
         judgeFailed: judgeFailedReason,
-        selectionSource: clarifierFollowUp ? "draft_clarifier" : null,
+        selectionSource: builderFollowUpQuestion ? "draft_clarifier" : null,
         followUpMode,
-        dropReason: candidateDroppedReason ?? null,
+        dropReason: followUpCandidateDroppedReason ?? null,
       });
 
       baseTrace.event("copilot.response_composed", {
         chatResponse: scrubbedChatResponse.slice(0, 300),
-        followUp: nextFollowUp ?? null,
-        followUpKey: nextFollowUpKey ?? null,
+        followUp: responseFollowUp ?? null,
+        followUpKey: responseFollowUpKey ?? null,
       });
 
       baseTrace.event("copilot_chat.llm_response", {
         automationVersionId: params.id,
-        chatResponse,
-        followUpQuestion: trimmedFollowUp,
+        chatResponse: builderChatResponse ?? chatResponse ?? null,
+        followUpQuestion: builderFollowUpQuestion ?? followUpQuestion ?? null,
         stepCount: workflowWithTasks.steps.length,
         taskCount: aiTasks.length,
         sanitizationSummary,
@@ -1436,6 +1795,8 @@ async function runCopilotChat({
     updatedAt: new Date(),
   };
 
+  let savedVersion = detail.version;
+
   if (commandExecuted === false && typeof updatedRequirementsText === "string") {
     const trimmed = updatedRequirementsText.trim();
     if (trimmed.length > 0) {
@@ -1443,32 +1804,32 @@ async function runCopilotChat({
     }
   }
 
-  const [savedVersion] = await db
-    .update(automationVersions)
-    .set(updatePayload)
-    .where(eq(automationVersions.id, params.id))
-    .returning();
+  if (!staleRun) {
+    const [persistedVersion] = await db
+      .update(automationVersions)
+      .set(updatePayload)
+      .where(eq(automationVersions.id, params.id))
+      .returning();
 
-  savingTrace.spanEnd(saveSpan, { stepCount: validatedWorkflow.steps?.length ?? 0 });
+    savingTrace.spanEnd(saveSpan, { stepCount: validatedWorkflow.steps?.length ?? 0 });
 
-  if (!savedVersion) {
-    const error = new ApiError(500, "Failed to save workflow.");
-    emitError(error.message, error.status);
-    throw error;
+    if (!persistedVersion) {
+      const error = new ApiError(500, "Failed to save workflow.");
+      emitError(error.message, error.status);
+      throw error;
+    }
+
+    savedVersion = persistedVersion;
+    revalidatePath(`/automations/${detail.automation?.id ?? persistedVersion.automationId}`);
+  } else {
+    savingTrace.spanEnd(saveSpan, { stepCount: validatedWorkflow.steps?.length ?? 0, staleRun: true, skipped: true });
   }
 
-  revalidatePath(`/automations/${detail.automation?.id ?? savedVersion.automationId}`);
+  const finalAssistantMessage = getAssistantMessageOrThrow();
 
-  const assistantMessage = await createCopilotMessage({
-    tenantId: session.tenantId,
-    automationVersionId: params.id,
-    role: "assistant",
-    content: responseMessage,
-    createdBy: null,
-  });
-  savingTrace.event("assistantMessage.saved", { messageId: assistantMessage.id });
+  savingTrace.event("assistantMessage.saved", { messageId: finalAssistantMessage.id });
 
-  if (clientMessageId) {
+  if (clientMessageId && !staleRun) {
     let runResult = null;
     try {
       runResult = await createCopilotRun({
@@ -1476,7 +1837,7 @@ async function runCopilotChat({
         automationVersionId: params.id,
         clientMessageId,
         userMessageId: userMessage.id,
-        assistantMessageId: assistantMessage.id,
+        assistantMessageId: finalAssistantMessage.id,
       });
     } catch (runError) {
       const isDuplicate =
@@ -1502,7 +1863,7 @@ async function runCopilotChat({
       throw runError;
     }
 
-    if (runResult && runResult.assistantMessageId !== assistantMessage.id) {
+    if (runResult && runResult.assistantMessageId !== finalAssistantMessage.id) {
       const replay = await buildIdempotentResponse({
         run: runResult,
         tenantId: session.tenantId,
@@ -1516,7 +1877,7 @@ async function runCopilotChat({
 
   copilotDebug("copilot_chat.persisted_message", {
     automationVersionId: params.id,
-    messageId: assistantMessage.id,
+    messageId: finalAssistantMessage.id,
     commandExecuted,
   });
 
@@ -1576,39 +1937,43 @@ async function runCopilotChat({
     facts: analysisState.memory?.facts ?? {},
     assumptions: analysisState.assumptions ?? [],
     lastUserMessageId: userMessage.id,
-    lastAssistantMessageId: assistantMessage.id,
+    lastAssistantMessageId: finalAssistantMessage.id,
     workflowUpdatedAt: savedVersion.updatedAt?.toISOString ? savedVersion.updatedAt.toISOString() : new Date().toISOString(),
   };
   analysisState = ensureAnalysisTodos(analysisState);
 
-  let analysisPersistenceError = false;
-  const analysisPersistSpan = savingTrace.spanStart("analysis.persist", { automationVersionId: params.id });
-  try {
-    await upsertCopilotAnalysis({
-      tenantId: session.tenantId,
-      automationVersionId: params.id,
-      analysis: {
-        ...analysisState,
-        lastUpdatedAt: new Date().toISOString(),
-      },
-      workflowUpdatedAt: savedVersion.updatedAt ? new Date(savedVersion.updatedAt) : new Date(),
-    });
-    savingTrace.spanEnd(analysisPersistSpan, { ok: true });
-  } catch (analysisError) {
-    analysisPersistenceError = true;
-    savingTrace.event("analysis.persist_failed", {
-      automationVersionId: params.id,
-      error: analysisError instanceof Error ? analysisError.message : String(analysisError),
-    });
-    logger.error("[copilot:chat] Failed to persist copilot analysis", {
-      automationVersionId: params.id,
-      error: analysisError,
-      stack: analysisError instanceof Error ? analysisError.stack : null,
-    });
-    copilotDebug(
-      "copilot_chat.progress_persist_failed",
-      analysisError instanceof Error ? analysisError.message : analysisError
-    );
+  let analysisPersistenceError = staleRun;
+  if (!staleRun) {
+    const analysisPersistSpan = savingTrace.spanStart("analysis.persist", { automationVersionId: params.id });
+    try {
+      await upsertCopilotAnalysis({
+        tenantId: session.tenantId,
+        automationVersionId: params.id,
+        analysis: {
+          ...analysisState,
+          lastUpdatedAt: new Date().toISOString(),
+        },
+        workflowUpdatedAt: savedVersion.updatedAt ? new Date(savedVersion.updatedAt) : new Date(),
+      });
+      savingTrace.spanEnd(analysisPersistSpan, { ok: true });
+    } catch (analysisError) {
+      analysisPersistenceError = true;
+      savingTrace.event("analysis.persist_failed", {
+        automationVersionId: params.id,
+        error: analysisError instanceof Error ? analysisError.message : String(analysisError),
+      });
+      logger.error("[copilot:chat] Failed to persist copilot analysis", {
+        automationVersionId: params.id,
+        error: analysisError,
+        stack: analysisError instanceof Error ? analysisError.stack : null,
+      });
+      copilotDebug(
+        "copilot_chat.progress_persist_failed",
+        analysisError instanceof Error ? analysisError.message : analysisError
+      );
+    }
+  } else {
+    savingTrace.event("analysis.persist_skipped_stale", { automationVersionId: params.id, lastUserMessageId: userMessage.id });
   }
 
   const updatedTasks = await fetchTasksForVersion(session.tenantId, params.id);
@@ -1626,7 +1991,7 @@ async function runCopilotChat({
   const result: CopilotRunResult = {
     runId,
     workflow: withLegacyWorkflowAlias(validatedWorkflow) as any,
-    message: assistantMessage,
+    message: finalAssistantMessage,
     tasks: updatedTasks,
     completion: completionState,
     progress: progressSnapshot,
