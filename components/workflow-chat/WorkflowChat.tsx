@@ -257,6 +257,28 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
         const data: ChatEvent = JSON.parse(event.data);
         const payload = (data.payload ?? data.data) as unknown;
 
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: data.conversationId ?? workflowId,
+            hypothesisId: "H-wfc-sse",
+            location: "WorkflowChat.tsx:eventSource.onmessage",
+            message: "workflow_chat.sse_event",
+            data: {
+              type: data.type,
+              hasPayload: Boolean(payload),
+              lastMessageId: data.lastMessageId ?? null,
+              lastReadMessageId: data.lastReadMessageId ?? null,
+              resyncRecommended: data.resyncRecommended ?? null,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+
         if (data.type === "connected") {
           setConversationId(data.conversationId || null);
           // If server hints at resync, fetch fresh messages.
@@ -345,6 +367,22 @@ export function WorkflowChat({ workflowId, disabled = false }: WorkflowChatProps
           if (receipt?.lastReadMessageId) {
             setLastReadMessageId(receipt.lastReadMessageId);
           }
+        } else {
+          // #region agent log
+          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId: data.conversationId ?? workflowId,
+              hypothesisId: "H-wfc-sse",
+              location: "WorkflowChat.tsx:eventSource.onmessage",
+              message: "workflow_chat.unknown_event",
+              data: { type: data.type, payloadSnippet: payload ? JSON.stringify(payload).slice(0, 200) : null },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
         }
       } catch (error) {
         logger.error("Error parsing SSE event:", error);

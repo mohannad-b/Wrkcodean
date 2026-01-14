@@ -65,7 +65,7 @@ describe("GET /api/automation-versions/[id]/copilot/analysis", () => {
     expect(payload.analysis.todos.length).toBeGreaterThanOrEqual(4);
     expect(payload.analysis.todos.filter((todo: any) => todo.status === "open").length).toBeGreaterThanOrEqual(4);
     expect(payload.analysis.readiness.stateItemsMissing).toEqual(
-      expect.arrayContaining(["business_requirements", "business_objectives", "success_criteria", "systems"])
+      expect.arrayContaining(["goal_clarity", "trigger", "destination", "output_shape", "scope"])
     );
     expect(Object.keys(payload.analysis.sections)).toHaveLength(8);
   });

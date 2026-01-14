@@ -10,14 +10,22 @@ import { Button } from "@/components/ui/button";
 import type { WorkflowUpdates } from "@/lib/workflows/ai-updates";
 import type { Workflow } from "@/lib/workflows/types";
 import { workflowToNodes } from "@/lib/workflows/canvas-utils";
-import type { CopilotAnalysisState, WorkflowProgressSnapshot } from "@/lib/workflows/copilot-analysis";
+import type {
+  CopilotAnalysisState,
+  ReadinessSignals,
+  WorkflowProgressSnapshot,
+} from "@/lib/workflows/copilot-analysis";
 import type { Task } from "@/db/schema";
 import { logger } from "@/lib/logger";
-import { appendDisplayLine } from "./progress-reducer";
+// Legacy status normalization/derivation removed; keep UI lean.
 
 const DEBUG_UI_ENABLED =
   process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_DEBUG_COPILOT_UI === "true";
 const INGEST_URL = process.env.NEXT_PUBLIC_COPILOT_INGEST_URL;
+const AGENT_LOG_URL = "http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc";
+const agentFetch: typeof fetch = DEBUG_UI_ENABLED
+  ? fetch
+  : async () => undefined as unknown as Response;
 
 const ingest = (payload: Record<string, unknown>) => {
   if (!INGEST_URL) return;
@@ -28,7 +36,6 @@ const ingest = (payload: Record<string, unknown>) => {
     keepalive: true,
   }).catch(() => {});
 };
-const agentLog = (payload: Record<string, unknown>) => ingest(payload);
 
 type ChatRole = "user" | "assistant" | "system";
 type RunPhase = "connected" | "understanding" | "drafting" | "structuring" | "drawing" | "saving" | "done" | "error";
@@ -41,25 +48,22 @@ export interface CopilotMessage {
   optimistic?: boolean;
   transient?: boolean;
   clientMessageId?: string | null;
-  kind?: "system_run" | "proceed_cta";
-  runStatus?: {
-    phase: RunPhase;
-    text: string;
-    stepCount?: number;
-    errorMessage?: string | null;
-    retryable?: boolean;
-    persistenceError?: boolean;
-    debugDetails?: Record<string, unknown> | null;
-    collapsed?: boolean;
-    debugLines?: string[];
-    runId?: string;
-    displayLines?: string[];
-    completed?: boolean;
-  };
+  kind?: "proceed_cta";
   proceedMeta?: {
     uiStyle?: string | null;
   };
 }
+
+type BuildActivity = {
+  runId: string;
+  phase: string;
+  lastSeq?: number | null;
+  rawPhase?: string | null;
+  lastLine: string | null;
+  startedAt?: number | null;
+  completedAt?: number | null;
+  isRunning: boolean;
+};
 
 interface StudioChatProps {
   automationVersionId: string | null;
@@ -76,21 +80,21 @@ interface StudioChatProps {
   analysis?: CopilotAnalysisState | null;
   analysisLoading?: boolean;
   onRefreshAnalysis?: () => void | Promise<void>;
-  onBuildActivityUpdate?: (activity: {
-    runId: string;
-    phase: string;
-    lastLine: string | null;
-    lines: string[];
-    startedAt: number;
-    completedAt: number | null;
-    errorMessage: string | null;
-    isRunning: boolean;
-  } | null) => void;
+  onBuildActivityUpdate?: (activity: BuildActivity | null) => void;
   analysisUnavailable?: boolean;
   onProceedToBuild?: () => void;
   proceedToBuildDisabled?: boolean;
   proceedToBuildReason?: string | null;
   proceedingToBuild?: boolean;
+  onReadinessUpdate?: (payload: {
+    runId?: string;
+    readinessScore?: number;
+    proceedReady?: boolean;
+    proceedReason?: string | null;
+    proceedBasicsMet?: boolean;
+    proceedThresholdMet?: boolean;
+    signals?: ReadinessSignals;
+  }) => void;
 }
 
 const INITIAL_AI_MESSAGE: CopilotMessage = {
@@ -112,53 +116,10 @@ type ApiCopilotMessage = {
 const formatTimestamp = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 
-type RunProgressState = {
-  runId: string;
-  phase: string;
-  lastLine: string | null;
-  lines: string[];
-  startedAt: number;
-  completedAt: number | null;
-  errorMessage: string | null;
-};
-
-const mapRunPhase = (phase?: string | null): string => {
-  const normalized = (phase ?? "").toLowerCase();
-  switch (normalized) {
-    case "connecting":
-    case "connected":
-      return "Connecting";
-    case "understanding":
-      return "Understanding request";
-    case "structuring":
-    case "clarifying":
-      return "Clarifying";
-    case "drafting":
-      return "Drafting";
-    case "requirements":
-      return "Requirements";
-    case "tasks":
-    case "drawing":
-      return "Generating tasks";
-    case "validating":
-    case "cleaning":
-      return "Validating & cleaning";
-    case "saving":
-      return "Saving";
-    case "done":
-      return "Ready";
-    case "error":
-      return "Error";
-    default:
-      return "Understanding request";
-  }
-};
-
 const mergeTranscript = (existing: CopilotMessage[], incoming: CopilotMessage[]) => {
   const byId = new Map<string, CopilotMessage>();
   const byClient = new Map<string, CopilotMessage>();
   existing
-    .filter((m) => m.kind !== "system_run")
     .forEach((m) => {
       if (m.clientMessageId) byClient.set(m.clientMessageId, m);
       byId.set(m.id, m);
@@ -215,6 +176,7 @@ export function StudioChat({
   proceedToBuildDisabled = false,
   proceedToBuildReason = null,
   proceedingToBuild = false,
+  onReadinessUpdate,
 }: StudioChatProps) {
   const { profile } = useUserProfile();
   const [messages, setMessages] = useState<CopilotMessage[]>([INITIAL_AI_MESSAGE]);
@@ -228,25 +190,20 @@ export function StudioChat({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingRequestIdRef = useRef<number>(0);
   const injectedMessageRunSetRef = useRef<Set<string>>(new Set());
-  const actionButtonsDisabled = disabled || !automationVersionId;
   const [attachedFiles, setAttachedFiles] = useState<Array<{ id: string; filename: string; url: string; type: string }>>([]);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const lastSentContentRef = useRef<string | null>(null);
   const zeroStepLogGuardRef = useRef<Set<number>>(new Set());
   const injectedFailureRef = useRef<{ id: string; at: number } | null>(null);
   const runContentRef = useRef<Map<string, string>>(new Map());
-  const runCollapseTimersRef = useRef<Map<string, number>>(new Map());
   const analysisRefreshRef = useRef<Map<string, number>>(new Map());
-  const runHeartbeatTimersRef = useRef<Map<
-    string,
-    { slow?: number; slower?: number; slowest?: number }
-  >>(new Map());
   const activeControllerRef = useRef<AbortController | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
   const runSeenServerStatusRef = useRef<Map<string, boolean>>(new Map());
   const runCompletedRef = useRef<Map<string, boolean>>(new Map());
-  const lastSeqByRunIdRef = useRef<Map<string, number>>(new Map());
+  const seenSeqByRunIdRef = useRef<Map<string, Set<number>>>(new Map());
   const sseFirstChunkByRunIdRef = useRef<Map<string, boolean>>(new Map());
+  const activityByRunRef = useRef<Map<string, BuildActivity>>(new Map());
   const runSseEventsRef = useRef<
     Map<
       string,
@@ -277,24 +234,15 @@ export function StudioChat({
 
   const renderMessages = useMemo(() => {
     const seen = new Set<string>();
-    return messages.filter((message) => {
+    const filtered = messages.filter((message) => {
       if (!message?.id) return false;
-      if (message.kind === "system_run") return false;
       if (seen.has(message.id)) return false;
       seen.add(message.id);
       return true;
     });
+    return filtered;
   }, [messages]);
-  const [showRunDetails, setShowRunDetails] = useState(false);
-  const [runProgress, setRunProgress] = useState<{
-    runId: string;
-    phase: string;
-    lastLine: string | null;
-    lines: string[];
-    startedAt: number;
-    completedAt: number | null;
-    errorMessage: string | null;
-  } | null>(null);
+  const [buildActivity, setBuildActivity] = useState<BuildActivity | null>(null);
 
   const mapApiMessage = useCallback(
     (message: ApiCopilotMessage): CopilotMessage => ({
@@ -341,24 +289,110 @@ export function StudioChat({
 
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    // #region agent log
+    agentFetch(AGENT_LOG_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: activeRunIdRef.current ?? "none",
+        hypothesisId: "H4-render",
+        location: "StudioChat.tsx:messages effect",
+        message: "messages state updated",
+        data: {
+          count: messages.length,
+          ids: messages.map((m) => m.id),
+          roles: messages.map((m) => m.role),
+          kinds: messages.map((m) => m.kind ?? null),
+          contentPreviews: messages.map((m) => m.content?.slice(0, 80)),
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // console debug (focus on status-driven flow only)
+    // #endregion
+    // #region agent log
+    requestAnimationFrame(() => {
+      const bubbleCount = document.querySelectorAll('[data-testid="copilot-message-bubble"]').length;
+      const firstAssistant = document.querySelector('[data-testid="copilot-message-bubble"][data-role="assistant"]') as HTMLElement | null;
+      const lastAssistant = (() => {
+        const all = Array.from(document.querySelectorAll('[data-testid="copilot-message-bubble"][data-role="assistant"]')) as HTMLElement[];
+        return all.length ? all[all.length - 1] : null;
+      })();
+      const rect = firstAssistant?.getBoundingClientRect();
+      const lastRect = lastAssistant?.getBoundingClientRect();
+      const style = firstAssistant ? window.getComputedStyle(firstAssistant) : null;
+      const lastStyle = lastAssistant ? window.getComputedStyle(lastAssistant) : null;
+      const allBubbles = Array.from(document.querySelectorAll('[data-testid="copilot-message-bubble"]')) as HTMLElement[];
+      const renderSnapshot = allBubbles.map((el) => ({
+        id: el.dataset?.id ?? null,
+        role: el.dataset?.role ?? null,
+        text: el.innerText?.slice(0, 140) ?? null,
+        rect: (() => {
+          const r = el.getBoundingClientRect();
+          return { top: r.top, left: r.left, width: r.width, height: r.height };
+        })(),
+        display: window.getComputedStyle(el).display,
+        opacity: window.getComputedStyle(el).opacity,
+      }));
+      // console debug (focus on status-driven flow only)
+      agentFetch(AGENT_LOG_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "debug-session",
+          runId: activeRunIdRef.current ?? "none",
+          hypothesisId: "H4-render",
+          location: "StudioChat.tsx:messages effect",
+          message: "bubble dom count",
+          data: {
+            bubbleCount,
+            firstAssistant: firstAssistant
+              ? {
+                  id: firstAssistant.dataset?.id ?? null,
+                  rect: rect
+                    ? {
+                        top: rect.top,
+                        left: rect.left,
+                        width: rect.width,
+                        height: rect.height,
+                      }
+                    : null,
+                  display: style?.display ?? null,
+                  opacity: style?.opacity ?? null,
+                  color: style?.color ?? null,
+                  backgroundColor: style?.backgroundColor ?? null,
+                }
+              : null,
+            lastAssistant: lastAssistant
+              ? {
+                  id: lastAssistant.dataset?.id ?? null,
+                  rect: lastRect
+                    ? { top: lastRect.top, left: lastRect.left, width: lastRect.width, height: lastRect.height }
+                    : null,
+                  display: lastStyle?.display ?? null,
+                  opacity: lastStyle?.opacity ?? null,
+                  color: lastStyle?.color ?? null,
+                  backgroundColor: lastStyle?.backgroundColor ?? null,
+                }
+              : null,
+            renderSnapshot: renderSnapshot.slice(0, 30),
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      if (allBubbles.length) {
+        allBubbles[allBubbles.length - 1].scrollIntoView({ behavior: "smooth", block: "end" });
+      }
+    });
+    // #endregion
   }, [messages]);
-
-  useEffect(() => {
-    onBuildActivityUpdate?.(
-      runProgress
-        ? {
-            ...runProgress,
-            isRunning: !runProgress.completedAt,
-          }
-        : null
-    );
-  }, [onBuildActivityUpdate, runProgress]);
 
   useEffect(() => {
     let cancelled = false;
     if (!automationVersionId) {
       setMessages([INITIAL_AI_MESSAGE]);
-      setRunProgress(null);
+      setBuildActivity(null);
       setIsLoadingThread(false);
       return;
     }
@@ -377,22 +411,12 @@ export function StudioChat({
     if (prevWorkflowEmptyRef.current && !workflowEmpty) {
       setMessages((prev) => [
         ...prev,
-        {
-          id: `ai-${Date.now()}`,
-          role: "assistant",
-          content: "Draft created. Review the canvas and click any step to refine details.",
-          createdAt: new Date().toISOString(),
-          transient: true,
-        },
       ]);
     }
     prevWorkflowEmptyRef.current = workflowEmpty;
   }, [workflowEmpty]);
 
-  const durableMessages = useMemo(
-    () => messages.filter((message) => message.kind !== "system_run"),
-    [messages]
-  );
+  const durableMessages = useMemo(() => messages, [messages]);
 
   useEffect(() => {
     onConversationChange?.(durableMessages);
@@ -488,89 +512,62 @@ export function StudioChat({
     return mimeType.startsWith("image/");
   };
 
-  const updateRunMessage = useCallback(
-    (targetRunId: string, updater: (status: CopilotMessage["runStatus"]) => CopilotMessage["runStatus"]) => {
-      let computedStatus: CopilotMessage["runStatus"] | null = null;
-      if (activeRunIdRef.current && targetRunId !== activeRunIdRef.current) {
-        return;
+  const upsertBuildActivityFromEvent = useCallback(
+    (
+      targetRunId: string,
+      updates: {
+        phase?: string;
+        rawPhase?: string | null;
+        lastSeq?: number | null;
+        message?: string | null;
+        isRunning?: boolean;
+        completedAt?: number | null;
+        startedAt?: number | null;
       }
+    ) => {
+      const prev = activityByRunRef.current.get(targetRunId);
+      const startedAt = prev?.startedAt ?? updates.startedAt ?? Date.now();
+      const phase = updates.phase ?? prev?.phase ?? "working";
+      const rawPhase = updates.rawPhase ?? phase;
+      const trimmedMessage = updates.message?.trim() ?? "";
+      const nextLastLine = trimmedMessage.length > 0 ? trimmedMessage : prev?.lastLine ?? null;
+      const lastSeq = updates.lastSeq ?? prev?.lastSeq ?? null;
+      const isTerminal = phase.toLowerCase() === "done" || phase.toLowerCase() === "error";
+      const completedAt =
+        updates.completedAt ?? (isTerminal ? prev?.completedAt ?? Date.now() : prev?.completedAt ?? null);
+      const isRunning = updates.isRunning ?? !isTerminal;
 
-      setMessages((prev) => {
-        const existing = prev.find((msg) => msg.kind === "system_run" && msg.id === targetRunId);
-        const currentStatus =
-          existing?.runStatus ??
-          ({
-            phase: "drafting",
-            text: "",
-            errorMessage: null,
-            retryable: false,
-            collapsed: false,
-            displayLines: existing?.runStatus?.displayLines ?? [],
-          } as CopilotMessage["runStatus"]);
-        const nextStatus = updater(currentStatus);
-        computedStatus = nextStatus;
-        const withoutRunMessages = prev.filter((msg) => !(msg.kind === "system_run" && msg.id === targetRunId));
-        const runMessage: CopilotMessage = {
-          id: existing?.id ?? targetRunId,
-          role: "assistant",
-          content: "",
-          createdAt: existing?.createdAt ?? new Date().toISOString(),
-          kind: "system_run",
-          runStatus: nextStatus,
-        };
-        return [...withoutRunMessages, runMessage];
-      });
+      const next: BuildActivity = {
+        runId: targetRunId,
+        phase,
+        rawPhase,
+        lastSeq,
+        lastLine: nextLastLine,
+        startedAt,
+        completedAt,
+        isRunning,
+      };
 
-      setRunProgress((prev) => {
-        const status = computedStatus ?? {
-          phase: "drafting",
-          text: "",
-          errorMessage: null,
-          retryable: false,
-          collapsed: false,
-          displayLines: [],
-        };
-
-        const base: RunProgressState =
-          prev && prev.runId === targetRunId
-            ? prev
-            : {
-                runId: targetRunId,
-                phase: "Connecting",
-                lastLine: null,
-                lines: [],
-                startedAt: Date.now(),
-                completedAt: null,
-                errorMessage: null,
-              };
-
-        const phaseLabel = mapRunPhase(status.phase);
-        const candidateLine =
-          status.errorMessage ??
-          status.text ??
-          (status.displayLines && status.displayLines[status.displayLines.length - 1]) ??
-          base.lastLine;
-        const nextLines =
-          candidateLine != null ? appendDisplayLine(base.lines, candidateLine).slice(-10) : base.lines;
-        const completed = Boolean(status.completed) || phaseLabel === "Done" || phaseLabel === "Error";
-
-        return {
-          ...base,
-          phase: phaseLabel,
-          lastLine: candidateLine,
-          lines: nextLines,
-          completedAt: completed ? Date.now() : base.completedAt,
-          errorMessage: status.errorMessage ?? (phaseLabel === "Error" ? candidateLine : base.errorMessage),
-        };
-      });
+      activityByRunRef.current.set(targetRunId, next);
+      setBuildActivity(next);
+      onBuildActivityUpdate?.(next);
+      if (isTerminal) {
+        const wasCompleted = runCompletedRef.current.get(targetRunId) ?? false;
+        if (!wasCompleted) {
+          console.log(
+            `[SSE activity] runCompletedRef set run=${targetRunId} seq=${lastSeq ?? "n/a"} phase=${phase}`
+          );
+        }
+        runCompletedRef.current.set(targetRunId, true);
+      }
     },
-    []
+    [onBuildActivityUpdate]
   );
 
   const sendMessage = useCallback(
     async (
       messageContent: string,
-      source: "manual" | "seed",
+      _source: "manual" | "seed",
       options?: { reuseRunId?: string }
     ) => {
       const trimmed = messageContent.trim();
@@ -592,8 +589,10 @@ export function StudioChat({
       pendingRequestIdRef.current = requestId;
       const runId = options?.reuseRunId ?? optimisticMessageId ?? makeTempId();
       const clientMessageId = options?.reuseRunId && isRetry ? `${runId}-retry-${Date.now()}` : runId;
-      const initialText = source === "seed" ? "Understanding…" : isRetry ? "Understanding…" : "Understanding…";
       if (activeControllerRef.current) {
+        if (activeRunIdRef.current) {
+          runCompletedRef.current.set(activeRunIdRef.current, true);
+        }
         activeControllerRef.current.abort();
         activeControllerRef.current = null;
       }
@@ -610,14 +609,6 @@ export function StudioChat({
 
       lastSentContentRef.current = trimmed;
       runContentRef.current.set(runId, trimmed);
-      if (runCollapseTimersRef.current.has(runId)) {
-        const timer = runCollapseTimersRef.current.get(runId);
-        if (timer) {
-          window.clearTimeout(timer);
-        }
-        runCollapseTimersRef.current.delete(runId);
-      }
-
       const optimisticMessage: CopilotMessage | null = isRetry
         ? null
         : {
@@ -631,20 +622,24 @@ export function StudioChat({
 
       runSeenServerStatusRef.current.set(runId, false);
       sseFirstChunkByRunIdRef.current.set(runId, false);
-      lastSeqByRunIdRef.current.set(runId, 0);
+      seenSeqByRunIdRef.current.set(runId, new Set());
       if (DEBUG_UI_ENABLED) {
         runSseEventsRef.current.set(runId, []);
       }
       runCompletedRef.current.set(runId, false);
-      setRunProgress({
+      const startedAt = Date.now();
+      const initialActivity: BuildActivity = {
         runId,
-        phase: "Connecting",
-        lastLine: initialText,
-        lines: [initialText],
-        startedAt: Date.now(),
+        phase: "connecting",
+        rawPhase: "connecting",
+        lastSeq: null,
+        lastLine: null,
+        startedAt,
         completedAt: null,
-        errorMessage: null,
-      });
+        isRunning: true,
+      };
+      activityByRunRef.current.set(runId, initialActivity);
+      setBuildActivity(initialActivity);
 
       setMessages((prev) => {
         const next: CopilotMessage[] = prev.filter((msg) => msg.id !== optimisticMessage?.id);
@@ -653,52 +648,6 @@ export function StudioChat({
         }
         return next.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
       });
-
-      const updateRunProgress = (
-        targetRunId: string,
-        updater: (status: {
-          runId: string;
-          phase: string;
-          lastLine: string | null;
-          lines: string[];
-          startedAt: number;
-          completedAt: number | null;
-          errorMessage: string | null;
-        }) => typeof runProgress
-      ) => {
-        setRunProgress((prev) => {
-          const current =
-            prev ??
-            ({
-              runId: targetRunId,
-              phase: "Connecting",
-              lastLine: null,
-              lines: [],
-              startedAt: Date.now(),
-              completedAt: null,
-              errorMessage: null,
-            } as any);
-          return updater(current as any) as any;
-        });
-      };
-
-      const appendDebugLine = (line: string, targetRunId: string = runId) => {
-        if (!DEBUG_UI_ENABLED) return;
-        updateRunProgress(targetRunId, (status) => {
-          const nextLines = [...status.lines, line.slice(0, 160)].slice(-10);
-          return { ...status, lines: nextLines, lastLine: line };
-        });
-      };
-
-      const clearHeartbeatTimers = (targetRunId: string) => {
-        const timers = runHeartbeatTimersRef.current.get(targetRunId);
-        if (timers) {
-          if (timers.slow) window.clearTimeout(timers.slow);
-          if (timers.slower) window.clearTimeout(timers.slower);
-          if (timers.slowest) window.clearTimeout(timers.slowest);
-          runHeartbeatTimersRef.current.delete(targetRunId);
-        }
-      };
 
       const recordSseEvent = (
         eventType: string,
@@ -724,172 +673,83 @@ export function StudioChat({
         forceSseDebugRender((value) => value + 1);
       };
 
-      const shouldProcessEvent = (targetRunId: string | undefined, seq?: number) => {
-        if (targetRunId && activeRunIdRef.current && targetRunId !== activeRunIdRef.current) {
-          return false;
+      const shouldAcceptSeq = (targetRunId: string, seq?: number) => {
+        if (seq === undefined || seq === null) return true;
+        let set = seenSeqByRunIdRef.current.get(targetRunId);
+        if (!set) {
+          set = new Set<number>();
+          seenSeqByRunIdRef.current.set(targetRunId, set);
         }
-        if (!seq || !targetRunId) return true;
-        const last = lastSeqByRunIdRef.current.get(targetRunId) ?? 0;
-        if (seq <= last) {
-          // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sessionId: "debug-session",
-              runId,
-              hypothesisId: "H1-parser",
-              location: "StudioChat.tsx:shouldProcessEvent",
-              message: "seq ignored",
-              data: { targetRunId, seq, last },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          // #endregion
-          return false;
-        }
-        lastSeqByRunIdRef.current.set(targetRunId, seq);
+        const already = set.has(seq);
+        console.log(
+          `[SSE activity] seq-check run=${targetRunId} seq=${seq} seen=${already ? "yes" : "no"}`
+        );
+        if (already) return false;
+        set.add(seq);
         return true;
       };
 
-      const pushDisplayLine = (line: string, targetRunId: string) => {
-        if (runCompletedRef.current.get(targetRunId)) return;
-        updateRunProgress(targetRunId, (status) => {
-          const nextLines = appendDisplayLine(status.lines, line).slice(-10);
-          return { ...status, lastLine: line, lines: nextLines };
-        });
+      const extractLine = (parsed: any): string => {
+        const candidates = [parsed?.message, parsed?.line, parsed?.text, parsed?.status, parsed?.detail];
+        const picked = candidates.find((v) => typeof v === "string" && v.trim().length > 0);
+        return (picked ?? "").trim();
       };
 
-      const applyStatusFromEvent = (payload: { phase?: string; message?: string; runId?: string; seq?: number }) => {
-        if (!payload.message && !payload.phase) return;
-        const targetRunId = payload.runId ?? runId;
-        if (runCompletedRef.current.get(targetRunId)) return;
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: "debug-session",
-            runId,
-            hypothesisId: "H1-status-flow",
-            location: "StudioChat.tsx:applyStatusFromEvent",
-            message: "status event received",
-            data: { targetRunId, seq: payload.seq, phase: payload.phase, message: payload.message },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
-        recordSseEvent("status", payload);
-        if (!shouldProcessEvent(targetRunId, payload.seq)) return;
-        const phaseMap: Record<string, RunPhase> = {
-          connected: "connected",
-          understanding: "understanding",
-          drafting: "drafting",
-          structuring: "structuring",
-          saving: "saving",
-          drawing: "drawing",
-          done: "done",
-          error: "error",
-          chat_ready: "connected",
-        };
-        const mappedPhase = payload.phase && phaseMap[payload.phase] ? phaseMap[payload.phase] : undefined;
-        if (mappedPhase) {
-          updateRunMessage(targetRunId, (status) => ({ ...status, phase: mappedPhase }));
+      const applyProgressEvent = (payload: any, eventRunId: string, effectiveType: string | undefined) => {
+        if (eventRunId && activeRunIdRef.current && eventRunId !== activeRunIdRef.current) return;
+        const lineText = extractLine(payload);
+        const seq = typeof payload?.seq === "number" ? payload.seq : undefined;
+        if (!lineText && !payload?.phase) return;
+        if (runCompletedRef.current.get(eventRunId)) return;
+        if (!shouldAcceptSeq(eventRunId, seq)) {
+          console.log(
+            `[SSE activity] ignored duplicate seq type=${effectiveType ?? "unknown"} run=${eventRunId} seq=${
+              seq ?? "n/a"
+            }`
+          );
+          return;
         }
-        if (payload.phase === "chat_ready") {
-          setIsSending(false);
-          setIsAwaitingReply(false);
-        }
-        if (payload.phase && !mappedPhase) {
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sessionId: "debug-session",
-              runId,
-              hypothesisId: "H1-status-flow",
-              location: "StudioChat.tsx:applyStatusFromEvent",
-              message: "copilot_chat.unknown_phase",
-              data: { phase: payload.phase },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-        }
-        runSeenServerStatusRef.current.set(targetRunId, true);
-        clearHeartbeatTimers(targetRunId);
-        const trimmedMessage = payload.message?.trim() ?? "";
-        const useServerMessage = trimmedMessage.length > 0;
-        if (useServerMessage) {
-          const already = runUsedServerMessageRef.current.get(targetRunId) ?? false;
-          runUsedServerMessageRef.current.set(targetRunId, true);
-          if (!already && !runCopySourceLoggedRef.current.get(targetRunId)) {
-            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                sessionId: "debug-session",
-                runId,
-                hypothesisId: "H1-status-flow",
-                location: "StudioChat.tsx:applyStatusFromEvent",
-                message: "copilot_chat.progress_copy_source",
-                data: { source: "server" },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-            runCopySourceLoggedRef.current.set(targetRunId, true);
-          }
-        }
-        updateRunMessage(targetRunId, (status) => ({
-          ...status,
-          phase: mappedPhase ?? status.phase,
-          runId: payload.runId ?? status.runId ?? targetRunId,
-          errorMessage: mappedPhase === "error" ? payload.message ?? status.errorMessage : status.errorMessage,
-          retryable: mappedPhase === "error" ? true : status.retryable,
-          collapsed: false,
-        }));
-        if (payload.runId && payload.runId !== runId) {
-          appendDebugLine(`event runId: ${payload.runId}`);
-        }
-        if (useServerMessage) {
-          pushDisplayLine(trimmedMessage, targetRunId);
-        }
+        const phase =
+          typeof payload?.phase === "string" && payload.phase.trim()
+            ? payload.phase.trim()
+            : effectiveType && effectiveType.trim()
+            ? effectiveType.trim()
+            : "working";
+        const isTerminal = phase.toLowerCase() === "done" || phase.toLowerCase() === "error";
+        console.log(
+          `[SSE activity] accepted type=${effectiveType ?? "unknown"} run=${eventRunId} seq=${seq ?? "n/a"} line=${lineText}`
+        );
+        upsertBuildActivityFromEvent(eventRunId, {
+          phase,
+          rawPhase: payload?.phase ?? phase,
+          lastSeq: seq ?? null,
+          message: lineText || null,
+          isRunning: !isTerminal,
+          completedAt: isTerminal ? Date.now() : null,
+        });
       };
 
       const applyErrorFromEvent = (payload: { message?: string; runId?: string; seq?: number }) => {
         const targetRunId = payload.runId ?? runId;
         recordSseEvent("error", payload);
-        if (!shouldProcessEvent(targetRunId, payload.seq)) return;
-        const message = payload.message ?? "Run failed. Retry?";
+        if (targetRunId && activeRunIdRef.current && targetRunId !== activeRunIdRef.current) return;
+        if (!shouldAcceptSeq(targetRunId, payload.seq)) return;
+        const message = payload.message ?? "";
         terminalSource = "sse";
         if (sseTerminalReceived) {
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sessionId: "debug-session",
-              runId,
-              hypothesisId: "H2-terminal",
-              location: "StudioChat.tsx:applyErrorFromEvent",
-              message: "copilot_chat.terminal_once_guard_hit",
-              data: { targetRunId, seq: payload.seq },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
           return;
         }
         sseTerminalReceived = true;
-        updateRunMessage(targetRunId, (status) => ({
-          ...status,
+        upsertBuildActivityFromEvent(targetRunId, {
           phase: "error",
-          errorMessage: message,
-          retryable: true,
-          collapsed: false,
-          completed: true,
-        }));
-        runCompletedRef.current.set(targetRunId, true);
-        pushDisplayLine(message, targetRunId);
+          rawPhase: "error",
+          lastSeq: payload.seq ?? null,
+          message: message.trim() || null,
+          isRunning: false,
+          completedAt: Date.now(),
+        });
         // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        agentFetch(AGENT_LOG_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -918,11 +778,12 @@ export function StudioChat({
       let firstChunkMs: number | null = null;
       let chunkCount = 0;
       let terminalSource: "sse" | "fallback" | "auth_error" | "http_error" | null = null;
+      const isLatest = () => requestId === pendingRequestIdRef.current;
 
       const logStreamMetrics = () => {
         if (metricsLogged) return;
         metricsLogged = true;
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        agentFetch(AGENT_LOG_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -945,6 +806,26 @@ export function StudioChat({
 
       const upsertAssistantMessage = (apiMessage: ApiCopilotMessage, targetRunId: string) => {
         const assistantMessage = mapApiMessage(apiMessage);
+        // #region agent log
+        agentFetch(AGENT_LOG_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: targetRunId,
+            hypothesisId: "H3-merge",
+            location: "StudioChat.tsx:upsertAssistantMessage",
+            message: "upserting assistant message",
+            data: {
+              id: assistantMessage.id,
+              createdAt: assistantMessage.createdAt,
+              contentPreview: assistantMessage.content?.slice(0, 80),
+              existingCount: messages.length,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
         setMessages((prev) => {
           const withoutDuplicate = prev.filter((msg) => msg.id !== assistantMessage.id);
           const merged = [...withoutDuplicate, assistantMessage].sort(
@@ -952,14 +833,16 @@ export function StudioChat({
           );
           return merged;
         });
-        updateRunMessage(targetRunId, (status) => ({ ...status, text: status.text ?? "Reply sent" }));
         setIsAwaitingReply(false);
         setIsSending(false);
       };
 
       const applyMessagePayload = (rawData: { message?: ApiCopilotMessage; seq?: number }, responseRunId: string) => {
         if (!rawData?.message) return;
-        if (!shouldProcessEvent(responseRunId, rawData.seq)) return;
+        if (responseRunId && activeRunIdRef.current && responseRunId !== activeRunIdRef.current) return;
+        if (!shouldAcceptSeq(responseRunId, rawData.seq)) return;
+        setIsAwaitingReply(false);
+        setIsSending(false);
         recordSseEvent("message", {
           runId: responseRunId,
           seq: rawData.seq,
@@ -978,6 +861,14 @@ export function StudioChat({
           tasks?: Task[];
           persistenceError?: boolean;
           seq?: number;
+          readinessScore?: number;
+          readinessSignals?: ReadinessSignals;
+          proceedReady?: boolean;
+          proceedReason?: string | null;
+          proceedBasicsMet?: boolean;
+          proceedThresholdMet?: boolean;
+          proceedMessage?: string;
+          proceedUiStyle?: string | null;
         },
         responseRunId: string,
         source: "sse" | "fallback"
@@ -985,7 +876,7 @@ export function StudioChat({
         if (source === "sse") {
           terminalSource = "sse";
           if (sseTerminalReceived) {
-            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            agentFetch(AGENT_LOG_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -1001,16 +892,9 @@ export function StudioChat({
             return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
           }
           sseTerminalReceived = true;
-          const timers = runHeartbeatTimersRef.current.get(responseRunId);
-          if (timers) {
-            if (timers.slow) window.clearTimeout(timers.slow);
-            if (timers.slower) window.clearTimeout(timers.slower);
-            if (timers.slowest) window.clearTimeout(timers.slowest);
-            runHeartbeatTimersRef.current.delete(responseRunId);
-          }
         } else if (sseTerminalReceived || (sseFirstChunkByRunIdRef.current.get(responseRunId) ?? false)) {
           // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          agentFetch(AGENT_LOG_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1026,32 +910,31 @@ export function StudioChat({
           // #endregion
           return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
         }
+        if (isLatest() && typeof onReadinessUpdate === "function") {
+          onReadinessUpdate({
+            runId: responseRunId,
+            readinessScore: rawData.readinessScore,
+            proceedReady: rawData.proceedReady,
+            proceedReason: rawData.proceedReason ?? null,
+            proceedBasicsMet: rawData.proceedBasicsMet,
+            proceedThresholdMet: rawData.proceedThresholdMet,
+            signals: rawData.readinessSignals,
+          });
+        }
         recordSseEvent("result", {
           runId: responseRunId,
           seq: rawData.seq,
           message: rawData.message?.content,
           phase: "result",
         });
-        if (!shouldProcessEvent(responseRunId, rawData.seq)) {
-          // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sessionId: "debug-session",
-              runId,
-              hypothesisId: "H1-parser",
-              location: "StudioChat.tsx:applyResultPayload",
-              message: "result seq ignored",
-              data: { responseRunId, seq: rawData.seq, source },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          // #endregion
+        if (responseRunId && activeRunIdRef.current && responseRunId !== activeRunIdRef.current) {
+          return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
+        }
+        if (!shouldAcceptSeq(responseRunId, rawData.seq)) {
           return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
         }
         // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        agentFetch(AGENT_LOG_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1085,22 +968,16 @@ export function StudioChat({
           ...rawData,
           workflow: normalizedWorkflow,
         };
-        appendDebugLine(`runId: ${responseRunId}`, responseRunId);
-        updateRunMessage(responseRunId, (status) => ({ ...status, runId: responseRunId }));
 
-        const isLatest = requestId === pendingRequestIdRef.current;
-
-        if (data.workflow && onWorkflowUpdates && isLatest) {
+        if (data.workflow && onWorkflowUpdates && isLatest()) {
           stepCount = data.workflow.steps?.length ?? 0;
           if (stepCount === 0) {
-            updateRunMessage(responseRunId, (status) => ({
-              ...status,
+            upsertBuildActivityFromEvent(responseRunId, {
               phase: "error",
-              errorMessage: "No steps generated — retry",
-              retryable: true,
-              stepCount,
-              collapsed: false,
-            }));
+              rawPhase: "error",
+              isRunning: false,
+              completedAt: Date.now(),
+            });
             if (!zeroStepLogGuardRef.current.has(requestId)) {
               zeroStepLogGuardRef.current.add(requestId);
               logger.error("[STUDIO-CHAT] Workflow returned zero steps; logging raw model output", {
@@ -1108,7 +985,6 @@ export function StudioChat({
                 rawWorkflow: data.workflow,
               });
             }
-            pushDisplayLine("No steps generated — retry", responseRunId);
           } else {
             const nodes = workflowToNodes(data.workflow, new Map());
             nodeCount = nodes.length;
@@ -1121,13 +997,11 @@ export function StudioChat({
             }
             onWorkflowUpdatingChange?.(true);
             onWorkflowUpdates(data.workflow);
-            updateRunMessage(responseRunId, (status) => ({
-              ...status,
+            upsertBuildActivityFromEvent(responseRunId, {
               phase: "drawing",
-              stepCount,
-              errorMessage: null,
-              retryable: false,
-            }));
+              rawPhase: "drawing",
+              isRunning: true,
+            });
             logger.debug("[STUDIO-CHAT] Copilot chat workflow applied", {
               stepCount,
               nodeCount,
@@ -1136,11 +1010,46 @@ export function StudioChat({
           }
         }
 
-        if (data.message && isLatest && stepCount !== 0) {
-          upsertAssistantMessage(data.message, responseRunId);
+        const chatResponse = (data as any)?.chatResponse as string | undefined;
+        const messagePayload: ApiCopilotMessage | null =
+          data.message ??
+          (chatResponse
+            ? {
+                id: `${responseRunId}-reply`,
+                role: "assistant",
+                content: chatResponse,
+                createdAt: new Date().toISOString(),
+              }
+            : null);
+
+        if (messagePayload && isLatest()) {
+          // #region agent log
+          agentFetch(AGENT_LOG_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId: responseRunId,
+              hypothesisId: "H2-message-upsert",
+              location: "StudioChat.tsx:applyResultPayload",
+              message: "upserting assistant message",
+              data: {
+                id: messagePayload.id,
+                source: data.message ? "api_message" : "chat_response_fallback",
+                hasContent: Boolean(messagePayload.content),
+                contentPreview: messagePayload.content?.slice(0, 80),
+                seq: rawData.seq ?? null,
+              },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
+          upsertAssistantMessage(messagePayload, responseRunId);
         }
 
         if (data.proceedReady && data.proceedMessage) {
+          const proceedMessage = data.proceedMessage;
+          const proceedUiStyle = data.proceedUiStyle ?? "success";
           const proceedId = `${responseRunId}-proceed`;
           setMessages((prev) => {
             if (prev.some((msg) => msg.id === proceedId)) {
@@ -1149,39 +1058,27 @@ export function StudioChat({
             const proceedBubble: CopilotMessage = {
               id: proceedId,
               role: "assistant",
-              content: data.proceedMessage,
+              content: proceedMessage,
               createdAt: new Date().toISOString(),
               kind: "proceed_cta",
-              proceedMeta: { uiStyle: data.proceedUiStyle ?? "success" },
+              proceedMeta: { uiStyle: proceedUiStyle },
             };
             return [...prev, proceedBubble];
           });
         }
 
-        if (data.tasks && isLatest) {
+        if (data.tasks && isLatest()) {
           onTasksUpdate?.(data.tasks);
           logger.debug("[STUDIO-CHAT] Copilot chat tasks applied", { taskCount: data.tasks.length });
         }
 
         persistenceError = Boolean(data.persistenceError);
-        if (persistenceError) {
-          updateRunMessage(responseRunId, (status) => ({
-            ...status,
-            persistenceError: true,
-            debugDetails: {
-              automationVersionId,
-              requestId,
-              clientMessageId,
-              source,
-            },
-          }));
-        }
 
         if (typeof onProgressUpdate === "function") {
           onProgressUpdate(data.progress ?? null);
         }
 
-        if (isLatest && onRefreshAnalysis && !persistenceError && automationVersionId) {
+        if (isLatest() && onRefreshAnalysis && !persistenceError && automationVersionId) {
           const last = analysisRefreshRef.current.get(automationVersionId) ?? 0;
           if (Date.now() - last >= 10_000) {
             analysisRefreshRef.current.set(automationVersionId, Date.now());
@@ -1190,59 +1087,12 @@ export function StudioChat({
         }
 
         const finalPhase: RunPhase = stepCount === 0 ? "error" : "done";
-        updateRunMessage(responseRunId, (status) => ({
-          ...status,
+        upsertBuildActivityFromEvent(responseRunId, {
           phase: finalPhase,
-          errorMessage: finalPhase === "error" ? status.errorMessage ?? "Run failed" : null,
-          retryable: finalPhase === "error",
-          stepCount: stepCount || status.stepCount,
-          collapsed: false,
-        }));
-
-        if (!runCompletedRef.current.get(responseRunId)) {
-          const terminalLine =
-            finalPhase === "done"
-              ? "Saved. Ready for review."
-              : "Run failed. Retry?";
-          pushDisplayLine(terminalLine, responseRunId);
-          runCompletedRef.current.set(responseRunId, true);
-          updateRunMessage(responseRunId, (status) => ({
-            ...status,
-            completed: true,
-          }));
-          // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sessionId: "debug-session",
-              runId,
-              hypothesisId: "H2-terminal",
-              location: "StudioChat.tsx:applyResultPayload",
-              message: "terminal line pushed",
-              data: { responseRunId, terminalLine },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          // #endregion
-        }
-
-        if (finalPhase === "done") {
-          const timer = window.setTimeout(() => {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === runId && msg.kind === "system_run"
-                  ? {
-                      ...msg,
-                      runStatus: msg.runStatus ? { ...msg.runStatus, collapsed: true } : msg.runStatus,
-                    }
-                  : msg
-              )
-            );
-            runCollapseTimersRef.current.delete(runId);
-          }, 2000);
-          runCollapseTimersRef.current.set(runId, timer);
-        }
+          rawPhase: finalPhase,
+          isRunning: false,
+          completedAt: Date.now(),
+        });
 
         setIsAwaitingReply(false);
         logger.debug("[STUDIO-CHAT] Run complete", {
@@ -1251,7 +1101,7 @@ export function StudioChat({
           analysisSaved: !persistenceError,
         });
         receivedTerminalEvent = true;
-        if (isLatest) {
+        if (isLatest()) {
           await loadMessages({ mergeWithExisting: true, silent: true });
         }
         return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
@@ -1261,7 +1111,7 @@ export function StudioChat({
 
       const attemptStreaming = async () => {
         if (FORCE_JSON) {
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          agentFetch(AGENT_LOG_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1288,7 +1138,7 @@ export function StudioChat({
         let terminalType: string | null = null;
         let idleArmed = false;
         // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        agentFetch(AGENT_LOG_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1340,7 +1190,7 @@ export function StudioChat({
           );
 
           // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          agentFetch(AGENT_LOG_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1361,7 +1211,7 @@ export function StudioChat({
           // #endregion
 
           if (response.status === 401 || response.status === 403) {
-            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            agentFetch(AGENT_LOG_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -1374,11 +1224,14 @@ export function StudioChat({
                 timestamp: Date.now(),
               }),
             }).catch(() => {});
-            const authMessage = response.status === 401 ? "Unauthorized" : "Forbidden";
             terminalSource = "auth_error";
-            pushDisplayLine(authMessage, runId);
             runCompletedRef.current.set(runId, true);
-            updateRunMessage(runId, (status) => ({ ...status, completed: true, phase: "error", errorMessage: authMessage }));
+            upsertBuildActivityFromEvent(runId, {
+              phase: "error",
+              rawPhase: "error",
+              isRunning: false,
+              completedAt: Date.now(),
+            });
             logStreamMetrics();
             return false;
           }
@@ -1391,7 +1244,7 @@ export function StudioChat({
             } catch {
               textBody = "";
             }
-            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            agentFetch(AGENT_LOG_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -1419,7 +1272,7 @@ export function StudioChat({
         const reader = response.body.getReader();
           startMax();
           // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          agentFetch(AGENT_LOG_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1440,7 +1293,7 @@ export function StudioChat({
             const { value, done } = await reader.read();
             if (done) {
               // #region agent log
-              fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+              agentFetch(AGENT_LOG_URL, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1457,7 +1310,7 @@ export function StudioChat({
               break;
             }
             // #region agent log
-            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            agentFetch(AGENT_LOG_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -1513,7 +1366,7 @@ export function StudioChat({
                 parsedCount += 1;
                 recordSseEvent(effectiveType, { ...parsed, runId: eventRunId }, isPing);
                 // #region agent log
-                fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+                agentFetch(AGENT_LOG_URL, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -1527,6 +1380,13 @@ export function StudioChat({
                   }),
                 }).catch(() => {});
                 // #endregion
+                if (!isPing) {
+                  console.log("[SSE raw event]", {
+                    type: effectiveType,
+                    runId: eventRunId,
+                    payload: parsed,
+                  });
+                }
                 if (isPing) {
                   resetIdle();
                   continue;
@@ -1534,11 +1394,7 @@ export function StudioChat({
 
                 resetIdle();
 
-                if (effectiveType === "status") {
-                  applyStatusFromEvent({ ...parsed, runId: eventRunId });
-                } else if (effectiveType === "message") {
-                  applyMessagePayload(parsed, eventRunId);
-                } else if (effectiveType === "result") {
+                if (effectiveType === "result") {
                   terminalType = "result";
                   await applyResultPayload(parsed, eventRunId, "sse");
                   await reader.cancel();
@@ -1552,10 +1408,14 @@ export function StudioChat({
                   controller.abort();
                   clearAllTimers();
                   return true;
+                } else if (effectiveType === "message") {
+                  applyMessagePayload(parsed, eventRunId);
+                } else {
+                  applyProgressEvent(parsed, eventRunId ?? runId, effectiveType);
                 }
               } catch (parseError) {
                 // #region agent log
-                fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+                agentFetch(AGENT_LOG_URL, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -1575,7 +1435,7 @@ export function StudioChat({
           }
           clearAllTimers();
           // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          agentFetch(AGENT_LOG_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1591,13 +1451,18 @@ export function StudioChat({
           // #endregion
           return receivedTerminalEvent;
         } catch (error) {
+        const abortedByClient = controller.signal.aborted && !abortedByTimeout && !abortedByIdle;
+        if (abortedByClient) {
+          // Normal abort when starting a new run; do not fallback or warn.
+          return true;
+        }
           if (DEBUG_UI_ENABLED && (abortedByTimeout || abortedByIdle)) {
             logger.warn("[STUDIO-CHAT] SSE aborted", {
               runId,
               reason: abortedByTimeout ? "timeout" : abortedByIdle ? "idle_timeout" : "error",
             });
             // #region agent log
-            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            agentFetch(AGENT_LOG_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -1613,7 +1478,7 @@ export function StudioChat({
             // #endregion
           }
           // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          agentFetch(AGENT_LOG_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1638,30 +1503,18 @@ export function StudioChat({
       };
 
       try {
-        updateRunMessage(runId, (status) => ({
-          ...status,
+        upsertBuildActivityFromEvent(runId, {
           phase: "drafting",
-          errorMessage: null,
-          retryable: false,
-          persistenceError: false,
-          debugDetails: null,
-          collapsed: false,
-        }));
-
-        const slowTimer = window.setTimeout(() => {
-          if (runSeenServerStatusRef.current.get(runId)) return;
-          updateRunMessage(runId, (status) => {
-            if ((status.displayLines?.length ?? 0) > 0) return status;
-            return { ...status, text: "Still working…" };
-          });
-        }, 800);
-        runHeartbeatTimersRef.current.set(runId, { slow: slowTimer });
+          rawPhase: "drafting",
+          isRunning: true,
+          startedAt: Date.now(),
+        });
 
         const streamFinished = await attemptStreaming();
 
         if (!streamFinished) {
           if ((sseFirstChunkByRunIdRef.current.get(runId) ?? false) || sseTerminalReceived) {
-            fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+            agentFetch(AGENT_LOG_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -1694,7 +1547,7 @@ export function StudioChat({
 
           const rawData = await chatResponse.json();
           // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          agentFetch(AGENT_LOG_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1716,19 +1569,15 @@ export function StudioChat({
         logStreamMetrics();
         return { ok: true as const, stepCount, nodeCount, persistenceError, runId };
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to send message. Try again.";
         logger.error("[STUDIO-CHAT] Failed to process message:", error);
-        updateRunMessage(runId, (status) => ({
-          ...status,
+        upsertBuildActivityFromEvent(runId, {
           phase: "error",
-          text: "Error — retry",
-          errorMessage: message,
-          retryable: true,
-          collapsed: false,
-        }));
+          rawPhase: "error",
+          isRunning: false,
+          completedAt: Date.now(),
+        });
         return { ok: false as const };
       } finally {
-        clearHeartbeatTimers(runId);
         setIsSending(false);
         setIsAwaitingReply(false);
         onWorkflowUpdatingChange?.(false);
@@ -1746,7 +1595,6 @@ export function StudioChat({
       onTasksUpdate,
       onWorkflowUpdates,
       onWorkflowUpdatingChange,
-      runCollapseTimersRef,
       runContentRef,
       zeroStepLogGuardRef,
     ]
@@ -1766,19 +1614,6 @@ export function StudioChat({
     setAttachedFiles([]);
     await sendMessage(messageContent, "manual");
   }, [attachedFiles, input, sendMessage]);
-
-  const handleRunRetry = useCallback(
-    (runId: string) => {
-      const content = runContentRef.current.get(runId) ?? lastSentContentRef.current;
-      if (!content) return;
-      void sendMessage(content, "manual", { reuseRunId: runId });
-    },
-    [sendMessage]
-  );
-
-  const runHasError = Boolean(runProgress?.errorMessage);
-  const runIsActive = runProgress ? !runProgress.completedAt && !runProgress.errorMessage : false;
-  const runIsDone = runProgress ? !runProgress.errorMessage && Boolean(runProgress.completedAt) : false;
 
   useEffect(() => {
     if (!injectedMessage || !automationVersionId) return;
@@ -1843,12 +1678,14 @@ export function StudioChat({
           ) : (
             <>
               {renderMessages.map((msg) => {
-                if (msg.kind === "system_run") return null;
                 return (
                   <motion.div
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     key={msg.id}
+                    data-testid="copilot-message-bubble"
+                    data-id={msg.id}
+                    data-role={msg.role}
                     className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
                   >
                     {msg.role === "assistant" && (

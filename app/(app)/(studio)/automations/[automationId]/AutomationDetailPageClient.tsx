@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { formatDistanceToNow } from "date-fns";
 import { logger } from "@/lib/logger";
 import Link from "next/link";
@@ -38,7 +39,7 @@ import {
 } from "lucide-react";
 import type { Connection, Node, Edge, EdgeChange, NodeChange } from "reactflow";
 import { StudioChat, type CopilotMessage } from "@/components/automations/StudioChat";
-import { isCoreTodoKey, type CopilotAnalysisState } from "@/lib/workflows/copilot-analysis";
+import type { CopilotAnalysisState } from "@/lib/workflows/copilot-analysis";
 import type { StudioCanvasProps } from "@/components/StudioCanvas";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 import { EdgeInspector } from "@/components/automations/EdgeInspector";
@@ -77,6 +78,9 @@ import {
 } from "@/components/ui/dialog";
 import { buildKpiStats, type KpiStat, type MetricConfig, type VersionMetric } from "@/lib/metrics/kpi";
 import { createVersionWithRedirect } from "./create-version";
+import type { ReadinessSignals } from "@/lib/workflows/copilot-analysis";
+
+const READINESS_PROCEED_THRESHOLD = 85;
 
 const StudioCanvas = dynamic<StudioCanvasProps>(() => import("@/components/StudioCanvas").then((m) => m.StudioCanvas), {
   ssr: false,
@@ -261,13 +265,6 @@ const formatDateTime = (value?: string | null) => {
 
 
 type LifecycleStage = (typeof ACTIVE_LIFECYCLE_ORDER)[number];
-
-type WorkflowChecklistItem = {
-  id: string;
-  label: string;
-  sectionKey: WorkflowSectionKey | null;
-  completed: boolean;
-};
 
 const cloneWorkflow = (workflow: Workflow | null) => (workflow ? (JSON.parse(JSON.stringify(workflow)) as Workflow) : null);
 
@@ -474,17 +471,157 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
   const [proceedingToBuild, setProceedingToBuild] = useState(false);
   const [isSynthesizingWorkflow, setIsSynthesizingWorkflow] = useState(false);
   const [isOptimizingFlow, setIsOptimizingFlow] = useState(false);
-  const [buildActivity, setBuildActivity] = useState<{
+  const [canvasActivityFeed, setCanvasActivityFeed] = useState<
+    Array<{ id: string; text: string; seq: number | null; signature: string; ts: number }>
+  >([]);
+  const canvasFeedRunIdRef = useRef<string | null>(null);
+  const canvasRemovalTimeoutRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const canvasRemovalIntervalRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+  const canvasDoneAddedRef = useRef<Set<string>>(new Set());
+
+  const clearCanvasRemovalTimers = useCallback((runId: string | null) => {
+    if (!runId) return;
+    const timeout = canvasRemovalTimeoutRef.current.get(runId);
+    if (timeout) {
+      clearTimeout(timeout);
+      canvasRemovalTimeoutRef.current.delete(runId);
+    }
+    const interval = canvasRemovalIntervalRef.current.get(runId);
+    if (interval) {
+      clearInterval(interval);
+      canvasRemovalIntervalRef.current.delete(runId);
+    }
+  }, []);
+
+  const scheduleCanvasFadeOut = useCallback((runId: string) => {
+    if (canvasRemovalTimeoutRef.current.has(runId) || canvasRemovalIntervalRef.current.has(runId)) {
+      return;
+    }
+    const timeoutId = setTimeout(() => {
+      const intervalId = setInterval(() => {
+        setCanvasActivityFeed((prev) => {
+          if (!prev.length) {
+            clearInterval(intervalId);
+            canvasRemovalIntervalRef.current.delete(runId);
+            return prev;
+          }
+          const next = prev.slice(1);
+          if (next.length === 0) {
+            clearInterval(intervalId);
+            canvasRemovalIntervalRef.current.delete(runId);
+          }
+          return next;
+        });
+      }, 3000);
+      canvasRemovalIntervalRef.current.set(runId, intervalId);
+    }, 7000);
+    canvasRemovalTimeoutRef.current.set(runId, timeoutId);
+  }, []);
+  type BuildActivity = {
     runId: string;
     phase: string;
+    rawPhase?: string | null;
+    lastSeq?: number | null;
     lastLine: string | null;
-    lines: string[];
-    startedAt: number;
-    completedAt: number | null;
-    errorMessage: string | null;
     isRunning: boolean;
-  } | null>(null);
+    completedAt: number | null;
+  };
+
+  const [buildActivity, setBuildActivity] = useState<BuildActivity | null>(null);
   const [isSwitchingVersion, setIsSwitchingVersion] = useState(false);
+  const [liveReadiness, setLiveReadiness] = useState<{
+    readinessScore?: number;
+    proceedReady?: boolean;
+    proceedReason?: string | null;
+    proceedBasicsMet?: boolean;
+    proceedThresholdMet?: boolean;
+    signals?: ReadinessSignals;
+  } | null>(null);
+  const handleBuildActivityUpdate = useCallback(
+    (activity: BuildActivity | null) => {
+      console.log("[BuildActivity -> Canvas prop]", activity);
+      // Clone to force a new reference so React always re-renders on updates
+      setBuildActivity(activity ? { ...activity } : null);
+      setCanvasActivityFeed((prev) => {
+        const nextRunId = activity?.runId ?? null;
+        if (!nextRunId) return prev;
+
+        const lineText = (activity?.lastLine ?? "").trim();
+        const hasText = lineText.length > 0;
+
+        const nextSeq = activity?.lastSeq ?? null;
+        const signature =
+          nextSeq !== null && nextSeq !== undefined
+            ? `${nextRunId}|seq:${nextSeq}`
+            : `${nextRunId}|msg:${lineText}`;
+
+        let base = prev;
+        const runChanged = canvasFeedRunIdRef.current && canvasFeedRunIdRef.current !== nextRunId;
+        if (runChanged) {
+          base = [];
+          // clear timers for previous run
+          clearCanvasRemovalTimers(canvasFeedRunIdRef.current);
+          canvasDoneAddedRef.current.delete(canvasFeedRunIdRef.current!);
+        }
+        canvasFeedRunIdRef.current = nextRunId;
+
+        if (!hasText) return base;
+        if (base.some((item) => item.signature === signature)) return base;
+
+        const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const appended = [
+          ...base,
+          { id, text: lineText, seq: nextSeq, signature, ts: Date.now() },
+        ];
+        console.log("[Canvas feed @ parent] append", {
+          runId: nextRunId,
+          signature,
+          seq: nextSeq,
+          text: lineText,
+          entries: appended.map((e) => ({ signature: e.signature, seq: e.seq, text: e.text })),
+        });
+        return appended;
+      });
+
+      const runId = activity?.runId ?? null;
+      const phase = (activity?.phase ?? "").toLowerCase();
+      const isDonePhase = phase === "done";
+
+      if (runId && isDonePhase && !canvasDoneAddedRef.current.has(runId)) {
+        const doneSignature = `${runId}|done`;
+        setCanvasActivityFeed((prev) => {
+          // avoid duplicate done
+          if (prev.some((item) => item.signature === doneSignature)) return prev;
+          const next = [
+            ...prev,
+            { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, text: "Done!", seq: null, signature: doneSignature, ts: Date.now() },
+          ];
+          canvasDoneAddedRef.current.add(runId);
+          console.log("[Canvas feed @ parent] append done", {
+            runId,
+            signature: doneSignature,
+            entries: next.map((e) => ({ signature: e.signature, seq: e.seq, text: e.text })),
+          });
+          return next;
+        });
+        scheduleCanvasFadeOut(runId);
+      }
+    },
+    [clearCanvasRemovalTimers, scheduleCanvasFadeOut]
+  );
+  const handleReadinessUpdate = useCallback(
+    (payload: {
+      readinessScore?: number;
+      proceedReady?: boolean;
+      proceedReason?: string | null;
+      proceedBasicsMet?: boolean;
+      proceedThresholdMet?: boolean;
+      signals?: ReadinessSignals;
+    }) => {
+      setLiveReadiness((prev) => ({ ...(prev ?? {}), ...payload }));
+    },
+    []
+  );
   const completionRef = useRef<ReturnType<typeof getWorkflowCompletionState> | null>(null);
   const preserveSelectionRef = useRef(false);
   const synthesisTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1642,81 +1779,99 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     }
   }, [selectedEdgeId, flowEdges]);
   const workflowIsEmpty = useMemo(() => isWorkflowEffectivelyEmpty(workflow), [workflow]);
-  // Simple checkmark-based checklist - only show the 4 required items
-  const REQUIRED_CHECKLIST_ITEMS = [
-    { id: "business_requirements", label: "Business Requirements", sectionKey: "business_requirements" as WorkflowSectionKey },
-    { id: "business_objectives", label: "Business Objectives", sectionKey: "business_objectives" as WorkflowSectionKey },
-    { id: "success_criteria", label: "Success Criteria", sectionKey: "success_criteria" as WorkflowSectionKey },
-    { id: "systems", label: "Systems", sectionKey: "systems" as WorkflowSectionKey },
-  ] as const;
-
-  const gateResolvedMap = useMemo(() => {
-    const todos =
-      copilotAnalysis?.todos?.filter((todo) => {
-        const key = (todo.key ?? todo.id) as string | undefined;
-        return key ? isCoreTodoKey(key) : false;
-      }) ?? [];
-    const checklist = copilotAnalysis?.memory?.checklist ?? {};
-    const sections = workflow?.sections ?? [];
-
-    const isResolved = (key: string) => {
-      const todo = todos.find((t) => (t.key ?? t.id) === key);
-      const checklistItem = (checklist as any)?.[key];
-      const sectionContent = sections.some((s) => s.key === key && s.content?.trim());
-      return (todo?.status === "resolved") || checklistItem?.confirmed === true || sectionContent;
-    };
-
-    return REQUIRED_CHECKLIST_ITEMS.reduce<Record<string, boolean>>((acc, item) => {
-      acc[item.id] = isResolved(item.id);
-      return acc;
-    }, {});
-  }, [copilotAnalysis, workflow]);
-
-  const [gateCompleted, setGateCompleted] = useState<Record<string, boolean>>({
-    business_requirements: false,
-    business_objectives: false,
-    success_criteria: false,
-    systems: false,
-  });
-
+  const [readinessFloor, setReadinessFloor] = useState(0);
   useEffect(() => {
-    setGateCompleted((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      Object.entries(gateResolvedMap).forEach(([key, resolved]) => {
-        if (resolved && !prev[key]) {
-          next[key] = true;
-          changed = true;
-        }
-      });
-      return changed ? next : prev;
-    });
-  }, [gateResolvedMap]);
+    setReadinessFloor(0);
+  }, [selectedVersion?.id]);
+  useEffect(() => {
+    const score =
+      copilotAnalysis?.readiness?.score ??
+      copilotAnalysis?.memory?.facts?.readiness_floor ??
+      copilotAnalysis?.facts?.readiness_floor ??
+      0;
+    setReadinessFloor((prev) => Math.max(prev, Math.round(score ?? 0)));
+  }, [copilotAnalysis?.readiness?.score, copilotAnalysis?.memory?.facts?.readiness_floor, copilotAnalysis?.facts?.readiness_floor]);
+  const triggerPresent = useMemo(() => {
+    const facts = copilotAnalysis?.facts ?? copilotAnalysis?.memory?.facts ?? {};
+    const sections = workflow?.sections ?? [];
+    const steps = workflow?.steps ?? [];
+    return (
+      Boolean(facts.trigger_cadence || facts.trigger_time) ||
+      steps.some((step) => step.type === "Trigger") ||
+      sections.some(
+        (section) =>
+          section.key === "business_requirements" &&
+          /(\b\d+(?:am|pm)\b|daily|weekly|monthly|every)/i.test(section.content ?? "")
+      )
+    );
+  }, [copilotAnalysis?.facts, copilotAnalysis?.memory?.facts, workflow]);
 
-  const checklistItems = useMemo<WorkflowChecklistItem[]>(() => {
-    return REQUIRED_CHECKLIST_ITEMS.map((item) => ({
-      id: item.id,
-      label: item.label,
-      sectionKey: item.sectionKey,
-      completed: gateCompleted[item.id] ?? false,
-    }));
-  }, [gateCompleted]);
+  const destinationPresent = useMemo(() => {
+    const facts = copilotAnalysis?.facts ?? copilotAnalysis?.memory?.facts ?? {};
+    const sections = workflow?.sections ?? [];
+    return (
+      Boolean(facts.storage_destination) ||
+      Boolean(facts.systems && facts.systems.length > 0) ||
+      sections.some((section) => section.key === "systems" && Boolean(section.content?.trim()))
+    );
+  }, [copilotAnalysis?.facts, copilotAnalysis?.memory?.facts, workflow]);
 
-  // Check if all 4 required items are completed
-  const requiredItemsComplete = useMemo(() => {
-    return checklistItems.every((item) => item.completed);
-  }, [checklistItems]);
+  const readinessScoreLive = liveReadiness?.readinessScore ?? null;
+  const readinessPersisted =
+    copilotAnalysis?.readiness?.score ??
+    copilotAnalysis?.memory?.facts?.readiness_floor ??
+    copilotAnalysis?.facts?.readiness_floor ??
+    0;
+  const readinessScore = Math.max(
+    readinessScoreLive ?? 0,
+    readinessFloor,
+    Math.round(readinessPersisted ?? 0)
+  );
+  const readinessPercent = Math.max(0, Math.min(100, Math.round(readinessScore)));
 
-  const readyForBuild = requiredItemsComplete;
+  const readinessHint = (score: number, signals?: ReadinessSignals) => {
+    if (signals) {
+      if (!signals.goal) return "Understanding the goal.";
+      if (!signals.output) return "Understanding what data to capture.";
+      if (!signals.trigger) return "Understanding how often it should run.";
+      if (!signals.destination) return "Understanding where results should go.";
+      if (!signals.scope) return "Defining what done looks like.";
+      return "Ready to build.";
+    }
+    if (score >= 85) return "Ready to build.";
+    if (score >= 70) return "Almost ready to build.";
+    if (score >= 50) return "Understanding schedule and outputs.";
+    if (score >= 30) return "Understanding key inputs and data source.";
+    if (score >= 10) return "Understanding the goal.";
+    return "Starting to understand your workflow.";
+  };
+
+  const proceedBasicsMet = liveReadiness?.proceedBasicsMet ?? (triggerPresent && destinationPresent);
+  const proceedThresholdMet = liveReadiness?.proceedThresholdMet ?? readinessPercent >= READINESS_PROCEED_THRESHOLD;
+  const proceedReady = typeof liveReadiness?.proceedReady === "boolean"
+    ? liveReadiness.proceedReady
+    : proceedBasicsMet && proceedThresholdMet;
+  const readinessHintText = readinessHint(readinessPercent, liveReadiness?.signals);
   const alreadyInBuild = isAtOrBeyondBuild(selectedVersion?.status ?? null, "BuildInProgress");
-  const proceedDisabledReason = !readyForBuild
-    ? "Complete Business Requirements, Business Objectives, Success Criteria, and Systems to proceed."
+  const proceedDisabledReason = !proceedReady
+    ? !proceedBasicsMet
+      ? "Add when and where this should run and deliver results."
+      : !proceedThresholdMet
+      ? `Build unlocks at ${READINESS_PROCEED_THRESHOLD}% readiness.`
+      : liveReadiness?.proceedReason ?? "Provide a bit more detail to proceed."
     : alreadyInBuild
     ? "This version is already in a build phase."
     : !selectedVersion?.id
     ? "Select an automation version first."
     : null;
   const proceedButtonDisabled = Boolean(proceedDisabledReason) || proceedingToBuild;
+  const buildStatusText = useMemo(() => {
+    if (!buildActivity) return null;
+    if (buildActivity.errorMessage) return buildActivity.errorMessage;
+    if (buildActivity.lastLine) return buildActivity.lastLine;
+    if (buildActivity.phase) return buildActivity.phase;
+    return null;
+  }, [buildActivity]);
 
   const handleProceedToBuild = useCallback(async () => {
     if (!selectedVersion?.id || proceedButtonDisabled || alreadyInBuild) {
@@ -1992,136 +2147,94 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
     </div>
   ) : (
     <div className="flex flex-col h-full w-full relative bg-gray-50 min-h-0">
-      <div className="border-b border-gray-100 bg-white px-6 py-3 z-20 relative">
-        <div className="flex items-center gap-6 min-w-max overflow-x-auto no-scrollbar">
-          {checklistItems.map((item) => {
-            const checked = item.completed;
-            return (
-              <motion.div
-                key={item.id}
-                layout
-                role="checkbox"
-                aria-checked={checked}
-                aria-label={`${item.label} ${checked ? "complete" : "incomplete"}`}
-                tabIndex={0}
-                className={cn(
-                  "flex items-center gap-2 rounded-full px-3 py-1.5 border text-xs font-semibold transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-300",
-                  checked
-                    ? "border-emerald-200 bg-emerald-50 shadow-[0_4px_12px_rgba(16,185,129,0.15)]"
-                    : "border-gray-200 bg-white/40"
-                )}
-                animate={checked ? { scale: 1, opacity: 1 } : { scale: 1, opacity: 1 }}
-                transition={{ type: "spring", stiffness: 360, damping: 24 }}
-              >
-                <div className="relative h-5 w-5">
-                  <AnimatePresence initial={false} mode="wait">
-                    {checked ? (
-                      <motion.div
-                        key="checked"
-                        initial={{ scale: 0.8, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0.8, opacity: 0 }}
-                        transition={{ type: "spring", stiffness: 520, damping: 30 }}
-                        className="absolute inset-0 flex items-center justify-center rounded-full bg-emerald-100 text-emerald-600"
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-                      </motion.div>
-                    ) : (
-                      <motion.div
-                        key="unchecked"
-                        initial={{ scale: 1, opacity: 1 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0.9, opacity: 0 }}
-                        transition={{ duration: 0.18 }}
-                        className="absolute inset-0 rounded-full border-2 border-gray-300"
-                        aria-hidden
-                      />
+      <div className="border-b border-gray-100 bg-white px-6 py-4 z-20 relative">
+        <div className="flex items-center gap-4">
+          <div className="flex flex-col flex-1 min-w-0 gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-gray-700">Build readiness</span>
+                <span className="text-xs font-semibold text-gray-900">{readinessPercent}%</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {proceedButtonDisabled && !alreadyInBuild && !proceedingToBuild ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div>
+                        <Button
+                          size="sm"
+                          onClick={handleProceedToBuild}
+                          disabled={proceedButtonDisabled}
+                          className={cn(
+                            "gap-2 rounded-full px-4 py-1 text-xs font-semibold",
+                            alreadyInBuild
+                              ? "bg-gray-200 text-gray-600"
+                              : proceedButtonDisabled
+                              ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                              : "bg-gray-900 text-white hover:bg-gray-800"
+                          )}
+                        >
+                          {proceedingToBuild ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Updating…
+                            </>
+                          ) : alreadyInBuild ? (
+                            "Build in progress"
+                          ) : (
+                            <>
+                              Proceed to Build
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent
+                      side="bottom"
+                      sideOffset={4}
+                      className="text-xs bg-gray-900 text-white border border-gray-700 shadow-lg [&>svg]:fill-gray-900 [&>svg]:stroke-gray-700 [&>svg]:w-4 [&>svg]:h-4"
+                    >
+                      {proceedDisabledReason || "We need a little bit more information before we have enough information to build this automation."}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={handleProceedToBuild}
+                    disabled={proceedButtonDisabled}
+                    className={cn(
+                      "gap-2 rounded-full px-4 py-1 text-xs font-semibold",
+                      alreadyInBuild
+                        ? "bg-gray-200 text-gray-600"
+                        : proceedButtonDisabled
+                        ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                        : "bg-gray-900 text-white hover:bg-gray-800"
                     )}
-                  </AnimatePresence>
-                </div>
-                <motion.span
-                  className="text-xs font-semibold"
-                  animate={{ color: checked ? "#0A0A0A" : "#6B7280" }}
-                  transition={{ duration: 0.18 }}
-                >
-                  {item.label}
-                </motion.span>
-              </motion.div>
-            );
-          })}
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex flex-col gap-1">
-              {proceedButtonDisabled && !alreadyInBuild && !proceedingToBuild ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div>
-                      <Button
-                        size="sm"
-                        onClick={handleProceedToBuild}
-                        disabled={proceedButtonDisabled}
-                        className={cn(
-                          "ml-2 gap-2 rounded-full px-4 py-1 text-xs font-semibold",
-                          alreadyInBuild
-                            ? "bg-gray-200 text-gray-600"
-                            : proceedButtonDisabled
-                            ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                            : "bg-gray-900 text-white hover:bg-gray-800"
-                        )}
-                      >
-                        {proceedingToBuild ? (
-                          <>
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            Updating…
-                          </>
-                        ) : alreadyInBuild ? (
-                          "Build in progress"
-                        ) : (
-                          <>
-                            Proceed to Build
-                            <ArrowRight className="w-3.5 h-3.5" />
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent 
-                    side="bottom" 
-                    sideOffset={4}
-                    className="text-xs bg-gray-900 text-white border border-gray-700 shadow-lg [&>svg]:fill-gray-900 [&>svg]:stroke-gray-700 [&>svg]:w-4 [&>svg]:h-4"
                   >
-                    {proceedDisabledReason || "We need a little bit more information before we have enough information to build this automation."}
-                  </TooltipContent>
-                </Tooltip>
-              ) : (
-                <Button
-                  size="sm"
-                  onClick={handleProceedToBuild}
-                  disabled={proceedButtonDisabled}
-                  className={cn(
-                    "ml-2 gap-2 rounded-full px-4 py-1 text-xs font-semibold",
-                    alreadyInBuild
-                      ? "bg-gray-200 text-gray-600"
-                      : proceedButtonDisabled
-                      ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                      : "bg-gray-900 text-white hover:bg-gray-800"
-                  )}
-                >
-                  {proceedingToBuild ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      Updating…
-                    </>
-                  ) : alreadyInBuild ? (
-                    "Build in progress"
-                  ) : (
-                    <>
-                      Proceed to Build
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </>
-                  )}
-                </Button>
-              )}
+                    {proceedingToBuild ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Updating…
+                      </>
+                    ) : alreadyInBuild ? (
+                      "Build in progress"
+                    ) : (
+                      <>
+                        Proceed to Build
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </>
+                    )}
+                  </Button>
+                )}
+              </div>
             </div>
+            <div className="w-full h-3 rounded-full bg-gray-100 border border-gray-200 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-amber-400 via-yellow-500 to-emerald-500 transition-all duration-300"
+                style={{ width: `${Math.max(4, Math.min(100, readinessPercent))}%` }}
+              />
+            </div>
+            <div className="text-[11px] text-gray-600">{readinessHintText}</div>
           </div>
         </div>
       </div>
@@ -2145,11 +2258,12 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
             analysisLoading={copilotAnalysisLoading}
             analysisUnavailable={copilotAnalysisError}
             onRefreshAnalysis={() => refreshAnalysis(selectedVersion?.id ?? null)}
-            onBuildActivityUpdate={setBuildActivity}
+            onBuildActivityUpdate={handleBuildActivityUpdate}
             onProceedToBuild={handleProceedToBuild}
             proceedToBuildDisabled={proceedButtonDisabled}
             proceedToBuildReason={proceedDisabledReason}
             proceedingToBuild={proceedingToBuild}
+            onReadinessUpdate={handleReadinessUpdate}
           />
         </div>
 
@@ -2260,6 +2374,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 </div>
               ) : null}
               <StudioCanvas
+                key={
+                  buildActivity
+                    ? `${buildActivity.runId}-${buildActivity.lastSeq ?? "none"}`
+                    : "canvas-idle"
+                }
                 nodes={flowNodes}
                 edges={flowEdges}
                 onNodesChange={handleNodesChange}
@@ -2270,6 +2389,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 onEdgeClick={handleEdgeClick}
                 isSynthesizing={isSynthesizingWorkflow}
                 buildActivity={buildActivity}
+                activityFeed={canvasActivityFeed}
                 emptyState={
                   canvasState === "empty"
                     ? (
@@ -2285,16 +2405,11 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 }
               />
 
-              {showStepHelper && !workflowIsEmpty && (
-                <div className="absolute bottom-4 right-4 bg-gray-900/90 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none">
-                  Click on any step to configure or refine.
-                </div>
-              )}
             </div>
           )}
         </div>
 
-        {canvasViewMode === "flowchart" ? (
+        {canvasViewMode === "flowchart" && (selectedEdge || selectedStep) ? (
           <div
             className={cn(
               "shrink-0 z-20 bg-white transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)] border-l border-gray-200 shadow-xl overflow-y-auto min-h-0",
@@ -2323,17 +2438,7 @@ export default function AutomationDetailPage({ params }: AutomationDetailPagePro
                 automationVersionId={selectedVersion?.id ?? null}
                 displayId={selectedStepDisplayId}
               />
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center bg-white p-8 text-center">
-                <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mb-4 border border-gray-100">
-                  <GitBranch className="text-gray-400" size={20} />
-                </div>
-                <h3 className="text-[#0A0A0A] font-bold mb-2">Select something to inspect</h3>
-                <p className="text-sm text-gray-500 max-w-[220px] mx-auto">
-                  Click a step to edit details or a connection to adjust its condition.
-                </p>
-              </div>
-            )}
+            ) : null}
           </div>
         ) : null}
 

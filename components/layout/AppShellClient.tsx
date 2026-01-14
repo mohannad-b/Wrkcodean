@@ -39,6 +39,142 @@ export function AppShellClient({ children, initialProfile, initialLastUpdatedAt 
     }
   }, [sidebarCollapsed]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const vendorLink = document.querySelector('link[href*="vendor.css"]') as HTMLLinkElement | null;
+
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "baseline",
+        hypothesisId: "H1",
+        location: "components/layout/AppShellClient.tsx:vendor-css",
+        message: "vendor.css link discovery",
+        data: {
+          href: vendorLink?.href ?? null,
+          tag: vendorLink?.tagName ?? null,
+          rel: vendorLink && "rel" in vendorLink ? (vendorLink as HTMLLinkElement).rel : null,
+          as: vendorLink && "as" in vendorLink ? (vendorLink as HTMLLinkElement).as : null,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+
+    if (!vendorLink?.href) {
+      return;
+    }
+
+    const inspectVendorCss = async () => {
+      try {
+        const response = await fetch(vendorLink.href);
+        const contentType = response.headers.get("content-type");
+        const text = await response.text();
+
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: "baseline",
+            hypothesisId: "H2",
+            location: "components/layout/AppShellClient.tsx:vendor-css",
+            message: "vendor.css response snapshot",
+            data: {
+              status: response.status,
+              contentType,
+              length: text.length,
+              prefix: text.slice(0, 120),
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+      } catch (error) {
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: "baseline",
+            hypothesisId: "H3",
+            location: "components/layout/AppShellClient.tsx:vendor-css",
+            message: "vendor.css fetch failed",
+            data: { error: error instanceof Error ? error.message : String(error) },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+      }
+    };
+
+    void inspectVendorCss();
+
+    const vendorScripts = Array.from(document.querySelectorAll('script[src*="vendor.css"]')) as HTMLScriptElement[];
+    const allScripts = Array.from(document.querySelectorAll("script[src]")) as HTMLScriptElement[];
+    const sampleScripts = allScripts.slice(0, 5).map((s) => s.src);
+
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "baseline",
+        hypothesisId: "H4",
+        location: "components/layout/AppShellClient.tsx:scripts-scan",
+        message: "script tags scan",
+        data: {
+          vendorScriptCount: vendorScripts.length,
+          vendorScriptSrc: vendorScripts.map((s) => s.src),
+          sampleScriptSrc: sampleScripts,
+          totalScripts: allScripts.length,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+
+    if (vendorScripts[0]) {
+      const s = vendorScripts[0];
+      const attrs: Record<string, unknown> = {
+        async: s.async,
+        defer: s.defer,
+        type: s.type || null,
+        noModule: s.noModule,
+        crossOrigin: s.crossOrigin || null,
+        nonce: s.nonce || null,
+        dataset: { ...s.dataset },
+        parent: s.parentElement?.tagName ?? null,
+        outer: s.outerHTML.slice(0, 200),
+      };
+
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "debug-session",
+          runId: "baseline",
+          hypothesisId: "H5",
+          location: "components/layout/AppShellClient.tsx:script-attrs",
+          message: "vendor.css script attributes",
+          data: attrs,
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
+    }
+  }, []);
+
   return (
     <UserProfileProvider initialProfile={initialProfile} initialLastUpdatedAt={initialLastUpdatedAt}>
       <div className="h-screen bg-[#F5F5F5] font-sans text-[#1A1A1A] flex overflow-hidden">

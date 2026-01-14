@@ -71,13 +71,13 @@ export class ProgressPlanner {
     if (provided && provided.trim().length > 0) return this.clamp(provided.trim());
 
     const PHASE_COPY: Record<ProgressPhase, string> = {
-      connected: "Connecting…",
-      understanding: "Figuring out inputs and constraints…",
-      drafting: "Drafting steps + branches…",
-      structuring: "Renumbering + validating…",
-      drawing: "Updating diagram…",
-      saving: "Saving…",
-      done: "Run complete",
+      connected: "Working on your workflow…",
+      understanding: "Reviewing your request",
+      drafting: "Drafting workflow steps and branches",
+      structuring: "Renumbering steps and updating the graph",
+      drawing: "Updating the diagram",
+      saving: "Saving workflow changes",
+      done: "Saved. Ready for review.",
       error: "Run failed. Retry?",
     };
     const base = PHASE_COPY[phase] ?? "Working…";

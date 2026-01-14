@@ -1,4 +1,4 @@
-import { BLUEPRINT_SECTION_KEYS, type BlueprintProgressKey, type BlueprintSectionKey } from "./types";
+import { BLUEPRINT_SECTION_KEYS, type BlueprintProgressKey, type BlueprintSectionKey, type Workflow } from "./types";
 import type { RequirementsState } from "@/lib/requirements/state";
 import type { SuggestedNextStep } from "@/lib/requirements/planner";
 
@@ -62,6 +62,7 @@ export interface CopilotReadiness {
   stateItemsSatisfied: string[];
   stateItemsMissing: string[];
   blockingTodos: string[];
+  evidence?: ReadinessEvidence;
 }
 
 export type CopilotAssumptionStatus = "assumed" | "confirmed" | "rejected";
@@ -104,10 +105,22 @@ export type CopilotMemoryFacts = {
   exception_policy?: string | null;
   human_review?: string | null;
   success_criteria?: string | null;
+  success_criteria_evidence?: {
+    messageId?: string | null;
+    snippet?: string | null;
+    source?: string | null;
+  } | null;
+  output_fields?: string[] | null;
+  output_shape?: string | null;
+  scope_hint?: string | null;
+  goal_summary?: string | null;
   samples?: string | null;
   proceed_ready?: boolean;
   proceed_reason?: string | null;
   proceed_ready_workflow_updated_at?: string | null;
+  readiness_floor?: number | null;
+  readiness_last_updated_at?: string | null;
+  readiness_workflow_updated_at?: string | null;
 };
 
 export interface CopilotChecklistItem {
@@ -190,6 +203,14 @@ export function cloneCopilotAnalysisState(state: CopilotAnalysisState): CopilotA
       stateItemsSatisfied: [...state.readiness.stateItemsSatisfied],
       stateItemsMissing: [...state.readiness.stateItemsMissing],
       blockingTodos: [...state.readiness.blockingTodos],
+      evidence: state.readiness.evidence
+        ? {
+            ...state.readiness.evidence,
+            outputFields: state.readiness.evidence.outputFields
+              ? [...state.readiness.evidence.outputFields]
+              : undefined,
+          }
+        : undefined,
     },
     memory: state.memory
       ? {
@@ -365,18 +386,218 @@ export function ensureCoreTodos(existing: CopilotTodoItem[]): CopilotTodoItem[] 
   return Array.from(byKey.values());
 }
 
-export function computeReadinessFromTodos(todos: CopilotTodoItem[]): CopilotReadiness {
+export type ReadinessSignals = {
+  goal: boolean;
+  trigger: boolean;
+  destination: boolean;
+  output: boolean;
+  scope: boolean;
+};
+
+export type ReadinessEvidence = {
+  goalSummary?: string | null;
+  triggerDetail?: string | null;
+  destinationDetail?: string | null;
+  outputFields?: string[];
+  scopeHint?: string | null;
+  cadence?: string | null;
+  timeOfDay?: string | null;
+};
+
+type ReadinessContext = {
+  facts?: CopilotMemoryFacts;
+  workflow?: Workflow | null;
+  sections?: Workflow["sections"];
+  latestUserMessage?: string | null;
+  previousScore?: number | null;
+  signals?: Partial<ReadinessSignals>;
+  evidence?: Partial<ReadinessEvidence>;
+  workflowUpdatedAt?: string | null;
+  readinessWorkflowUpdatedAt?: string | null;
+};
+
+function normalizeList(items: string[] | null | undefined, limit = 6): string[] {
+  if (!items) return [];
+  return items
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function findOutputFields(text: string): string[] {
+  if (!text) return [];
+  const lower = text.toLowerCase();
+  const keywordMatch = text.match(
+    /\b(include|with|fields|columns|capture|return|output|track|report|list)\s+([a-z0-9 ,\/\-&_]+?)(?=[\.\n]|$)/i
+  );
+  if (keywordMatch?.[2]) {
+    return keywordMatch[2]
+      .split(/,| and /i)
+      .map((part) => part.replace(/[^a-z0-9\s\-\/&]+/gi, "").trim())
+      .filter((part) => part.length > 1 && part.length <= 40)
+      .slice(0, 6);
+  }
+
+  const listMatch = text.match(/([a-z0-9][a-z0-9\s\-\/&]{2,40}(?:\s*,\s*[a-z0-9][a-z0-9\s\-\/&]{1,40})+)/i);
+  if (listMatch?.[1]) {
+    return listMatch[1]
+      .split(",")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 1 && part.length <= 40)
+      .slice(0, 6);
+  }
+
+  if (/\bpdf report|summary|dashboard|export|sheet\b/i.test(lower)) {
+    return ["summary", "report"];
+  }
+  return [];
+}
+
+function findScopeHint(text: string): string | null {
+  if (!text) return null;
+  const compact = text.trim().slice(0, 240);
+  const prepositionMatch = compact.match(/\b(?:for|in|across|between)\s+([^.,;\n]{3,80})/i);
+  if (prepositionMatch?.[1]) {
+    return prepositionMatch[1].trim();
+  }
+  const andListMatch = compact.match(/\b([a-z]{2,}(?:\s[a-z]{2,})?)\s+and\s+([a-z]{2,}(?:\s[a-z]{2,})?)\b/i);
+  if (andListMatch) {
+    return `${andListMatch[1].trim()} and ${andListMatch[2].trim()}`;
+  }
+  const dateRange = compact.match(/\b\d{4}\b(?:\s*(?:to|through|-|–)\s*\d{4}\b)?/);
+  if (dateRange?.[0]) {
+    return dateRange[0];
+  }
+  return null;
+}
+
+export function deriveReadinessSignals(context: ReadinessContext): { signals: ReadinessSignals; evidence: ReadinessEvidence } {
+  const facts = context.facts ?? {};
+  const workflow = context.workflow ?? null;
+  const sections = context.sections ?? workflow?.sections ?? [];
+  const latestUserMessage = context.latestUserMessage ?? "";
+  const textSources = [
+    latestUserMessage,
+    workflow?.summary ?? "",
+    ...(sections?.map((section) => section.content ?? "") ?? []),
+    facts.primary_outcome ?? "",
+    facts.success_criteria ?? "",
+  ].filter(Boolean);
+  const combined = textSources.join("\n").toLowerCase();
+
+  const outputsFromFacts = normalizeList(facts.output_fields ?? []);
+  const outputsFromText = textSources.flatMap((text) => findOutputFields(text));
+  const outputFields = normalizeList([...outputsFromFacts, ...outputsFromText]);
+
+  const scopeFromFacts = facts.scope_hint ?? null;
+  const scopeFromText = textSources.map((text) => findScopeHint(text)).find(Boolean) ?? null;
+  const scopeHint = scopeFromFacts ?? scopeFromText ?? null;
+
+  const goalSummary =
+    facts.goal_summary ??
+    workflow?.summary ??
+    (facts.primary_outcome ? facts.primary_outcome : latestUserMessage ? latestUserMessage.slice(0, 160) : null);
+
+  const triggerDetail =
+    facts.trigger_cadence ||
+    facts.trigger_time ||
+    (workflow?.steps ?? []).find((step) => step.type === "Trigger")?.timingSla ||
+    (combined.match(/\b(daily|weekly|monthly|hourly|every day|every week|every month)\b/i)?.[1] ?? null) ||
+    null;
+  const timeOfDay = facts.trigger_time ?? combined.match(/\b(\d{1,2})(:?(\d{2}))?\s?(am|pm)\b/i)?.[0] ?? null;
+
+  const destinationDetail =
+    facts.storage_destination ||
+    normalizeList(facts.systems ?? [])[0] ||
+    (sections ?? []).find((section) => section.key === "systems")?.content?.trim() ||
+    (combined.match(/\b(google sheets?|sheet|spreadsheet|csv|notion|airtable|database|db|s3|bucket)\b/i)?.[1] ??
+      null);
+
+  const signals: ReadinessSignals = {
+    goal:
+      Boolean(goalSummary && goalSummary.trim().length > 6) ||
+      Boolean((context.signals?.goal ?? false)) ||
+      Boolean(combined.match(/\bautomate|workflow|process|goal\b/)),
+    trigger: Boolean(context.signals?.trigger ?? Boolean(triggerDetail || timeOfDay)),
+    destination: Boolean(context.signals?.destination ?? Boolean(destinationDetail)),
+    output: Boolean(
+      context.signals?.output ?? (outputFields.length > 0 || /report|export|dataset|payload/i.test(combined))
+    ),
+    scope: Boolean(context.signals?.scope ?? Boolean(scopeHint)),
+  };
+
+  return {
+    signals,
+    evidence: {
+      goalSummary,
+      triggerDetail,
+      destinationDetail,
+      outputFields,
+      scopeHint,
+      cadence: triggerDetail ?? facts.trigger_cadence ?? null,
+      timeOfDay,
+      ...context.evidence,
+    },
+  };
+}
+
+export function computeReadinessFromTodos(todos: CopilotTodoItem[], context: ReadinessContext = {}): CopilotReadiness {
   const ensured = ensureCoreTodos(todos ?? []);
-  const missing = ensured.filter((todo) => isCoreTodoKey(todo.key ?? todo.id) && todo.status !== "resolved");
-  const satisfied = ensured.filter((todo) => isCoreTodoKey(todo.key ?? todo.id) && todo.status === "resolved");
-  const totalCore = CORE_TODO_KEYS.length;
-  const score = totalCore === 0 ? 100 : Math.round((satisfied.length / totalCore) * 100);
+  const { signals, evidence } = deriveReadinessSignals(context);
+  const weights = { goal: 25, trigger: 20, destination: 20, output: 20, scope: 15 };
+  const satisfied: string[] = [];
+  const missing: string[] = [];
+  const workflowUpdatedAt = context.workflowUpdatedAt ?? null;
+  const readinessWorkflowUpdatedAt =
+    context.readinessWorkflowUpdatedAt ?? context.facts?.readiness_workflow_updated_at ?? null;
+  const stickyAllowed =
+    !workflowUpdatedAt || !readinessWorkflowUpdatedAt || readinessWorkflowUpdatedAt === workflowUpdatedAt;
+
+  const addState = (key: keyof ReadinessSignals, label: string) => {
+    if (signals[key]) {
+      satisfied.push(label);
+    } else {
+      missing.push(label);
+    }
+  };
+
+  addState("goal", "goal_clarity");
+  addState("trigger", "trigger");
+  addState("destination", "destination");
+  addState("output", "output_shape");
+  addState("scope", "scope");
+
+  const coreResolved = ensured.filter((todo) => isCoreTodoKey(todo.key ?? todo.id) && todo.status === "resolved");
+  const readinessFloor = Math.max(
+    stickyAllowed ? context.previousScore ?? 0 : 0,
+    stickyAllowed ? context.facts?.readiness_floor ?? 0 : 0,
+    coreResolved.length >= CORE_TODO_KEYS.length ? 85 : 0
+  );
+
+  let score =
+    (signals.goal ? weights.goal : 0) +
+    (signals.trigger ? weights.trigger : 0) +
+    (signals.destination ? weights.destination : 0) +
+    (signals.output ? weights.output : 0) +
+    (signals.scope ? weights.scope : 0);
+
+  // Allow a small boost if we have explicit evidence for outputs and scope together.
+  if (signals.output && signals.scope && score < 90) {
+    score += 5;
+  }
+
+  score = Math.round(Math.min(100, Math.max(score, readinessFloor)));
+
+  const blockingTodos = [];
+  if (!signals.trigger) blockingTodos.push("trigger");
+  if (!signals.destination) blockingTodos.push("destination");
 
   return {
     score,
-    stateItemsSatisfied: satisfied.map((todo) => todo.key ?? todo.id),
-    stateItemsMissing: missing.map((todo) => todo.key ?? todo.id),
-    blockingTodos: missing.map((todo) => todo.id),
+    stateItemsSatisfied: satisfied,
+    stateItemsMissing: missing,
+    blockingTodos,
+    ...(evidence ? { evidence } : {}),
   };
 }
 

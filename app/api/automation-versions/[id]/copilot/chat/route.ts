@@ -36,7 +36,6 @@ import { withLegacyWorkflowAlias } from "@/lib/workflows/legacy";
 import {
   createEmptyCopilotAnalysisState,
   createEmptyMemory,
-  computeReadinessFromTodos,
   CORE_TODO_DEFINITIONS,
   CORE_TODO_KEYS,
   type CopilotAnalysisState,
@@ -45,6 +44,9 @@ import {
   type CopilotMemory,
   type CopilotMemoryFacts,
   type CopilotChecklistItem,
+  type ReadinessEvidence,
+  type ReadinessSignals,
+  deriveReadinessSignals,
   ensureCoreTodos,
 } from "@/lib/workflows/copilot-analysis";
 import { getCopilotAnalysis, upsertCopilotAnalysis } from "@/lib/services/copilot-analysis";
@@ -81,6 +83,7 @@ const OFF_TOPIC_KEYWORDS = ["weather", "stock", "joke", "recipe", "story", "nove
 const FOLLOW_UP_INVITATION = "(Also feel free to add any other requirements you care about.)";
 const PROCEED_MESSAGE =
   "BTW, I now have enough info to proceed if you want to submit it to build, or we can keep chatting to get more details to make this more accurate.";
+const READINESS_PROCEED_THRESHOLD = 85;
 
 const SYSTEM_PROMPT =
   "You are Wrk Copilot. You ONLY help users describe and design business processes to automate. If the user asks unrelated questions (general knowledge, advice, or chit chat) you politely redirect them to describing the workflow they want to automate. You return a JSON object that matches the provided Workflow schema exactly.";
@@ -105,6 +108,10 @@ type CopilotRunResult = Awaited<ReturnType<typeof buildIdempotentResponse>> & {
   proceedReason?: string | null;
   proceedMessage?: string | null;
   proceedUiStyle?: string | null;
+  readinessScore?: number;
+  readinessSignals?: ReadinessSignals;
+  proceedBasicsMet?: boolean;
+  proceedThresholdMet?: boolean;
 };
 
 export type CopilotStatusPayload = {
@@ -248,12 +255,231 @@ function hasInvitationLine(text: string | null | undefined): boolean {
   return lower.includes("feel free to add any other requirements");
 }
 
-function ensureAnalysisTodos(state: CopilotAnalysisState): CopilotAnalysisState {
+function ensureAnalysisTodos(
+  state: CopilotAnalysisState,
+  context: {
+    workflow?: Workflow | null;
+    latestUserMessage?: string | null;
+    workflowUpdatedAt?: string | null;
+    intentSummary?: IntentSummary | null;
+  } = {}
+): CopilotAnalysisState {
   const todos = ensureCoreTodos(state.todos ?? []);
+  const readiness = deriveReadiness({
+    analysis: state,
+    facts: state.memory?.facts ?? {},
+    workflow: context.workflow ?? null,
+    latestUserMessage: context.latestUserMessage ?? null,
+    intentSummary: context.intentSummary ?? null,
+  });
   return {
     ...state,
     todos,
-    readiness: computeReadinessFromTodos(todos),
+    readiness,
+  };
+}
+
+function composeInferredSuccessCriteria(evidence: ReadinessEvidence): string {
+  const cadence = evidence.cadence ?? null;
+  const cadenceText =
+    cadence && /\b(every|daily|weekly|monthly|hourly|once|weekly)\b/i.test(cadence) ? cadence : null;
+  const timeText = evidence.timeOfDay ? `at ${evidence.timeOfDay}` : null;
+  const triggerLead = [cadenceText ?? "On the expected cadence", timeText].filter(Boolean).join(" ").trim();
+  const goal = evidence.goalSummary ? truncateText(evidence.goalSummary, 140) : "complete the requested workflow";
+  const scope = evidence.scopeHint ? ` for ${evidence.scopeHint}` : "";
+  const destination = evidence.destinationDetail ?? "the chosen destination";
+  const outputs =
+    evidence.outputFields && evidence.outputFields.length
+      ? evidence.outputFields.slice(0, 6).join(", ")
+      : "the requested fields";
+  return `${triggerLead || "When triggered"}, ${goal}${scope} and write ${outputs} to ${destination}.`;
+}
+
+function deriveReadiness(params: {
+  analysis?: CopilotAnalysisState | null;
+  facts?: CopilotMemoryFacts;
+  workflow?: Workflow | null;
+  latestUserMessage?: string | null;
+  intentSummary?: IntentSummary | null;
+}): CopilotAnalysisState["readiness"] {
+  const facts = params.facts ?? {};
+  const workflow = params.workflow ?? null;
+  const sections = workflow?.sections ?? [];
+  const previousScore = params.analysis?.readiness?.score ?? facts.readiness_floor ?? 0;
+  const signalsBase = deriveReadinessSignals({
+    facts,
+    workflow,
+    latestUserMessage: params.latestUserMessage ?? "",
+  }).signals;
+
+  const businessObjectives = sections.find((section) => section.key === "business_objectives")?.content?.trim();
+  const goalPresent =
+    signalsBase.goal ||
+    Boolean(params.intentSummary) ||
+    Boolean(workflow?.summary) ||
+    Boolean(businessObjectives && businessObjectives.length > 6);
+  const triggerPresent =
+    signalsBase.trigger ||
+    Boolean(facts.trigger_cadence || facts.trigger_time) ||
+    (workflow?.steps ?? []).some((step) => step.type === "Trigger");
+  const outputPresent = signalsBase.output || Boolean(facts.output_fields && facts.output_fields.length > 0);
+  const destinationPresent =
+    signalsBase.destination ||
+    Boolean(facts.storage_destination) ||
+    Boolean(facts.systems && facts.systems.length > 0) ||
+    sections.some((section) => section.key === "systems" && Boolean(section.content?.trim()));
+  const successPresent = Boolean(facts.success_criteria);
+
+  let score = 0;
+  if (goalPresent) score = Math.max(score, 10);
+  if ((workflow?.steps?.length ?? 0) >= 2) score = Math.max(score, 25);
+  if (triggerPresent) score += 15;
+  if (outputPresent) score += 15;
+  if (destinationPresent) score += 15;
+  if (successPresent) score += 15;
+
+  score = Math.min(100, Math.max(previousScore, score));
+
+  const signals: ReadinessSignals = {
+    ...signalsBase,
+    goal: goalPresent || signalsBase.goal,
+    trigger: triggerPresent || signalsBase.trigger,
+    destination: destinationPresent || signalsBase.destination,
+    output: outputPresent || signalsBase.output,
+    scope: signalsBase.scope,
+  };
+
+  const stateItemsSatisfied: string[] = [];
+  const stateItemsMissing: string[] = [];
+  const addState = (flag: boolean, label: string) => (flag ? stateItemsSatisfied.push(label) : stateItemsMissing.push(label));
+  addState(signals.goal, "goal");
+  addState(signals.trigger, "trigger");
+  addState(signals.destination, "destination");
+  addState(signals.output, "output");
+  addState(signals.scope, "scope");
+
+  const blockingTodos = [];
+  if (!signals.trigger) blockingTodos.push("trigger");
+  if (!signals.destination) blockingTodos.push("destination");
+
+  return {
+    score,
+    stateItemsSatisfied,
+    stateItemsMissing,
+    blockingTodos,
+  };
+}
+
+function applyDeterministicInference(params: {
+  analysis: CopilotAnalysisState;
+  workflow: Workflow;
+  latestUserMessage: string;
+  latestUserMessageId?: string | null;
+  intentSummary?: IntentSummary | null;
+}): CopilotAnalysisState {
+  const { analysis, workflow, latestUserMessage, latestUserMessageId, intentSummary } = params;
+  const baseMemory = analysis.memory ?? createEmptyMemory();
+  const checklist = ensureChecklist(baseMemory);
+  const facts = { ...(baseMemory.facts ?? {}) };
+  const workflowUpdatedAt = analysis.workflowUpdatedAt ?? null;
+  const { signals, evidence } = deriveReadinessSignals({
+    facts,
+    workflow,
+    latestUserMessage,
+    workflowUpdatedAt,
+    readinessWorkflowUpdatedAt: facts.readiness_workflow_updated_at ?? null,
+  });
+
+  const nowIso = new Date().toISOString();
+
+  if (!facts.output_fields?.length && evidence.outputFields?.length) {
+    facts.output_fields = evidence.outputFields.slice(0, 6);
+  }
+  if (!facts.scope_hint && evidence.scopeHint) {
+    facts.scope_hint = evidence.scopeHint;
+  }
+  if (!facts.goal_summary && evidence.goalSummary) {
+    facts.goal_summary = truncateText(evidence.goalSummary, 200);
+  }
+  if (!facts.storage_destination && evidence.destinationDetail) {
+    facts.storage_destination = evidence.destinationDetail;
+  }
+  if (!facts.trigger_cadence && evidence.cadence) {
+    facts.trigger_cadence = evidence.cadence;
+  }
+  if (!facts.trigger_time && evidence.timeOfDay) {
+    facts.trigger_time = evidence.timeOfDay;
+  }
+
+  let todos = ensureCoreTodos(analysis.todos ?? []);
+
+  const successInferable = signals.goal && signals.trigger && signals.destination && signals.output && signals.scope;
+  const existingSuccess = facts.success_criteria ?? checklist.success_criteria?.value ?? null;
+  let successValue = existingSuccess;
+
+  if (successInferable && !successValue) {
+    successValue = composeInferredSuccessCriteria(evidence);
+  }
+
+  if (successInferable && successValue) {
+    facts.success_criteria = successValue;
+    facts.success_criteria_evidence =
+      facts.success_criteria_evidence ?? {
+        messageId: latestUserMessageId ?? null,
+        snippet: truncateText(latestUserMessage, 200),
+        source: "inferred",
+      };
+    checklist.success_criteria = {
+      ...(checklist.success_criteria ?? { key: "success_criteria", confirmed: false }),
+      key: "success_criteria",
+      confirmed: true,
+      value: successValue,
+      evidence: checklist.success_criteria?.evidence ?? truncateText(latestUserMessage, 200),
+      confidence: Math.max(checklist.success_criteria?.confidence ?? 0, 0.9),
+      source: "ai",
+      updatedAt: nowIso,
+    };
+    todos = todos.map((todo) =>
+      (todo.key ?? todo.id) === "success_criteria"
+        ? {
+            ...todo,
+            status: "resolved",
+            value: todo.value ?? successValue,
+            confidence: Math.max(todo.confidence ?? 0, 0.9),
+            resolvedAt: todo.resolvedAt ?? nowIso,
+          }
+        : todo
+    );
+  }
+
+  const readiness = deriveReadiness({
+    analysis,
+    facts,
+    workflow,
+    latestUserMessage,
+    intentSummary: intentSummary ?? null,
+  });
+
+  const readinessScore = readiness.score ?? 0;
+  const nextFacts = {
+    ...facts,
+    readiness_floor: Math.max(facts.readiness_floor ?? 0, readinessScore),
+    readiness_last_updated_at: nowIso,
+    readiness_workflow_updated_at: workflowUpdatedAt ?? null,
+    output_fields: facts.output_fields,
+    scope_hint: facts.scope_hint,
+    goal_summary: facts.goal_summary,
+  };
+
+  return {
+    ...analysis,
+    todos,
+    readiness,
+    memory: {
+      ...baseMemory,
+      facts: nextFacts,
+      checklist,
+    },
   };
 }
 
@@ -285,7 +511,15 @@ function applyJudgeTodosToAnalysis(
   return {
     ...analysis,
     todos: updatedTodos,
-    readiness: computeReadinessFromTodos(updatedTodos),
+    readiness: deriveReadiness({
+      analysis: {
+        ...analysis,
+        todos: updatedTodos,
+      },
+      facts: analysis.memory?.facts,
+      workflow: null,
+      latestUserMessage: analysis.memory?.lastQuestionText ?? null,
+    }),
   };
 }
 
@@ -581,16 +815,7 @@ function setCachedTodoJudge(key: string, result: CoreTodoJudgeResult) {
   todoJudgeCache.set(key, { result, cachedAt: Date.now() });
 }
 
-function shouldEmitIntentUpgrade(summary: string | null | undefined, generic: string): boolean {
-  if (!summary) return false;
-  const trimmed = summary.trim();
-  if (!trimmed) return false;
-  const normalized = trimmed.toLowerCase();
-  const genericNormalized = generic.trim().toLowerCase();
-  if (normalized === genericNormalized) return false;
-  if (normalized.startsWith(genericNormalized)) return false;
-  return true;
-}
+// intent upgrade no longer used (status copy standardized)
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   const streaming = isStreamRequest(request);
@@ -630,21 +855,65 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     if (streaming && sse) {
+      const mapDisplayMessage = (raw?: string | null): string | null => {
+        if (!raw) return raw ?? null;
+        const msg = raw.trim();
+        const normalized = msg.replace(/[.…]+$/u, "").trim();
+        const direct: Record<string, string> = {
+          "Got it — working on it": "I’m starting to build your workflow.",
+          "Working on your workflow": "I’m starting to build your workflow.",
+          "Reviewing your request": "Reviewing what you asked for",
+          "Drafting workflow steps and branches": "Laying out the main steps and branches",
+          "Extracting requirements from your last message": "Pulling info from your instructions",
+          "Drafting updated workflow from context": "Adding context from our conversation",
+          "Preparing draft response": "Finalizing the workflow",
+        };
+        if (direct[msg]) return direct[msg];
+        if (direct[normalized]) return direct[normalized];
+
+        if (
+          normalized === "Recomputing required inputs and tasks" ||
+          normalized === "Updating list of required inputs and tasks"
+        ) {
+          return "Figuring out inputs and tasks";
+        }
+
+        if (
+          normalized === "Updating step graph" ||
+          normalized === "Renumbering steps" ||
+          normalized === "Updating step graph and renumbering"
+        ) {
+          return "Organizing the workflow structure";
+        }
+
+        if (
+          normalized === "Validating everything" ||
+          normalized === "Validating blueprint" ||
+          normalized === "Validating blueprint schema"
+        ) {
+          return "Double-checking everything";
+        }
+
+        return msg;
+      };
+
       const callbacks: CopilotCallbacks = {
-        onStatus: (status: CopilotStatusPayload) => void sse.send("status", status),
+        onStatus: (status: CopilotStatusPayload) => {
+          const phase = status.phase ?? "working";
+          const mappedMessage = typeof status.message === "string" ? mapDisplayMessage(status.message) : status.message ?? null;
+          copilotDebug("copilot_chat.status_emit", {
+            runId: status.runId,
+            requestId: status.requestId ?? null,
+            phase,
+            message: mappedMessage,
+            seq: status.seq ?? null,
+          });
+          void sse.send("status", { ...status, phase, message: mappedMessage });
+        },
         onResult: (result: CopilotRunResult) => void sse.send("result", result),
         onError: (err: CopilotErrorPayload) => void sse.send("error", err),
         onMessage: (payload: CopilotMessageEventPayload) => void sse.send("message", payload),
       };
-
-      queueMicrotask(() =>
-        void sse.send("status", {
-          runId,
-          requestId: "preflight",
-          phase: "connecting",
-          message: "Connected — drafting…",
-        })
-      );
 
       (async () => {
         const runnerStartedAt = Date.now();
@@ -811,10 +1080,10 @@ async function runCopilotChat({
   });
   const emitError = (message: string, code?: number | string) =>
     callbacks?.onError?.({ runId, requestId, message, code });
-  const earlyAckMessage = "Got it - drafting your workflow now.";
+  const earlyAckMessage = "Thinking...";
   let assistantMessage: AssistantMessageRow | null = null;
   let replyFinalized = false;
-  const ackTimeoutMs = 500;
+  const ackTimeoutMs = 1000;
   let ackTimer: NodeJS.Timeout | null = null;
   const composeAssistantReply = (
     chatResponse: string | null | undefined,
@@ -1075,25 +1344,18 @@ async function runCopilotChat({
     void persistAssistantMessage(earlyAckMessage);
   }, ackTimeoutMs);
 
-  fastReplyPromise
-    .then(async (fastReplyResult) => {
-      const composedFastReply = composeAssistantReply(
-        fastReplyResult?.chatResponse ?? earlyAckMessage,
-        fastReplyResult?.followUpQuestion ?? null
-      );
-      responseMessage = composedFastReply.content;
-      responseFollowUp = fastReplyResult?.followUpQuestion?.trim() || null;
-      if (!replyFinalized) {
-        await persistAssistantMessage(responseMessage, true, true);
-        callbacks?.onStatus?.({
-          runId,
-          requestId,
-          phase: "chat_ready",
-          message: "Chat reply ready",
-          seq: 0,
-        });
-      }
-    })
+      fastReplyPromise
+        .then(async (fastReplyResult) => {
+          const composedFastReply = composeAssistantReply(
+            fastReplyResult?.chatResponse ?? earlyAckMessage,
+            fastReplyResult?.followUpQuestion ?? null
+          );
+          responseMessage = composedFastReply.content;
+          responseFollowUp = fastReplyResult?.followUpQuestion?.trim() || null;
+          if (!replyFinalized) {
+            await persistAssistantMessage(responseMessage, true, true);
+          }
+        })
     .catch((error) => {
       logger.warn("generateCopilotChatReply (fast path) failed", { error });
     })
@@ -1108,7 +1370,7 @@ async function runCopilotChat({
   const workflowUpdatedAtIso = detail.version.updatedAt ? new Date(detail.version.updatedAt).toISOString() : null;
   const currentBlueprint = currentWorkflow ?? createEmptyWorkflowSpec();
   const userMessageContent = latestUserMessage?.content ?? trimmedContent;
-  const genericIntentSummary = "updating your workflow…";
+  const genericIntentSummary = "Reviewing your request";
   let intentSummary: IntentSummary | null = null;
   const hasExistingWorkflow =
     (currentWorkflow.steps?.length ?? 0) > 0 || Boolean(currentWorkflow.summary?.trim()?.length);
@@ -1120,13 +1382,7 @@ async function runCopilotChat({
     `User wants to change/add: ${userMessageContent}`,
   ].join("\n");
 
-  planner.setIntentSummary(genericIntentSummary);
-  planner.emit(
-    "understanding",
-    undefined,
-    { messageCount: normalizedMessages.length },
-    "intent-initial"
-  );
+  planner.emit("understanding", undefined, { messageCount: normalizedMessages.length }, "intent-initial");
 
   const intentCacheKey = buildIntentCacheKey({
     automationVersionId: params.id,
@@ -1142,15 +1398,6 @@ async function runCopilotChat({
 
   if (cachedIntent) {
     intentSummary = cachedIntent;
-    if (shouldEmitIntentUpgrade(cachedIntent.intent_summary, genericIntentSummary)) {
-      planner.setIntentSummary(cachedIntent.intent_summary);
-      planner.emit(
-        "understanding",
-        `Got it — ${cachedIntent.intent_summary}`,
-        { messageCount: normalizedMessages.length, cache: true },
-        "intent-llm"
-      );
-    }
     copilotDebug("copilot_chat.intent_summary_emitted", {
       runId,
       userMessage: userMessageContent,
@@ -1185,15 +1432,6 @@ async function runCopilotChat({
 
     if (summary) {
       setCachedIntent(intentCacheKey, summary);
-      if (shouldEmitIntentUpgrade(summary.intent_summary, genericIntentSummary)) {
-        planner.setIntentSummary(summary.intent_summary);
-        planner.emit(
-          "understanding",
-          `Got it — ${summary.intent_summary}`,
-          { messageCount: normalizedMessages.length },
-          "intent-llm"
-        );
-      }
       copilotDebug("copilot_chat.intent_summary_emitted", {
         runId,
         userMessage: userMessageContent,
@@ -1232,7 +1470,19 @@ async function runCopilotChat({
     ...existingAnalysis,
     memory: existingAnalysis.memory ?? createEmptyMemory(),
   };
-  analysisState = ensureAnalysisTodos(analysisState);
+  analysisState = ensureAnalysisTodos(analysisState, {
+    workflow: currentWorkflow,
+    latestUserMessage: userMessageContent,
+    workflowUpdatedAt: workflowUpdatedAtIso,
+    intentSummary,
+  });
+  analysisState = applyDeterministicInference({
+    analysis: analysisState,
+    workflow: currentWorkflow,
+    latestUserMessage: userMessageContent,
+    latestUserMessageId: userMessage.id,
+    intentSummary,
+  });
 
   // Core todo confirmation is delegated to the judge; deterministic heuristics are no-ops for core items.
   const ensuredMemory = analysisState.memory ?? createEmptyMemory();
@@ -1635,6 +1885,12 @@ async function runCopilotChat({
           followUpKey: responseFollowUpKey,
         }),
       };
+      analysisState = applyDeterministicInference({
+        analysis: analysisState,
+        workflow: workflowWithTasks,
+        latestUserMessage: userMessageContent,
+        latestUserMessageId: userMessage.id,
+      });
 
       if (responseFollowUp && responseFollowUp.trim().length > 0 && analysisState.memory?.lastQuestionKey) {
         baseTrace.event("copilot.follow_up_asked", {
@@ -1681,31 +1937,37 @@ async function runCopilotChat({
   const factsSnapshot = analysisState.memory?.facts ?? {};
   const checklistSnapshotState = analysisState.memory?.checklist ?? {};
   const sectionsSnapshot = workflowWithTasks.sections ?? [];
-  const todosSnapshot = analysisState.todos ?? [];
-  const readinessScore = analysisState.readiness?.score ?? 0;
-  const questionCount = analysisState.memory?.question_count ?? 0;
-  const judgeStopReady = preJudgeResult?.should_ask_followup === false;
+  const readinessResolved =
+    analysisState.readiness ??
+    deriveReadiness({
+      analysis: analysisState,
+      facts: factsSnapshot,
+      workflow: workflowWithTasks,
+      latestUserMessage: latestUserMessage?.content ?? userMessageContent,
+      intentSummary,
+    });
+  analysisState = { ...analysisState, readiness: readinessResolved };
+  const readinessScore = Math.max(readinessResolved.score ?? 0, factsSnapshot.readiness_floor ?? 0);
+  const readinessSignals = deriveReadinessSignals({
+    facts: factsSnapshot,
+    workflow: workflowWithTasks,
+    workflowUpdatedAt: workflowUpdatedAtIso,
+    readinessWorkflowUpdatedAt: factsSnapshot.readiness_workflow_updated_at ?? null,
+  });
   const triggerPresent =
-    Boolean(factsSnapshot.trigger_cadence || factsSnapshot.trigger_time) ||
-    workflowWithTasks.steps?.some((step) => step.type === "Trigger") ||
+    readinessSignals.signals.trigger ||
     sectionsSnapshot.some(
       (section) =>
         section.key === "business_requirements" &&
         /(\b\d+(?:am|pm)\b|daily|weekly|monthly|every)/i.test(section.content ?? "")
     );
   const destinationPresent =
-    Boolean(factsSnapshot.storage_destination) ||
-    Boolean(factsSnapshot.systems && factsSnapshot.systems.length > 0) ||
+    readinessSignals.signals.destination ||
     Boolean(checklistSnapshotState.systems?.confirmed || checklistSnapshotState.systems?.value) ||
     sectionsSnapshot.some((section) => section.key === "systems" && Boolean(section.content?.trim()));
-  const successPresent =
-    Boolean(factsSnapshot.success_criteria) ||
-    Boolean(checklistSnapshotState.success_criteria?.confirmed || checklistSnapshotState.success_criteria?.value) ||
-    sectionsSnapshot.some((section) => section.key === "success_criteria" && Boolean(section.content?.trim())) ||
-    todosSnapshot.some((todo) => (todo.key ?? todo.id) === "success_criteria" && todo.status === "resolved");
 
-  proceedBasicsMet = triggerPresent && destinationPresent && successPresent;
-  proceedThresholdMet = readinessScore >= 0.75 || questionCount >= 5 || judgeStopReady;
+  proceedBasicsMet = triggerPresent && destinationPresent;
+  proceedThresholdMet = readinessScore >= READINESS_PROCEED_THRESHOLD;
 
   const previousStickyReady = Boolean((factsSnapshot as any).proceed_ready);
   const previousStickyVersion = (factsSnapshot as any).proceed_ready_workflow_updated_at ?? null;
@@ -1714,12 +1976,8 @@ async function runCopilotChat({
   if (proceedBasicsMet && (proceedThresholdMet || stickyValid)) {
     proceedReady = true;
     proceedStickyUsed = !proceedThresholdMet && stickyValid;
-    if (readinessScore >= 0.75) {
-      proceedReason = "readiness>=0.75";
-    } else if (questionCount >= 5) {
-      proceedReason = "question_count>=5";
-    } else if (judgeStopReady) {
-      proceedReason = "judgeStopReady";
+    if (proceedThresholdMet) {
+      proceedReason = `readiness>=${READINESS_PROCEED_THRESHOLD}`;
     } else if (stickyValid) {
       proceedReason = (factsSnapshot as any).proceed_reason ?? "sticky";
     }
@@ -1755,14 +2013,19 @@ async function runCopilotChat({
     proceedMessage = PROCEED_MESSAGE;
   }
 
+  logger.debug("copilot.readiness.final", {
+    score: readinessScore,
+    signals: readinessSignals.signals,
+  });
+
   baseTrace.event("copilot.proceed_ready", {
     proceedReady,
     proceedReason,
     readinessScore,
-    questionCount,
     basicsMet: proceedBasicsMet,
     thresholdMet: proceedThresholdMet,
     stickyFlagUsed: proceedStickyUsed,
+    readinessThreshold: READINESS_PROCEED_THRESHOLD,
   });
 
   const validatedWorkflow = directCommand
@@ -1782,10 +2045,7 @@ async function runCopilotChat({
     stepCount: validatedWorkflow.steps?.length ?? 0,
     sectionCount: validatedWorkflow.sections?.length ?? 0,
   });
-  const savingTextBase =
-    (intentSummary?.intent_summary && intentSummary.intent_summary.length > 0
-      ? intentSummary.intent_summary
-      : genericIntentSummary) ?? "Saving draft and messages…";
+  const savingTextBase = "Saving workflow changes";
   planner.emit("saving", savingTextBase, { stepCount: validatedWorkflow.steps?.length ?? 0 }, "saving");
   const savingTrace = trace.phase("saving");
   const saveSpan = savingTrace.spanStart("workflow.save", { stepCount: validatedWorkflow.steps?.length ?? 0 });
@@ -1940,7 +2200,14 @@ async function runCopilotChat({
     lastAssistantMessageId: finalAssistantMessage.id,
     workflowUpdatedAt: savedVersion.updatedAt?.toISOString ? savedVersion.updatedAt.toISOString() : new Date().toISOString(),
   };
-  analysisState = ensureAnalysisTodos(analysisState);
+  analysisState = ensureAnalysisTodos(analysisState, {
+    workflow: workflowWithTasks,
+    latestUserMessage: userMessageContent,
+    intentSummary,
+    workflowUpdatedAt: savedVersion.updatedAt?.toISOString
+      ? savedVersion.updatedAt.toISOString()
+      : new Date().toISOString(),
+  });
 
   let analysisPersistenceError = staleRun;
   if (!staleRun) {
@@ -2010,6 +2277,10 @@ async function runCopilotChat({
     proceedReason,
     proceedMessage,
     proceedUiStyle,
+    readinessScore,
+    readinessSignals: readinessSignals.signals,
+    proceedBasicsMet,
+    proceedThresholdMet,
   };
 
   callbacks?.onResult?.(result);
@@ -2411,6 +2682,37 @@ function mergeFacts(existing: CopilotMemory["facts"], workflow: Workflow, lastUs
     (facts as any).technical_opt_in = true;
   } else if (consentNegative) {
     (facts as any).technical_opt_in = false;
+  }
+
+  const readinessSnapshot = deriveReadinessSignals({
+    facts,
+    workflow,
+    latestUserMessage: lastUserMessage,
+  });
+
+  if (!facts.output_fields?.length && readinessSnapshot.evidence.outputFields?.length) {
+    facts.output_fields = readinessSnapshot.evidence.outputFields.slice(0, 6);
+  }
+
+  if (!facts.scope_hint && readinessSnapshot.evidence.scopeHint) {
+    facts.scope_hint = readinessSnapshot.evidence.scopeHint;
+  }
+
+  if (!facts.goal_summary && readinessSnapshot.evidence.goalSummary) {
+    facts.goal_summary = truncateText(readinessSnapshot.evidence.goalSummary ?? "", 200);
+  }
+
+  if (!facts.storage_destination && readinessSnapshot.evidence.destinationDetail) {
+    facts.storage_destination = readinessSnapshot.evidence.destinationDetail;
+  }
+
+  if (!facts.success_criteria && readinessSnapshot.signals.goal && readinessSnapshot.signals.trigger && readinessSnapshot.signals.destination && readinessSnapshot.signals.output && readinessSnapshot.signals.scope) {
+    facts.success_criteria = composeInferredSuccessCriteria(readinessSnapshot.evidence);
+    facts.success_criteria_evidence = {
+      messageId: null,
+      snippet: truncateText(lastUserMessage, 200),
+      source: "inferred",
+    };
   }
 
   return facts;
