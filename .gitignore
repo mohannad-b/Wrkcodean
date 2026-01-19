@@ -17,6 +17,10 @@
 
 # misc
 .DS_Store
+**/.DS_Store
+__MACOSX/
+.AppleDouble
+.LSOverride
 *.pem
 
 # debug

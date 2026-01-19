@@ -17,6 +17,8 @@ import type { CopilotAnalysisState, ReadinessSignals, WorkflowProgressSnapshot }
 import type { Task } from "@/db/schema";
 import { useCopilotChat } from "@/features/copilot/hooks/useCopilotChat";
 import { AttachmentList } from "@/features/copilot/ui/chat/AttachmentList";
+import { useBuildActivityStream } from "@/features/copilot/hooks/useBuildActivityStream";
+import type { BuildActivityEvent } from "@/features/copilot/buildActivityContract";
 
 interface StudioChatProps {
   automationVersionId: string | null;
@@ -52,6 +54,39 @@ interface StudioChatProps {
 
 const formatTimestamp = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+
+const mapBuildEventToLegacy = (event: BuildActivityEvent | null): BuildActivity | null => {
+  if (!event) return null;
+  const lowerStatus = event.status.toLowerCase();
+  const isTerminal = lowerStatus === "done" || lowerStatus === "error";
+  return {
+    runId: event.runId,
+    phase: event.stage,
+    rawPhase: event.stage,
+    lastSeq: event.seq,
+    lastLine: event.detail ?? event.title ?? null,
+    startedAt: null,
+    completedAt: isTerminal ? Date.now() : null,
+    isRunning: !isTerminal,
+  };
+};
+
+const mapLegacyToPanel = (activity: BuildActivity | null) => {
+  if (!activity) return null;
+  const status = activity.isRunning ? "running" : activity.phase.toLowerCase() === "error" ? "error" : "done";
+  const detail = activity.lastLine ?? undefined;
+  const title = activity.phase || "Working";
+  return {
+    title,
+    detail,
+    progress: undefined,
+    currentStatus: status as "queued" | "running" | "waiting_user" | "done" | "error" | "blocked",
+    recentUpdates: activity.lastLine
+      ? [{ seq: activity.lastSeq ?? 0, title, detail }]
+      : [],
+    actionableCtas: [],
+  };
+};
 
 export function StudioChat({
   automationVersionId,
@@ -108,9 +143,23 @@ export function StudioChat({
     analysis,
     analysisLoading,
     onRefreshAnalysis,
-    onBuildActivityUpdate,
     onReadinessUpdate,
   });
+
+  const buildStreamFallbackEnabled = process.env.NEXT_PUBLIC_BUILD_ACTIVITY_FALLBACK === "1";
+  const { activity: buildStreamActivity, viewModel: buildStreamViewModel } = useBuildActivityStream({
+    automationVersionId,
+  });
+  const legacyFromStream = useMemo(() => mapBuildEventToLegacy(buildStreamActivity), [buildStreamActivity]);
+  const fallbackPanelActivity = useMemo(() => mapLegacyToPanel(buildActivity), [buildActivity]);
+  const panelActivity = buildStreamViewModel ?? (buildStreamFallbackEnabled ? fallbackPanelActivity : null);
+  const effectiveLegacyActivity = legacyFromStream ?? (buildStreamFallbackEnabled ? buildActivity : null);
+
+  useEffect(() => {
+    if (typeof onBuildActivityUpdate === "function") {
+      onBuildActivityUpdate(effectiveLegacyActivity ?? null);
+    }
+  }, [effectiveLegacyActivity, onBuildActivityUpdate]);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
@@ -262,9 +311,7 @@ export function StudioChat({
         )}
       </MessageList>
 
-      {buildActivity ? (
-        <BuildActivityPanel phase={buildActivity.phase} lastLine={buildActivity.lastLine} isRunning={buildActivity.isRunning} />
-      ) : null}
+      {panelActivity ? <BuildActivityPanel activity={panelActivity} /> : null}
 
       <Composer
         className="space-y-3"

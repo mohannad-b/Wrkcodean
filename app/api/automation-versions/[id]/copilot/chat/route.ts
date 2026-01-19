@@ -12,6 +12,7 @@ import { determineConversationPhase, generateThinkingSteps } from "@/lib/ai/copi
 import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { createCopilotTrace } from "@/lib/ai/copilot-trace";
 import { logAudit } from "@/lib/audit/log";
+import { createBuildActivityEmitter } from "@/lib/build-activity/normalizer";
 import { db } from "@/db";
 import {
   automationVersions,
@@ -87,8 +88,32 @@ const READINESS_PROCEED_THRESHOLD = 85;
 
 const requestBodyCache = new WeakMap<Request, unknown>();
 
+function summarizeRequirementsChange(previous?: string | null, next?: string | null): string {
+  const prev = previous?.trim() ?? "";
+  const curr = next?.trim() ?? "";
+  if (!prev && !curr) return "No requirements captured yet.";
+  if (!prev && curr) return "Requirements captured from the latest update.";
+  if (prev && !curr) return "Requirements cleared for a clean rewrite.";
+  if (prev === curr) return "Requirements unchanged.";
+  const delta = curr.length - prev.length;
+  if (Math.abs(delta) < 40) return "Requirements updated with minor edits.";
+  return delta > 0 ? "Requirements expanded with new details." : "Requirements tightened for clarity.";
+}
+
+function summarizeWorkflowDiff(detail: { summary?: string | null; stepsAdded?: unknown[] } | null, stepCount: number) {
+  const summary = detail?.summary?.trim();
+  if (summary) {
+    return `${summary} (${stepCount} steps).`;
+  }
+  return `Updated workflow with ${stepCount} steps.`;
+}
+
 const SYSTEM_PROMPT =
   "You are Wrk Copilot. You ONLY help users describe and design business processes to automate. If the user asks unrelated questions (general knowledge, advice, or chit chat) you politely redirect them to describing the workflow they want to automate. You return a JSON object that matches the provided Workflow schema exactly.";
+
+const COPILOT_INGEST_ENABLED =
+  process.env.COPILOT_INGEST_ENABLED === "1" || process.env.COPILOT_INGEST_ENABLED === "true";
+const COPILOT_INGEST_URL = (process.env.COPILOT_INGEST_URL ?? "").trim();
 
 type CopilotRunResult = Awaited<ReturnType<typeof buildIdempotentResponse>> & {
   runId: string;
@@ -131,6 +156,19 @@ type CopilotErrorPayload = {
   message: string;
   code?: number | string;
 };
+
+function sendCopilotIngest(payload: Record<string, unknown>) {
+  if (!COPILOT_INGEST_ENABLED) return;
+  if (!COPILOT_INGEST_URL) {
+    logger.warn("[copilot:ingest] COPILOT_INGEST_ENABLED true but COPILOT_INGEST_URL missing");
+    return;
+  }
+  fetch(COPILOT_INGEST_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
 
 type CopilotMessageEventPayload = {
   runId: string;
@@ -1082,8 +1120,16 @@ async function runCopilotChat({
       callbacks?.onStatus?.(payload);
     },
   });
-  const emitError = (message: string, code?: number | string) =>
+  const buildEmitter = createBuildActivityEmitter({ automationVersionId: params.id, runId });
+  const emitError = (message: string, code?: number | string) => {
     callbacks?.onError?.({ runId, requestId, message, code });
+    buildEmitter.errorStage({
+      title: "Build failed",
+      detail: message,
+      cta: { label: "Retry", destination: "action:retry_build" },
+    });
+  };
+  const previousRequirementsText = detail.version.requirementsText ?? null;
   const earlyAckMessage = "Thinking...";
   let assistantMessage: AssistantMessageRow | null = null;
   let replyFinalized = false;
@@ -1210,19 +1256,15 @@ async function runCopilotChat({
 
   if (existingRun && existingRun.automationVersionId === params.id) {
     // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId,
-        hypothesisId: "H1-idempotent",
-        location: "copilot/chat/route.ts:runCopilotChat",
-        message: "idempotent replay detected",
-        data: { clientMessageId, assistantMessageId: existingRun.assistantMessageId },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
+    sendCopilotIngest({
+      sessionId: "debug-session",
+      runId,
+      hypothesisId: "H1-idempotent",
+      location: "copilot/chat/route.ts:runCopilotChat",
+      message: "idempotent replay detected",
+      data: { clientMessageId, assistantMessageId: existingRun.assistantMessageId },
+      timestamp: Date.now(),
+    });
     // #endregion
     const replay = await buildIdempotentResponse({
       run: existingRun,
@@ -1237,23 +1279,19 @@ async function runCopilotChat({
 
   if (existingRun && existingRun.automationVersionId !== params.id) {
     // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId,
-        hypothesisId: "H1-idempotent",
-        location: "copilot/chat/route.ts:runCopilotChat",
-        message: "idempotent run ignored due to version mismatch",
-        data: {
-          clientMessageId,
-          existingAutomationVersionId: existingRun.automationVersionId,
-          currentAutomationVersionId: params.id,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
+    sendCopilotIngest({
+      sessionId: "debug-session",
+      runId,
+      hypothesisId: "H1-idempotent",
+      location: "copilot/chat/route.ts:runCopilotChat",
+      message: "idempotent run ignored due to version mismatch",
+      data: {
+        clientMessageId,
+        existingAutomationVersionId: existingRun.automationVersionId,
+        currentAutomationVersionId: params.id,
+      },
+      timestamp: Date.now(),
+    });
     // #endregion
   }
 
@@ -1287,23 +1325,19 @@ async function runCopilotChat({
       }))
   );
   // #region agent log
-  fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      sessionId: "debug-session",
-      runId,
-      hypothesisId: "H2-payload",
-      location: "copilot/chat/route.ts:runCopilotChat",
-      message: "normalized messages ready",
-      data: {
-        clientMessageId: clientMessageId ?? null,
-        messageCount: normalizedMessages.length,
-        latestUserPreview: normalizedMessages.findLast((m) => m.role === "user")?.content.slice(0, 160) ?? null,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
+  sendCopilotIngest({
+    sessionId: "debug-session",
+    runId,
+    hypothesisId: "H2-payload",
+    location: "copilot/chat/route.ts:runCopilotChat",
+    message: "normalized messages ready",
+    data: {
+      clientMessageId: clientMessageId ?? null,
+      messageCount: normalizedMessages.length,
+      latestUserPreview: normalizedMessages.findLast((m) => m.role === "user")?.content.slice(0, 160) ?? null,
+    },
+    timestamp: Date.now(),
+  });
   // #endregion
   const understandingTrace = baseTrace.phase("understanding");
   understandingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
@@ -1560,6 +1594,44 @@ async function runCopilotChat({
     followUpMode,
   });
 
+  const readinessPreview = deriveReadiness({
+    analysis: analysisState,
+    facts: analysisState.memory?.facts ?? {},
+    workflow: currentWorkflow,
+    latestUserMessage: userMessageContent,
+    intentSummary,
+  });
+  const readinessPreviewScore = Math.max(
+    readinessPreview.score ?? 0,
+    (analysisState.memory?.facts as any)?.readiness_floor ?? 0
+  );
+  const readinessPreviewStatus =
+    readinessPreviewScore >= READINESS_PROCEED_THRESHOLD ? "done" : ("waiting_user" as const);
+
+  buildEmitter.startStage({
+    stage: "readiness",
+    title: "Assessing readiness",
+    detail: "Reviewing current requirements and workflow context.",
+    progress: Math.min(100, Math.max(5, readinessPreviewScore || 5)),
+  });
+  if (readinessPreviewStatus === "done") {
+    buildEmitter.doneStage({
+      stage: "readiness",
+      title: "Readiness checked",
+      detail: "Ready to proceed.",
+      progress: readinessPreviewScore,
+    });
+  } else {
+    buildEmitter.updateStage({
+      stage: "readiness",
+      status: "waiting_user",
+      title: "Readiness needs input",
+      detail: "More details needed before building.",
+      progress: readinessPreviewScore,
+      cta: { label: "Review requirements", destination: "tab:requirements" },
+    });
+  }
+
   if (directCommand && latestUserMessage) {
     commandExecuted = true;
     const command = parseCommand(latestUserMessage.content);
@@ -1600,28 +1672,30 @@ async function runCopilotChat({
           ? intentSummary.intent_summary
           : genericIntentSummary) ?? "Updating your workflow…";
       planner.setIntentSummary(draftingTextBase);
+      buildEmitter.startStage({
+        stage: "requirements",
+        title: "Capturing requirements",
+        detail: "Extracting requirements from the conversation.",
+        progress: 15,
+      });
       planner.emit("drafting", undefined, { intakeNotes: Boolean(intakeNotes), messages: normalizedMessages.length }, "drafting");
       const draftingTrace = trace.phase("drafting");
       draftingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
 
       // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: "debug-session",
-          runId,
-          hypothesisId: "H3-llm",
-          location: "copilot/chat/route.ts:runCopilotChat",
-          message: "llm build starting",
-          data: {
-            userMessagePreview: userMessageContent.slice(0, 200),
-            historyCount: normalizedMessages.length,
-            hasIntakeNotes: Boolean(intakeNotes),
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
+      sendCopilotIngest({
+        sessionId: "debug-session",
+        runId,
+        hypothesisId: "H3-llm",
+        location: "copilot/chat/route.ts:runCopilotChat",
+        message: "llm build starting",
+        data: {
+          userMessagePreview: userMessageContent.slice(0, 200),
+          historyCount: normalizedMessages.length,
+          hasIntakeNotes: Boolean(intakeNotes),
+        },
+        timestamp: Date.now(),
+      });
       // #endregion
 
       const buildSpan = draftingTrace.spanStart("llm.buildWorkflowFromChat", {
@@ -1735,30 +1809,33 @@ async function runCopilotChat({
       sanitizationSummary = builderSanitizationSummary;
       updatedRequirementsText = newRequirementsText;
 
+      buildEmitter.doneStage({
+        stage: "requirements",
+        title: "Requirements updated",
+        detail: summarizeRequirementsChange(previousRequirementsText, updatedRequirementsText ?? null),
+        progress: 35,
+      });
+
       draftingTrace.spanEnd(buildSpan, {
         tasksReturned: generatedTasks.length,
         stepsReturned: aiGeneratedWorkflow.steps?.length ?? 0,
       });
 
       // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: "debug-session",
-          runId,
-          hypothesisId: "H3-llm",
-          location: "copilot/chat/route.ts:runCopilotChat",
-          message: "llm build completed",
-          data: {
-            chatResponsePreview: (chatResponse ?? "").slice(0, 160),
-            followUpPreview: followUpQuestion?.slice(0, 160) ?? null,
-            stepCount: aiGeneratedWorkflow.steps?.length ?? 0,
-            taskCount: generatedTasks.length,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
+      sendCopilotIngest({
+        sessionId: "debug-session",
+        runId,
+        hypothesisId: "H3-llm",
+        location: "copilot/chat/route.ts:runCopilotChat",
+        message: "llm build completed",
+        data: {
+          chatResponsePreview: (chatResponse ?? "").slice(0, 160),
+          followUpPreview: followUpQuestion?.slice(0, 160) ?? null,
+          stepCount: aiGeneratedWorkflow.steps?.length ?? 0,
+          taskCount: generatedTasks.length,
+        },
+        timestamp: Date.now(),
+      });
       // #endregion
 
       copilotDebug("copilot_chat.post_build_metrics", {
@@ -1776,6 +1853,13 @@ async function runCopilotChat({
 
       let taskAssignments: Record<string, string[]> = {};
 
+      buildEmitter.startStage({
+        stage: "tasks",
+        title: "Computing tasks",
+        detail: `Preparing ${aiTasks.length} task${aiTasks.length === 1 ? "" : "s"} from requirements.`,
+        progress: 45,
+      });
+
       if (!staleRun) {
         const taskSyncSpan = draftingTrace.spanStart("task.sync", { taskCount: aiTasks.length });
         taskAssignments = await syncAutomationTasks({
@@ -1790,10 +1874,24 @@ async function runCopilotChat({
           0
         );
         draftingTrace.spanEnd(taskSyncSpan, { tasksAssignedCount });
+        buildEmitter.doneStage({
+          stage: "tasks",
+          title: "Tasks updated",
+          detail: `Created/updated ${aiTasks.length} tasks with ${tasksAssignedCount} step assignments.`,
+          progress: 55,
+        });
       } else {
         draftingTrace.event("task.sync.skipped_stale_run", {
           taskCount: aiTasks.length,
           latestUserMessageId,
+        });
+        buildEmitter.updateStage({
+          stage: "tasks",
+          status: "blocked",
+          title: "Tasks sync skipped",
+          detail: "A newer request superseded this run.",
+          progress: 55,
+          cta: { label: "Review tasks", destination: "tab:tasks" },
         });
       }
 
@@ -1804,6 +1902,12 @@ async function runCopilotChat({
           taskIds: Array.from(new Set(taskAssignments[step.id] ?? step.taskIds ?? [])),
         })),
       };
+      buildEmitter.startStage({
+        stage: "workflow_build",
+        title: "Building workflow",
+        detail: `Structuring ${workflowWithTasks.steps?.length ?? 0} steps and branches.`,
+        progress: 65,
+      });
       const judgeCacheKey = buildTodoJudgeCacheKey({
         automationVersionId: params.id,
         userMessage: userMessageContent,
@@ -2163,6 +2267,12 @@ async function runCopilotChat({
 
   if (!commandExecuted) {
     const diff = diffWorkflow(currentWorkflow, validatedWorkflow);
+    buildEmitter.doneStage({
+      stage: "workflow_build",
+      title: "Workflow built",
+      detail: summarizeWorkflowDiff(diff, validatedWorkflow.steps?.length ?? 0),
+      progress: 85,
+    });
     await logAudit({
       tenantId: session.tenantId,
       userId: session.userId,
@@ -2184,7 +2294,27 @@ async function runCopilotChat({
       },
     });
     savingTrace.event("audit.logged", { automationVersionId: params.id });
+  } else {
+    buildEmitter.doneStage({
+      stage: "workflow_build",
+      title: "Workflow updated",
+      detail: `Updated workflow with ${validatedWorkflow.steps?.length ?? 0} steps.`,
+      progress: 85,
+    });
   }
+
+  buildEmitter.startStage({
+    stage: "validation",
+    title: "Validating workflow",
+    detail: "Checking workflow integrity and required fields.",
+    progress: 88,
+  });
+  buildEmitter.doneStage({
+    stage: "validation",
+    title: "Validation complete",
+    detail: "Workflow passed validation checks.",
+    progress: 90,
+  });
 
   const completionState = getWorkflowCompletionState(validatedWorkflow);
   let progressSnapshot = null;
@@ -2260,6 +2390,13 @@ async function runCopilotChat({
   savingTrace.event("run.completed", {
     stepCount: validatedWorkflow.steps?.length ?? 0,
     persistenceError: analysisPersistenceError,
+  });
+
+  buildEmitter.finalStage({
+    stage: "done",
+    title: "Build complete",
+    detail: `Workflow ready with ${validatedWorkflow.steps?.length ?? 0} steps.`,
+    progress: 100,
   });
 
   planner.emit("saving", "Run complete — preparing result…", {
