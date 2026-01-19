@@ -14,7 +14,7 @@ import {
 import type { Connection, Edge, EdgeChange, Node, NodeChange } from "reactflow";
 import type { Workflow } from "@/features/workflows/domain";
 import type { WorkflowUpdates } from "@/lib/workflows/ai-updates";
-import { StudioChat } from "@/components/automations/StudioChat";
+import { StudioChat } from "@/features/copilot/ui/chat";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 import { EdgeInspector, type EdgeDetails } from "@/components/automations/EdgeInspector";
 import { Button } from "@/components/ui/button";

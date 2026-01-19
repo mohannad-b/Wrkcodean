@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { StudioChat } from "@/components/automations/StudioChat";
+import { StudioChat } from "@/features/copilot/ui/chat";
 
 vi.mock("@/components/providers/user-profile-provider", () => ({
   useUserProfile: () => ({ profile: null }),

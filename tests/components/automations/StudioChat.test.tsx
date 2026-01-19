@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { StudioChat } from "@/components/automations/StudioChat";
+import { StudioChat } from "@/features/copilot/ui/chat";
 
 vi.mock("@/components/providers/user-profile-provider", () => ({
   useUserProfile: () => ({
@@ -199,7 +199,7 @@ describe("StudioChat", () => {
 });
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { StudioChat } from "@/components/automations/StudioChat";
+import { StudioChat } from "@/features/copilot/ui/chat";
 
 vi.mock("@/components/providers/user-profile-provider", () => ({
   useUserProfile: () => ({

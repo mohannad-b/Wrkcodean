@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { StudioChat } from "@/components/automations/StudioChat";
+import { StudioChat } from "@/features/copilot/ui/chat";
 import { StudioCanvas } from "@/features/workflows/ui/canvas/StudioCanvas";
 import { StudioInspector } from "@/components/automations/StudioInspector";
 
