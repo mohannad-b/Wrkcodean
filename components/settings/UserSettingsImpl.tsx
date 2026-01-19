@@ -37,6 +37,7 @@ import { useUserProfile } from "@/components/providers/user-profile-provider";
 import { useToast } from "@/components/ui/use-toast";
 import type { UserProfile } from "@/lib/user/profile-shared";
 import { logger } from "@/lib/logger";
+import { uploadAvatar } from "@/features/profile/services/profileApi";
 
 // --- Mock Data ---
 
@@ -260,10 +261,7 @@ const ProfileTab = ({ onSave, isSaving }: { onSave?: () => void; isSaving?: bool
       const data = new FormData();
       data.append("file", file);
 
-      const response = await fetch("/api/me/avatar", {
-        method: "POST",
-        body: data,
-      });
+      const response = await uploadAvatar(data);
 
       const body = await response.json().catch(() => ({}));
 

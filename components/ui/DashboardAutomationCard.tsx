@@ -9,6 +9,7 @@ import { MoreHorizontal, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DashboardAutomation } from "@/lib/mock-dashboard";
 import { cardClasses } from "@/components/ui/card-shell";
+import { createAutomationVersion, updateAutomationStatus } from "@/features/automations/services/automationApi";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -148,10 +149,8 @@ export function DashboardAutomationCard({ automation }: DashboardAutomationCardP
 
                   void (async () => {
                     try {
-                      const response = await fetch(`/api/automations/${automation.id}/versions`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ copyFromVersionId: automation.latestVersionId }),
+                      const response = await createAutomationVersion(automation.id, {
+                        copyFromVersionId: automation.latestVersionId,
                       });
 
                       const payload = (await response.json().catch(() => ({}))) as
@@ -184,7 +183,8 @@ export function DashboardAutomationCard({ automation }: DashboardAutomationCardP
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  if (!automation.latestVersionId) {
+                  const latestVersionId = automation.latestVersionId;
+                  if (!latestVersionId) {
                     toast({
                       variant: "warning",
                       title: "No version to archive",
@@ -195,11 +195,7 @@ export function DashboardAutomationCard({ automation }: DashboardAutomationCardP
 
                   void (async () => {
                     try {
-                      const response = await fetch(`/api/automation-versions/${automation.latestVersionId}/status`, {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ status: "Archived" }),
-                      });
+                      const response = await updateAutomationStatus(latestVersionId, "Archived");
 
                       const payload = (await response.json().catch(() => ({}))) as { error?: string } | undefined;
                       if (!response.ok) {

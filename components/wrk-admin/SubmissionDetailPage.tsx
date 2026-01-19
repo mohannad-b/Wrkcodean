@@ -24,7 +24,7 @@ import { PricingOverridePanel } from "@/components/admin/PricingOverridePanel";
 import { WorkflowChatView } from "@/components/workflow-chat/WorkflowChatView";
 import dynamic from "next/dynamic";
 import { useNodesState, useEdgesState, type Edge } from "reactflow";
-import type { StudioCanvasProps } from "@/components/StudioCanvas";
+import type { StudioCanvasProps } from "@/features/workflows/ui/canvas/StudioCanvas";
 import type { CanvasNodeData } from "@/lib/workflows/canvas-utils";
 import { workflowToEdges, workflowToNodes } from "@/lib/workflows/canvas-utils";
 import { createEmptyWorkflowSpec } from "@/lib/workflows/factory";
@@ -35,15 +35,25 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
 import type { AutomationLifecycleStatus } from "@/lib/automations/status";
 import { wrkAdminRoutes } from "@/lib/admin/routes";
+import {
+  createAdminSubmissionQuote,
+  fetchAdminSubmissionDetail,
+  sendAdminEmail,
+  updateAdminAutomationVersionStatus,
+} from "@/features/admin/services/adminSubmissionsApi";
+import { updateQuoteStatus } from "@/features/quotes/services/quoteApi";
 
-const StudioCanvas = dynamic<StudioCanvasProps>(() => import("@/components/StudioCanvas").then((m) => m.StudioCanvas), {
-  loading: () => (
-    <div className="w-full h-full flex items-center justify-center bg-[#F9FAFB]">
-      <div className="text-sm text-gray-500">Loading canvas...</div>
-    </div>
-  ),
-  ssr: false,
-});
+const StudioCanvas = dynamic<StudioCanvasProps>(
+  () => import("@/features/workflows/ui/canvas/StudioCanvas").then((m) => m.StudioCanvas),
+  {
+    loading: () => (
+      <div className="w-full h-full flex items-center justify-center bg-[#F9FAFB]">
+        <div className="text-sm text-gray-500">Loading canvas...</div>
+      </div>
+    ),
+    ssr: false,
+  }
+);
 
 const ANALYSIS_STATS = [
   { label: "API Cost / Run", value: "$0.012" },
@@ -792,7 +802,7 @@ export default function SubmissionDetailPage({ params }: SubmissionDetailPagePro
       return;
     }
     try {
-      const response = await fetch(`/api/admin/submissions/${submissionId}`, { cache: "no-store" });
+      const response = await fetchAdminSubmissionDetail(submissionId);
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error ?? "Failed to load submission");
@@ -915,11 +925,7 @@ export default function SubmissionDetailPage({ params }: SubmissionDetailPagePro
     setUpdatingQuote(nextStatus);
     setError(null);
     try {
-      const response = await fetch(`/api/quotes/${latestQuote.id}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: nextStatus }),
-      });
+      const response = await updateQuoteStatus(latestQuote.id, { status: nextStatus });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error ?? "Failed to update quote");
@@ -937,11 +943,7 @@ export default function SubmissionDetailPage({ params }: SubmissionDetailPagePro
     setMarkingLive(true);
     setError(null);
     try {
-      const response = await fetch(`/api/admin/automation-versions/${project.version.id}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "Live" }),
-      });
+      const response = await updateAdminAutomationVersionStatus(project.version.id, "Live");
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error ?? "Failed to mark live");
@@ -961,11 +963,7 @@ export default function SubmissionDetailPage({ params }: SubmissionDetailPagePro
     setSavingQuote(true);
     setError(null);
     try {
-      const response = await fetch(`/api/admin/submissions/${submissionId}/quote`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ setupFee, unitPrice }),
-      });
+      const response = await createAdminSubmissionQuote(submissionId, { setupFee, unitPrice });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error ?? "Failed to draft quote");
@@ -982,14 +980,10 @@ export default function SubmissionDetailPage({ params }: SubmissionDetailPagePro
     try {
       const parsed = JSON.parse(emailVariablesText);
       setEmailSendStatus("Sending...");
-      const res = await fetch("/api/admin/email/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          to: recipientEmail,
-          templateId: selectedEmailType,
-          variables: parsed,
-        }),
+      const res = await sendAdminEmail({
+        to: recipientEmail,
+        templateId: selectedEmailType,
+        variables: parsed,
       });
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));

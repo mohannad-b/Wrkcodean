@@ -71,9 +71,16 @@ function redactValue(value: unknown, markTruncated: () => void): unknown {
 function sanitizeMeta(meta?: TraceEventMeta): { meta?: TraceEventMeta; metaTruncated: boolean } {
   if (!meta) return { meta: undefined, metaTruncated: false };
   let truncated = false;
+  let hardTruncate = false;
+  const seen = new WeakSet<object>();
 
   const clamp = (value: unknown, path: string[] = []): unknown => {
     if (typeof value === "string") {
+      if (value.length > MAX_META_BYTES) {
+        truncated = true;
+        hardTruncate = true;
+        return "[TRUNCATED]";
+      }
       return redactValue(value, () => {
         truncated = true;
       });
@@ -84,6 +91,12 @@ function sanitizeMeta(meta?: TraceEventMeta): { meta?: TraceEventMeta; metaTrunc
       return sliced;
     }
     if (value && typeof value === "object") {
+      if (seen.has(value as object)) {
+        truncated = true;
+        hardTruncate = true;
+        return "[CIRCULAR]";
+      }
+      seen.add(value as object);
       const result: Record<string, unknown> = {};
       Object.entries(value as Record<string, unknown>).forEach(([key, val]) => {
         const lowerKey = key.toLowerCase();
@@ -100,6 +113,10 @@ function sanitizeMeta(meta?: TraceEventMeta): { meta?: TraceEventMeta; metaTrunc
   };
 
   const sanitized = clamp(meta) as TraceEventMeta;
+
+  if (hardTruncate) {
+    return { meta: { metaTruncated: true }, metaTruncated: true };
+  }
 
   try {
     const encoded = new TextEncoder().encode(JSON.stringify(sanitized));
@@ -181,8 +198,10 @@ export function createCopilotTrace(context: TraceContext = {}): CopilotTrace {
     createCopilotTrace({ ...context, phase: phaseName });
 
   const spanStart = (spanName: string, meta?: TraceEventMeta): SpanHandle => {
+    const cryptoRef =
+      typeof globalThis !== "undefined" && "crypto" in globalThis ? (globalThis.crypto as Crypto) : undefined;
     const span: SpanHandle = {
-      spanId: crypto.randomUUID ? crypto.randomUUID() : `${Math.random()}`.slice(2),
+      spanId: cryptoRef?.randomUUID ? cryptoRef.randomUUID() : `${Math.random()}`.slice(2),
       startedAt: Date.now(),
       name: spanName,
     };

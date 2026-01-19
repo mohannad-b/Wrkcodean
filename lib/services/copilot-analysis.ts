@@ -72,6 +72,7 @@ export async function upsertCopilotAnalysis(
     payload.asked_questions_normalized ?? payload.memory?.asked_questions_normalized ?? [];
   const facts = payload.facts ?? payload.memory?.facts ?? {};
   const assumptions = payload.assumptions ?? [];
+  const progress = payload.progress ? (payload.progress as unknown as Record<string, unknown>) : null;
   let workflowUpdatedAt: Date | null = null;
   if (params.workflowUpdatedAt) {
     const coerced =
@@ -91,7 +92,7 @@ export async function upsertCopilotAnalysis(
       askedQuestionsNormalized: askedNormalized,
       facts,
       assumptions,
-      progress: payload.progress ?? null,
+      progress,
       lastUserMessageId: payload.lastUserMessageId ?? null,
       lastAssistantMessageId: payload.lastAssistantMessageId ?? null,
       workflowUpdatedAt,
@@ -106,7 +107,7 @@ export async function upsertCopilotAnalysis(
         askedQuestionsNormalized: askedNormalized,
         facts,
         assumptions,
-        progress: payload.progress ?? null,
+        progress,
         lastUserMessageId: payload.lastUserMessageId ?? null,
         lastAssistantMessageId: payload.lastAssistantMessageId ?? null,
         workflowUpdatedAt,

@@ -198,7 +198,7 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
       throw new Error("OpenAI returned an empty response");
     }
 
-    logDebug("draft_blueprint.raw_response", content);
+    logDebug("draft_blueprint.raw_response", { content });
     logger.debug("[copilot:draft-blueprint] raw_response_meta", { length: content.length });
 
     const aiResponse = parseAIResponse(content);

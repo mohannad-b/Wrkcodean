@@ -1,6 +1,9 @@
+"use client";
+
 import * as React from "react";
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
+import { usePathname } from "next/navigation";
 
 import { cn } from "./utils";
 
@@ -38,10 +41,77 @@ const Button = React.forwardRef<
     VariantProps<typeof buttonVariants> & {
       asChild?: boolean;
     }
->(({ className, variant, size, asChild = false, ...props }, ref) => {
-  const Comp = asChild ? Slot : "button";
+>(
+  (
+    {
+      className,
+      variant,
+      size,
+      asChild = false,
+      disabled,
+      onClick,
+      children,
+      ...props
+    },
+    ref
+  ) => {
+    const Comp = asChild ? Slot : "button";
+    const pathname = usePathname();
+    const [isLoading, setIsLoading] = React.useState(false);
+    const currentUrl = React.useMemo(() => pathname, [pathname]);
+    const lastUrlRef = React.useRef(currentUrl);
 
-  return <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props} />;
+    React.useEffect(() => {
+      if (lastUrlRef.current !== currentUrl) {
+        lastUrlRef.current = currentUrl;
+        setIsLoading(false);
+      }
+    }, [currentUrl]);
+
+    const handleClick = React.useCallback(
+      (event: React.MouseEvent<HTMLElement>) => {
+        if (disabled || isLoading) {
+          return;
+        }
+        onClick?.(event as React.MouseEvent<HTMLButtonElement>);
+        if (!event.defaultPrevented) {
+          setIsLoading(true);
+        }
+      },
+      [disabled, isLoading, onClick]
+    );
+
+    const isDisabled = disabled || isLoading;
+    const content = (
+      <>
+        <span className={cn("inline-flex items-center gap-2", isLoading && "opacity-0")}>
+          {children}
+        </span>
+        {isLoading ? (
+          <span className="absolute inset-0 flex items-center justify-center">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          </span>
+        ) : null}
+      </>
+    );
+
+    return (
+      <Comp
+        className={cn(
+          buttonVariants({ variant, size, className }),
+          isLoading && "relative pointer-events-none"
+        )}
+        ref={ref}
+        onClick={handleClick}
+        disabled={Comp === "button" ? isDisabled : undefined}
+        aria-disabled={isDisabled || undefined}
+        aria-busy={isLoading || undefined}
+        data-loading={isLoading || undefined}
+        {...props}
+      >
+        {content}
+      </Comp>
+    );
 });
 Button.displayName = "Button";
 

@@ -7,6 +7,13 @@ import { Loader2, X, Download, MoreHorizontal, Trash2, FileText, Upload, History
 import { SystemPickerModal } from "@/components/modals/SystemPickerModal";
 import { CredentialsModal } from "@/components/modals/CredentialsModal";
 import { logger } from "@/lib/logger";
+import {
+  createUpload,
+  deleteUploadVersion,
+  fetchUploadHistory,
+  fetchUploads,
+} from "@/features/uploads/services/uploadApi";
+import { createCredential } from "@/features/credentials/services/credentialsApi";
 
 type VersionTask = any;
 
@@ -97,13 +104,11 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
     setFileLoading(true);
     setFileError(null);
     try {
-      const res = await fetch(
-        `/api/uploads?${new URLSearchParams({
-          resourceType: "task",
-          resourceId: task.id,
-          purpose: "task_attachment",
-        }).toString()}`
-      );
+      const res = await fetchUploads({
+        resourceType: "task",
+        resourceId: task.id,
+        purpose: "task_attachment",
+      });
       const data = await res.json();
       const files = (data.files ?? []) as any[];
       const groups = await Promise.all(
@@ -121,7 +126,7 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
             uploaderAvatar: f.latest?.uploaderAvatar ?? f.uploaderAvatar,
           };
           try {
-            const historyRes = await fetch(`/api/uploads/history/${f.id}`);
+            const historyRes = await fetchUploadHistory(f.id);
             const historyJson = await historyRes.json().catch(() => ({}));
             const versionsRaw = (historyJson.versions ?? []) as any[];
             const versions: FileVersionItem[] = versionsRaw
@@ -181,7 +186,7 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
         form.append("resourceType", "task");
         form.append("resourceId", task.id);
         form.append("file", file);
-        const res = await fetch("/api/uploads", { method: "POST", body: form });
+        const res = await createUpload(form);
         const data = await res.json();
         if (!res.ok) {
           throw new Error(data.error ?? "Upload failed");
@@ -201,7 +206,7 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
     setFileLoading(true);
     setFileBusyAction("deleting");
     try {
-      const res = await fetch(`/api/uploads/${versionId}`, { method: "DELETE" });
+      const res = await deleteUploadVersion(versionId);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? "Delete failed");
@@ -227,7 +232,7 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
       form.append("resourceId", task.id);
       form.append("versionOfFileId", fileId);
       form.append("file", file);
-      const res = await fetch("/api/uploads", { method: "POST", body: form });
+      const res = await createUpload(form);
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error ?? "Upload failed");
@@ -261,7 +266,7 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
     setHistoryItems([]);
     setFileError(null);
     try {
-      const res = await fetch(`/api/uploads/history/${fileId}`);
+      const res = await fetchUploadHistory(fileId);
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error ?? "Unable to load history");
@@ -340,18 +345,12 @@ export function TaskDrawer({ task, onClose, onSave, saving }: TaskDrawerProps) {
     username?: string;
     password?: string;
   }) => {
-    const res = await fetch("/api/credentials", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        taskId: task.id,
-        systemName: payload.systemName,
-        connectedVia: payload.connectedVia,
-        username: payload.username,
-        password: payload.password,
-      }),
+    const res = await createCredential({
+      taskId: task.id,
+      systemName: payload.systemName,
+      connectedVia: payload.connectedVia,
+      username: payload.username,
+      password: payload.password,
     });
 
     const data = await res.json().catch(() => ({}));

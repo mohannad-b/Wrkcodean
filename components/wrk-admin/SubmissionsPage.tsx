@@ -10,6 +10,7 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { cn } from "@/lib/utils";
 import { getStatusLabel, resolveStatus } from "@/lib/submissions/lifecycle";
 import { wrkAdminRoutes } from "@/lib/admin/routes";
+import { fetchAdminSubmissions } from "@/features/admin/services/adminSubmissionsApi";
 
 type SubmissionRow = {
   id: string;
@@ -44,7 +45,7 @@ export function SubmissionsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/admin/submissions", { cache: "no-store" });
+      const res = await fetchAdminSubmissions();
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload.error ?? "Failed to load submissions");

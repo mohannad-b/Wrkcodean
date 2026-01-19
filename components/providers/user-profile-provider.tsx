@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import type { UserProfile } from "@/lib/user/profile";
 import { logger } from "@/lib/logger";
+import { fetchProfile } from "@/features/profile/services/profileApi";
 
 type UserProfileContextValue = {
   profile: UserProfile | null;
@@ -35,7 +36,7 @@ export function UserProfileProvider({ initialProfile, initialLastUpdatedAt = nul
   const refreshProfile = useCallback(async () => {
     try {
       setIsHydrating(true);
-      const response = await fetch("/api/me/profile", { cache: "no-store" });
+      const response = await fetchProfile();
       if (!response.ok) {
         throw new Error("Failed to load profile");
       }

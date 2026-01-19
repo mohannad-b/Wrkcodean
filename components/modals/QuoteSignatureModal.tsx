@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { WrkLogo } from "@/components/brand/WrkLogo";
+import { updateQuoteStatus } from "@/features/quotes/services/quoteApi";
+import { priceAutomationQuote } from "@/features/automations/services/automationApi";
 
 interface QuoteSignatureModalProps {
   open: boolean;
@@ -89,17 +91,13 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
       return;
     }
     try {
-      const response = await fetch(`/api/quotes/${quoteId}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status: "signed",
-          signature_metadata: {
-            name: signature,
-            company: companyName,
-            channel: "in_app",
-          },
-        }),
+      const response = await updateQuoteStatus(quoteId, {
+        status: "signed",
+        signature_metadata: {
+          name: signature,
+          company: companyName,
+          channel: "in_app",
+        },
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -127,16 +125,12 @@ export const QuoteSignatureModal: React.FC<QuoteSignatureModalProps> = ({
     setApplyingDiscount(true);
     setDiscountMessage(null);
     try {
-      const response = await fetch(`/api/automation-versions/${automationVersionId}/price-and-quote`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          complexity: "medium",
-          estimatedVolume: volume,
-          estimatedActions: [],
-          discounts: [],
-          discountCode: discountCode.trim(),
-        }),
+      const response = await priceAutomationQuote(automationVersionId, {
+        complexity: "medium",
+        estimatedVolume: volume,
+        estimatedActions: [],
+        discounts: [],
+        discountCode: discountCode.trim(),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));

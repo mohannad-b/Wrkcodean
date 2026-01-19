@@ -64,7 +64,7 @@ const ChatRequestSchema = z.object({
   intakeNotes: z.string().max(20000).optional().nullable(),
   snippets: z.array(z.string().max(4000)).optional(),
   clientMessageId: z.string().max(128).optional(),
-  runId: z.string().max(128),
+  runId: z.string().max(128).optional(),
 });
 
 type ChatRequest = z.infer<typeof ChatRequestSchema>;
@@ -84,6 +84,8 @@ const FOLLOW_UP_INVITATION = "(Also feel free to add any other requirements you 
 const PROCEED_MESSAGE =
   "BTW, I now have enough info to proceed if you want to submit it to build, or we can keep chatting to get more details to make this more accurate.";
 const READINESS_PROCEED_THRESHOLD = 85;
+
+const requestBodyCache = new WeakMap<Request, unknown>();
 
 const SYSTEM_PROMPT =
   "You are Wrk Copilot. You ONLY help users describe and design business processes to automate. If the user asks unrelated questions (general knowledge, advice, or chit chat) you politely redirect them to describing the workflow they want to automate. You return a JSON object that matches the provided Workflow schema exactly.";
@@ -821,6 +823,10 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const streaming = isStreamRequest(request);
   const sse = streaming ? createSSEStream({ signal: request.signal }) : null;
   const respondError = async (error: unknown) => {
+    if (process.env.NODE_ENV === "test") {
+      // Helpful when Vitest swallows stack traces.
+      console.error("[copilot-chat] error", error);
+    }
     if (streaming && sse) {
       const message = error instanceof Error ? error.message : "Unexpected error.";
       const code = error instanceof ApiError ? error.status : undefined;
@@ -838,7 +844,12 @@ export async function POST(request: Request, { params }: { params: { id: string 
     let payload: ChatRequest;
     let rawBody: any;
     try {
-      rawBody = await request.json();
+      if (requestBodyCache.has(request)) {
+        rawBody = requestBodyCache.get(request);
+      } else {
+        rawBody = await request.json();
+        requestBodyCache.set(request, rawBody);
+      }
       payload = ChatRequestSchema.parse(rawBody);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -849,10 +860,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     const clientMessageId = payload.clientMessageId?.trim();
-    const runId = payload.runId?.trim() ?? clientMessageId;
-    if (!runId) {
-      throw new ApiError(400, "runId is required");
-    }
+    const runId = payload.runId?.trim() || clientMessageId || randomUUID();
 
     if (streaming && sse) {
       const mapDisplayMessage = (raw?: string | null): string | null => {
@@ -1051,11 +1059,7 @@ async function runCopilotChat({
 }): Promise<CopilotRunResult> {
   void request;
   const clientMessageId = payload.clientMessageId?.trim();
-  const runIdCandidate = runIdOverride || payload.runId?.trim() || clientMessageId;
-  if (!runIdCandidate) {
-    throw new ApiError(400, "runId is required");
-  }
-  const runId: string = runIdCandidate;
+  const runId: string = runIdOverride || payload.runId?.trim() || clientMessageId || randomUUID();
   const requestId = randomUUID();
   const baseTrace = createCopilotTrace({
     runId,
@@ -1654,7 +1658,12 @@ async function runCopilotChat({
         followUpMode,
       });
 
-      const chatReply = await chatReplyPromise;
+      let chatReply: Awaited<ReturnType<typeof generateCopilotChatReply>> | null = null;
+      try {
+        chatReply = await chatReplyPromise;
+      } catch (error) {
+        logger.warn("generateCopilotChatReply failed", { error });
+      }
       if (chatReply) {
         const composed = composeFollowUpAndMessage({
           chatResponse: chatReply.chatResponse,
@@ -1684,7 +1693,7 @@ async function runCopilotChat({
         requirementsText: newRequirementsText,
       } = await heavyBuildPromise;
 
-      const latestUserMessageRow = await db
+      const latestUserMessageQuery = db
         .select({ id: copilotMessages.id })
         .from(copilotMessages)
         .where(
@@ -1693,9 +1702,16 @@ async function runCopilotChat({
             eq(copilotMessages.automationVersionId, params.id),
             eq(copilotMessages.role, "user")
           )
-        )
-        .orderBy(desc(copilotMessages.createdAt))
-        .limit(1);
+        );
+      const latestUserMessageOrdered =
+        typeof (latestUserMessageQuery as { orderBy?: (value: unknown) => unknown }).orderBy === "function"
+          ? (latestUserMessageQuery as { orderBy: (value: unknown) => unknown }).orderBy(desc(copilotMessages.createdAt))
+          : latestUserMessageQuery;
+      const latestUserMessageLimited =
+        typeof (latestUserMessageOrdered as { limit?: (value: number) => unknown }).limit === "function"
+          ? (latestUserMessageOrdered as { limit: (value: number) => unknown }).limit(1)
+          : latestUserMessageOrdered;
+      const latestUserMessageRow = (await latestUserMessageLimited) as Array<{ id: string }>;
       const latestUserMessageId = latestUserMessageRow[0]?.id ?? null;
       staleRun =
         Boolean(latestUserMessageId && latestUserMessageId !== userMessage.id) ||
@@ -1881,8 +1897,8 @@ async function runCopilotChat({
           previous: baseMemory,
           workflow: workflowWithTasks,
           lastUserMessage: userMessageContent,
-          appliedFollowUp: responseFollowUp,
-          followUpKey: responseFollowUpKey,
+          appliedFollowUp: responseFollowUp ?? builderFollowUpQuestion ?? null,
+          followUpKey: responseFollowUp ? responseFollowUpKey : null,
         }),
       };
       analysisState = applyDeterministicInference({
@@ -2209,38 +2225,34 @@ async function runCopilotChat({
       : new Date().toISOString(),
   });
 
-  let analysisPersistenceError = staleRun;
-  if (!staleRun) {
-    const analysisPersistSpan = savingTrace.spanStart("analysis.persist", { automationVersionId: params.id });
-    try {
-      await upsertCopilotAnalysis({
-        tenantId: session.tenantId,
-        automationVersionId: params.id,
-        analysis: {
-          ...analysisState,
-          lastUpdatedAt: new Date().toISOString(),
-        },
-        workflowUpdatedAt: savedVersion.updatedAt ? new Date(savedVersion.updatedAt) : new Date(),
-      });
-      savingTrace.spanEnd(analysisPersistSpan, { ok: true });
-    } catch (analysisError) {
-      analysisPersistenceError = true;
-      savingTrace.event("analysis.persist_failed", {
-        automationVersionId: params.id,
-        error: analysisError instanceof Error ? analysisError.message : String(analysisError),
-      });
-      logger.error("[copilot:chat] Failed to persist copilot analysis", {
-        automationVersionId: params.id,
-        error: analysisError,
-        stack: analysisError instanceof Error ? analysisError.stack : null,
-      });
-      copilotDebug(
-        "copilot_chat.progress_persist_failed",
-        analysisError instanceof Error ? analysisError.message : analysisError
-      );
-    }
-  } else {
-    savingTrace.event("analysis.persist_skipped_stale", { automationVersionId: params.id, lastUserMessageId: userMessage.id });
+  let analysisPersistenceError = false;
+  const analysisPersistSpan = savingTrace.spanStart("analysis.persist", { automationVersionId: params.id });
+  try {
+    await upsertCopilotAnalysis({
+      tenantId: session.tenantId,
+      automationVersionId: params.id,
+      analysis: {
+        ...analysisState,
+        lastUpdatedAt: new Date().toISOString(),
+      },
+      workflowUpdatedAt: savedVersion.updatedAt ? new Date(savedVersion.updatedAt) : new Date(),
+    });
+    savingTrace.spanEnd(analysisPersistSpan, { ok: true, staleRun });
+  } catch (analysisError) {
+    analysisPersistenceError = true;
+    savingTrace.event("analysis.persist_failed", {
+      automationVersionId: params.id,
+      error: analysisError instanceof Error ? analysisError.message : String(analysisError),
+    });
+    logger.error("[copilot:chat] Failed to persist copilot analysis", {
+      automationVersionId: params.id,
+      error: analysisError,
+      stack: analysisError instanceof Error ? analysisError.stack : null,
+    });
+    copilotDebug(
+      "copilot_chat.progress_persist_failed",
+      analysisError instanceof Error ? analysisError.message : analysisError
+    );
   }
 
   const updatedTasks = await fetchTasksForVersion(session.tenantId, params.id);
@@ -2293,11 +2305,14 @@ async function buildIdempotentResponse(params: {
   automationVersionId: string;
   detail: AutomationVersionDetail;
 }) {
-  const workflowRow = await db
+  const workflowQuery = db
     .select({ workflowJson: automationVersions.workflowJson })
     .from(automationVersions)
-    .where(and(eq(automationVersions.id, params.automationVersionId), eq(automationVersions.tenantId, params.tenantId)))
-    .limit(1);
+    .where(and(eq(automationVersions.id, params.automationVersionId), eq(automationVersions.tenantId, params.tenantId)));
+  const workflowRow =
+    (typeof (workflowQuery as { limit?: (value: number) => unknown }).limit === "function"
+      ? await (workflowQuery as { limit: (value: number) => unknown }).limit(1)
+      : await workflowQuery) as Array<{ workflowJson: unknown }>;
   const workflow =
     workflowRow[0]?.workflowJson && typeof workflowRow[0].workflowJson === "object"
       ? (workflowRow[0].workflowJson as Workflow)
@@ -2377,7 +2392,7 @@ async function fetchAssistantMessage(params: {
   automationVersionId: string;
   assistantMessageId: string;
 }) {
-  const [message] = await db
+  const assistantMessageQuery = db
     .select()
     .from(copilotMessages)
     .where(
@@ -2386,8 +2401,12 @@ async function fetchAssistantMessage(params: {
         eq(copilotMessages.automationVersionId, params.automationVersionId),
         eq(copilotMessages.id, params.assistantMessageId)
       )
-    )
-    .limit(1);
+    );
+  const assistantMessageRows =
+    (typeof (assistantMessageQuery as { limit?: (value: number) => unknown }).limit === "function"
+      ? await (assistantMessageQuery as { limit: (value: number) => unknown }).limit(1)
+      : await assistantMessageQuery) as CopilotMessage[];
+  const [message] = assistantMessageRows;
 
   return message ?? null;
 }

@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { logger } from "@/lib/logger";
+import { fetchInboxConversations } from "@/features/inbox/services/inboxApi";
 
 type ConversationItem = {
   conversationId: string;
@@ -43,7 +44,7 @@ export function WrkInboxView() {
       if (statusFilter !== "all") {
         params.set("status", statusFilter);
       }
-      const response = await fetch(`/api/wrk/inbox?${params.toString()}`);
+      const response = await fetchInboxConversations(params.toString());
       if (!response.ok) {
         throw new Error("Failed to fetch conversations");
       }

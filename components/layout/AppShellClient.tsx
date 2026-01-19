@@ -5,6 +5,7 @@ import { Sidebar } from "./Sidebar";
 import { UserProfileProvider } from "@/components/providers/user-profile-provider";
 import { UserProfile } from "@/lib/user/profile-shared";
 import { cn } from "@/lib/utils";
+import { fetchVendorCssSnapshot, sendAgentLog } from "@/features/layout/services/vendorInspector";
 
 const SIDEBAR_STORAGE_KEY = "wrk:sidebar-collapsed";
 
@@ -47,24 +48,20 @@ export function AppShellClient({ children, initialProfile, initialLastUpdatedAt 
     const vendorLink = document.querySelector('link[href*="vendor.css"]') as HTMLLinkElement | null;
 
     // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId: "baseline",
-        hypothesisId: "H1",
-        location: "components/layout/AppShellClient.tsx:vendor-css",
-        message: "vendor.css link discovery",
-        data: {
-          href: vendorLink?.href ?? null,
-          tag: vendorLink?.tagName ?? null,
-          rel: vendorLink && "rel" in vendorLink ? (vendorLink as HTMLLinkElement).rel : null,
-          as: vendorLink && "as" in vendorLink ? (vendorLink as HTMLLinkElement).as : null,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
+    sendAgentLog({
+      sessionId: "debug-session",
+      runId: "baseline",
+      hypothesisId: "H1",
+      location: "components/layout/AppShellClient.tsx:vendor-css",
+      message: "vendor.css link discovery",
+      data: {
+        href: vendorLink?.href ?? null,
+        tag: vendorLink?.tagName ?? null,
+        rel: vendorLink && "rel" in vendorLink ? (vendorLink as HTMLLinkElement).rel : null,
+        as: vendorLink && "as" in vendorLink ? (vendorLink as HTMLLinkElement).as : null,
+      },
+      timestamp: Date.now(),
+    });
     // #endregion
 
     if (!vendorLink?.href) {
@@ -73,45 +70,35 @@ export function AppShellClient({ children, initialProfile, initialLastUpdatedAt 
 
     const inspectVendorCss = async () => {
       try {
-        const response = await fetch(vendorLink.href);
-        const contentType = response.headers.get("content-type");
-        const text = await response.text();
+        const { response, contentType, text } = await fetchVendorCssSnapshot(vendorLink.href);
 
         // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: "debug-session",
-            runId: "baseline",
-            hypothesisId: "H2",
-            location: "components/layout/AppShellClient.tsx:vendor-css",
-            message: "vendor.css response snapshot",
-            data: {
-              status: response.status,
-              contentType,
-              length: text.length,
-              prefix: text.slice(0, 120),
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
+        sendAgentLog({
+          sessionId: "debug-session",
+          runId: "baseline",
+          hypothesisId: "H2",
+          location: "components/layout/AppShellClient.tsx:vendor-css",
+          message: "vendor.css response snapshot",
+          data: {
+            status: response.status,
+            contentType,
+            length: text.length,
+            prefix: text.slice(0, 120),
+          },
+          timestamp: Date.now(),
+        });
         // #endregion
       } catch (error) {
         // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: "debug-session",
-            runId: "baseline",
-            hypothesisId: "H3",
-            location: "components/layout/AppShellClient.tsx:vendor-css",
-            message: "vendor.css fetch failed",
-            data: { error: error instanceof Error ? error.message : String(error) },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
+        sendAgentLog({
+          sessionId: "debug-session",
+          runId: "baseline",
+          hypothesisId: "H3",
+          location: "components/layout/AppShellClient.tsx:vendor-css",
+          message: "vendor.css fetch failed",
+          data: { error: error instanceof Error ? error.message : String(error) },
+          timestamp: Date.now(),
+        });
         // #endregion
       }
     };
@@ -123,24 +110,20 @@ export function AppShellClient({ children, initialProfile, initialLastUpdatedAt 
     const sampleScripts = allScripts.slice(0, 5).map((s) => s.src);
 
     // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId: "baseline",
-        hypothesisId: "H4",
-        location: "components/layout/AppShellClient.tsx:scripts-scan",
-        message: "script tags scan",
-        data: {
-          vendorScriptCount: vendorScripts.length,
-          vendorScriptSrc: vendorScripts.map((s) => s.src),
-          sampleScriptSrc: sampleScripts,
-          totalScripts: allScripts.length,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
+    sendAgentLog({
+      sessionId: "debug-session",
+      runId: "baseline",
+      hypothesisId: "H4",
+      location: "components/layout/AppShellClient.tsx:scripts-scan",
+      message: "script tags scan",
+      data: {
+        vendorScriptCount: vendorScripts.length,
+        vendorScriptSrc: vendorScripts.map((s) => s.src),
+        sampleScriptSrc: sampleScripts,
+        totalScripts: allScripts.length,
+      },
+      timestamp: Date.now(),
+    });
     // #endregion
 
     if (vendorScripts[0]) {
@@ -158,19 +141,15 @@ export function AppShellClient({ children, initialProfile, initialLastUpdatedAt 
       };
 
       // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/ab856c53-a41f-49e1-b192-03a8091a4fdc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: "debug-session",
-          runId: "baseline",
-          hypothesisId: "H5",
-          location: "components/layout/AppShellClient.tsx:script-attrs",
-          message: "vendor.css script attributes",
-          data: attrs,
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
+      sendAgentLog({
+        sessionId: "debug-session",
+        runId: "baseline",
+        hypothesisId: "H5",
+        location: "components/layout/AppShellClient.tsx:script-attrs",
+        message: "vendor.css script attributes",
+        data: attrs,
+        timestamp: Date.now(),
+      });
       // #endregion
     }
   }, []);

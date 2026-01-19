@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Send, Paperclip, MessageSquare, ShieldCheck, Loader2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -10,6 +10,11 @@ import { useUserProfile } from "@/components/providers/user-profile-provider";
 import type { WorkflowMessage } from "./WorkflowChat";
 import { formatDistanceToNow } from "date-fns";
 import { logger } from "@/lib/logger";
+import {
+  fetchWorkflowMessages,
+  markWorkflowChatRead,
+  sendWorkflowMessage,
+} from "@/features/workflows/services/workflowChatApi";
 
 type TypingState = {
   userId: string;
@@ -55,7 +60,7 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
   const fetchMessages = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch(`/api/workflows/${workflowId}/chat/messages`);
+      const response = await fetchWorkflowMessages(workflowId);
       if (!response.ok) {
         throw new Error("Failed to fetch messages");
       }
@@ -78,11 +83,7 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
     if (!conversationId) return;
 
     try {
-      await fetch(`/api/workflows/${workflowId}/chat/read`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lastReadMessageId: messageId }),
-      });
+      await markWorkflowChatRead(workflowId, messageId);
     } catch (error) {
       logger.error("Failed to mark as read:", error);
     }
@@ -127,13 +128,9 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
     setIsAtBottom(true);
 
     try {
-      const response = await fetch(`/api/workflows/${workflowId}/chat/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          body: trimmed,
-          clientGeneratedId: clientId,
-        }),
+      const response = await sendWorkflowMessage(workflowId, {
+        body: trimmed,
+        clientGeneratedId: clientId,
       });
 
       if (!response.ok) {
@@ -216,11 +213,7 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
               // Call markAsRead directly using ref to avoid dependency issues
               const currentConversationId = conversationIdRef.current;
               if (currentConversationId) {
-                fetch(`/api/workflows/${workflowId}/chat/read`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ lastReadMessageId: message.id }),
-                }).catch((error) => {
+                markWorkflowChatRead(workflowId, message.id).catch((error) => {
                   logger.error("Failed to mark as read:", error);
                 });
               }
@@ -315,8 +308,9 @@ export function WorkflowChatView({ workflowId, workflowName, disabled = false }:
     }
   };
 
-  const typingUsersList = Array.from(typingUsers.values()).filter(
-    (t) => t.userId !== profile?.id
+  const typingUsersList = useMemo(
+    () => Array.from(typingUsers.values()).filter((t) => t.userId !== profile?.id),
+    [profile?.id, typingUsers]
   );
 
   return (

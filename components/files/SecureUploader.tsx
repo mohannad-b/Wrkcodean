@@ -10,6 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type { UploadPurpose } from "@/lib/storage/file-service";
 import { logger } from "@/lib/logger";
+import { createUpload, fetchUploads } from "@/features/uploads/services/uploadApi";
 
 type FileVersionDto = {
   id: string;
@@ -81,7 +82,7 @@ export function SecureUploader({
       if (resourceId) qs.append("resourceId", resourceId);
       if (purpose) qs.append("purpose", purpose);
       try {
-        const res = await fetch(`/api/uploads?${qs.toString()}`);
+        const res = await fetchUploads(Object.fromEntries(qs.entries()));
         if (!res.ok) throw new Error("Unable to fetch uploads");
         const data = (await res.json()) as { files: FileDto[] };
         if (!cancelled) setExisting(data.files ?? []);
@@ -128,10 +129,7 @@ export function SecureUploader({
         form.append("url", remoteUrl);
       }
 
-      const res = await fetch("/api/uploads", {
-        method: "POST",
-        body: form,
-      });
+      const res = await createUpload(form);
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -229,13 +227,11 @@ export function SecureUploader({
           onClick={async () => {
             setExisting([]);
             setRefreshing(true);
-            const res = await fetch(
-              `/api/uploads?${new URLSearchParams({
-                ...(resourceType ? { resourceType } : {}),
-                ...(resourceId ? { resourceId } : {}),
-                ...(purpose ? { purpose } : {}),
-              }).toString()}`
-            );
+            const res = await fetchUploads({
+              ...(resourceType ? { resourceType } : {}),
+              ...(resourceId ? { resourceId } : {}),
+              ...(purpose ? { purpose } : {}),
+            });
             if (res.ok) {
               const data = (await res.json()) as { files: FileDto[] };
               setExisting(data.files ?? []);

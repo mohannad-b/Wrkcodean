@@ -21,6 +21,7 @@ export class ProgressPlanner {
   private runId: string;
   private requestId: string;
   private seq = 0;
+  private lastPhase: ProgressPhase | null = null;
 
   constructor(params: { runId: string; requestId: string; onEmit: (event: ProgressEvent) => void; maxEmits?: number }) {
     this.runId = params.runId;
@@ -39,6 +40,10 @@ export class ProgressPlanner {
     if (this.emittedCount >= this.maxEmits) return null;
     if (semanticKey && this.emittedKeys.has(semanticKey)) return null;
 
+    if (!providedMessage && this.emittedCount > 0 && this.lastPhase === phase) {
+      return null;
+    }
+
     const message = this.chooseMessage(phase, providedMessage);
     const normalized = this.normalize(message);
     if (this.lastMessage === normalized || this.normalizedMessages.has(normalized)) return null;
@@ -46,6 +51,7 @@ export class ProgressPlanner {
     if (!this.isValidEvent(message)) return null;
 
     this.lastMessage = normalized;
+    this.lastPhase = phase;
     this.normalizedMessages.add(normalized);
     this.emittedCount += 1;
     if (semanticKey) this.emittedKeys.add(semanticKey);
@@ -63,12 +69,11 @@ export class ProgressPlanner {
   }
 
   private chooseMessage(phase: ProgressPhase, provided?: string): string {
+    if (provided && provided.trim().length > 0) return this.clamp(provided.trim());
     const intent = this.intentSummary;
     if (this.emittedCount === 0) {
       return intent ? `Got it — ${intent}` : "Got it — working on it";
     }
-
-    if (provided && provided.trim().length > 0) return this.clamp(provided.trim());
 
     const PHASE_COPY: Record<ProgressPhase, string> = {
       connected: "Working on your workflow…",

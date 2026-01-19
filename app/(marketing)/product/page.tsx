@@ -4,8 +4,8 @@ import Link from "next/link";
 import React, { useState } from "react";
 import { AlertCircle, ArrowRight, CheckCircle2, GitBranch, MessageSquare, Shield, Terminal, Users, Zap } from "lucide-react";
 
-import { ActivityTab } from "@/components/marketing/ActivityTab";
-import { BuildStatusTab } from "@/components/marketing/BuildStatusTab";
+import { ActivityTabDemo } from "@/components/marketing-demo/ActivityTabDemo";
+import { BuildStatusTabDemo } from "@/components/marketing-demo/BuildStatusTabDemo";
 import { HeroStudioChat } from "@/components/website/HeroStudioChat";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -145,12 +145,12 @@ export default function ProductPage() {
             )}
             {activePreview === "build" && (
               <div className="px-4 py-6 md:scale-95 md:transform md:origin-top">
-                <BuildStatusTab />
+                <BuildStatusTabDemo />
               </div>
             )}
             {activePreview === "activity" && (
               <div className="px-4 py-6 md:scale-95 md:transform md:origin-top">
-                <ActivityTab />
+                <ActivityTabDemo />
               </div>
             )}
           </div>

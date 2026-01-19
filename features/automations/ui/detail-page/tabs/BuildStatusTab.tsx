@@ -1,0 +1,497 @@
+"use client";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { NeedsAttentionCard } from "@/components/automations/NeedsAttentionCard";
+import { QuoteSignatureModal } from "@/components/modals/QuoteSignatureModal";
+import { cn } from "@/lib/utils";
+import type { AutomationLifecycleStatus } from "@/lib/automations/status";
+import { getAttentionTasks, type AutomationTask } from "@/lib/automations/tasks";
+import { ACTIVE_LIFECYCLE_ORDER, getStatusLabel, resolveStatus } from "@/lib/submissions/lifecycle";
+import { AlertTriangle, Check, CheckCircle2, FileSignature, Hammer, Sparkles, Rocket } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+
+interface BuildStatusTabProps {
+  status?: AutomationLifecycleStatus | null;
+  latestQuote?: {
+    id?: string | null;
+    status: string;
+    setupFee: string | null;
+    unitPrice: string | null;
+    estimatedVolume: number | null;
+    discountsJson?: Array<{ code: string | null; percent: number; source: string; appliesTo?: string; amount: number }> | null;
+    updatedAt: string;
+  } | null;
+  lastUpdated?: string | null;
+  versionLabel?: string;
+  tasks?: AutomationTask[];
+  onViewTasks?: () => void;
+  automationVersionId?: string | null;
+  onPricingRefresh?: () => void;
+  onApplyDiscount?: (payload: { versionId: string; discountCode: string; estimatedVolume: number }) => Promise<void>;
+  onAdvanceStatus?: (versionId: string) => Promise<void> | void;
+}
+
+const formatCurrency = (value?: string | null) => {
+  if (!value) return "—";
+  const next = Number(value);
+  return Number.isFinite(next) ? `$${next.toLocaleString()}` : value;
+};
+
+const formatUnitPrice = (value?: string | null) => {
+  if (!value) return "—";
+  const next = Number(value);
+  return Number.isFinite(next) ? `$${next.toFixed(2)}` : value;
+};
+
+const formatTimestamp = (value?: string | null) => {
+  if (!value) return "—";
+  try {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  } catch {
+    return value;
+  }
+};
+
+type LifecycleStage = (typeof ACTIVE_LIFECYCLE_ORDER)[number];
+
+const resolveBuildStatus = (status?: AutomationLifecycleStatus | null): LifecycleStage => {
+  const resolved = resolveStatus(status ?? "");
+  if (!resolved || resolved === "Archived") {
+    return ACTIVE_LIFECYCLE_ORDER[0];
+  }
+  return ACTIVE_LIFECYCLE_ORDER.includes(resolved as LifecycleStage)
+    ? (resolved as LifecycleStage)
+    : ACTIVE_LIFECYCLE_ORDER[0];
+};
+
+const STAGE_ICONS: Record<LifecycleStage, React.ComponentType<{ size?: number | string }>> = {
+  IntakeInProgress: CheckCircle2,
+  NeedsPricing: CheckCircle2,
+  AwaitingClientApproval: FileSignature,
+  ReadyForBuild: FileSignature,
+  BuildInProgress: Hammer,
+  QATesting: Check,
+  Live: Rocket,
+};
+
+export function BuildStatusTab({
+  status,
+  latestQuote,
+  lastUpdated,
+  versionLabel,
+  tasks = [],
+  onViewTasks,
+  automationVersionId,
+  onPricingRefresh,
+  onApplyDiscount,
+  onAdvanceStatus,
+}: BuildStatusTabProps) {
+  const [localStatus, setLocalStatus] = useState<LifecycleStage>(resolveBuildStatus(status));
+  useEffect(() => {
+    setLocalStatus(resolveBuildStatus(status));
+  }, [status]);
+  const currentStatus = localStatus;
+  const currentIndex = ACTIVE_LIFECYCLE_ORDER.indexOf(currentStatus);
+  const attentionTasks = getAttentionTasks(tasks);
+  const onTrack = currentIndex >= ACTIVE_LIFECYCLE_ORDER.indexOf("BuildInProgress");
+  const pricingLocked = currentStatus === "IntakeInProgress";
+  const versionDisplay = versionLabel ? `Version ${versionLabel}` : "Version";
+  const minVolume = 100;
+  const maxVolume = 15000;
+  const estimatedVolume = latestQuote?.estimatedVolume ?? 1000;
+  const pricingTiers = useMemo(
+    () => [
+      { label: "< 2.5k", maxVolume: 2500, price: 0.25 },
+      { label: "2.5k - 5k", maxVolume: 5000, price: 0.2 },
+      { label: "5k - 10k", maxVolume: 10000, price: 0.15 },
+      { label: "10k - 15k", maxVolume: 15000, price: 0.1 },
+    ],
+    []
+  );
+  const [sliderVolume, setSliderVolume] = useState(
+    Math.min(Math.max(estimatedVolume, minVolume), pricingTiers.at(-1)?.maxVolume ?? maxVolume)
+  );
+  const activeTier = pricingTiers.find((tier) => sliderVolume <= tier.maxVolume) ?? pricingTiers[pricingTiers.length - 1];
+  const unitPriceValue = latestQuote?.unitPrice ? Number(latestQuote.unitPrice) : activeTier.price;
+  const unitPrice = unitPriceValue.toFixed(2);
+  const oneTimeFee = latestQuote?.setupFee ?? "1000";
+  const maxTierVolume = pricingTiers[pricingTiers.length - 1].maxVolume ?? maxVolume;
+  const sliderPercent = Math.min(Math.max((sliderVolume - minVolume) / (maxTierVolume - minVolume), 0), 1) * 100;
+  const redFillPercent = Math.min(100, Math.ceil(sliderPercent / 25) * 25);
+  const [showQuoteModal, setShowQuoteModal] = useState(false);
+  const monthlyCost = unitPriceValue * sliderVolume;
+  const [discountCode, setDiscountCode] = useState("");
+  const [applyingDiscount, setApplyingDiscount] = useState(false);
+
+  const applyDiscountCode = async () => {
+    if (!automationVersionId || !discountCode.trim() || !onApplyDiscount) return;
+    setApplyingDiscount(true);
+    try {
+      await onApplyDiscount({
+        versionId: automationVersionId,
+        discountCode: discountCode.trim(),
+        estimatedVolume: sliderVolume,
+      });
+      onPricingRefresh?.();
+    } finally {
+      setApplyingDiscount(false);
+    }
+  };
+
+  const advanceAutomationStatus = async () => {
+    if (!automationVersionId || !onAdvanceStatus) return;
+    await onAdvanceStatus(automationVersionId);
+  };
+
+  return (
+    <div className="h-full overflow-y-auto bg-gray-50">
+      <div className="max-w-6xl mx-auto p-8 pb-24 space-y-8">
+        <Card className="p-6 space-y-5 border-gray-200 shadow-sm">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-2">
+              <div className="flex items-center gap-3">
+                <h2 className="text-3xl font-bold text-[#0A0A0A] leading-tight">{versionDisplay}</h2>
+                <Badge variant="secondary" className="bg-[#E8F0FF] text-[#2B64E3] text-xs px-3 py-1.5 rounded-full">
+                  {getStatusLabel(currentStatus)}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-gray-600">
+                <span className="text-lg">↳</span>
+                <span>
+                  Created from <span className="font-semibold text-[#0A0A0A]">{versionLabel ? `v${versionLabel}` : "v1.0"}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <div className="relative">
+              <div className="absolute left-10 right-10 top-7 h-1 bg-gray-100" />
+              <div className="flex justify-between relative">
+                {ACTIVE_LIFECYCLE_ORDER.map((stage, index) => {
+                  const isComplete = index < currentIndex;
+                  const isActive = index === currentIndex;
+                  const Icon = STAGE_ICONS[stage];
+                  return (
+                    <div key={stage} className="flex flex-col items-center gap-2 w-full">
+                      <div
+                        className={cn(
+                          "w-16 h-16 rounded-full border-4 flex items-center justify-center bg-white transition-all",
+                          isComplete
+                            ? "border-[#E43632] text-[#E43632] shadow-[0_8px_24px_rgba(228,54,50,0.18)]"
+                            : isActive
+                              ? "border-[#E43632] text-[#E43632] shadow-[0_8px_24px_rgba(228,54,50,0.18)] ring-8 ring-[#E43632]/10"
+                              : "border-gray-200 text-gray-300"
+                        )}
+                      >
+                        <Icon size={22} />
+                      </div>
+                      <div className="text-center">
+                        <p
+                          className={cn(
+                            "text-sm font-semibold",
+                            isComplete || isActive ? "text-[#0A0A0A]" : "text-gray-400"
+                          )}
+                        >
+                          {getStatusLabel(stage)}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-6">
+            {pricingLocked ? (
+              <div className="flex items-start gap-3 rounded-lg border border-dashed border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
+                <AlertTriangle size={16} className="mt-0.5 text-yellow-700" />
+                <p className="leading-relaxed">
+                  Pricing will be generated once the workflow is submitted for building. Submit the intake to unlock the
+                  one-time build fee and recurring pricing.
+                </p>
+              </div>
+            ) : null}
+
+            <Card
+              className={cn(
+                "relative overflow-hidden p-6 space-y-5 shadow-sm border border-gray-200",
+                pricingLocked && "opacity-60"
+              )}
+            >
+              {pricingLocked ? (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <span className="select-none text-6xl font-black uppercase text-gray-300/60 -rotate-12 tracking-widest">
+                    Draft
+                  </span>
+                </div>
+              ) : null}
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-2xl font-bold text-[#0A0A0A]">One-Time Build Fee</h3>
+                  <p className="text-sm text-gray-600 mt-2">
+                    Covers architecture, implementation, testing, and deployment of your automation.
+                  </p>
+                </div>
+                <div className="text-right space-y-2">
+                  <Badge variant="outline" className="bg-gray-100 text-gray-600 border border-gray-200 text-xs rounded-full px-3 py-1">
+                    Refundable
+                  </Badge>
+                  <p className="text-3xl font-extrabold text-[#0A0A0A]">{formatCurrency(oneTimeFee)}</p>
+                  <p className="text-xs text-gray-500">
+                    {latestQuote?.status ? `Quote status: ${latestQuote.status}` : "Quote not generated"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                <Sparkles size={16} />
+                <span>
+                  Includes <span className="font-bold">$100 in free credits</span> for your first runs.
+                </span>
+              </div>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm text-gray-600">Have a discount code? Apply it to your build fee.</div>
+                <div className="flex gap-2 w-full sm:w-auto">
+                  <input
+                    className={cn(
+                      "flex-1 rounded-md border border-gray-200 px-3 py-2 text-sm",
+                      pricingLocked && "cursor-not-allowed bg-gray-50 text-gray-400"
+                    )}
+                    placeholder="Enter code"
+                    value={discountCode}
+                    onChange={(e) => setDiscountCode(e.target.value)}
+                    disabled={pricingLocked}
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={applyDiscountCode}
+                    disabled={pricingLocked || applyingDiscount || !discountCode.trim()}
+                    className="min-w-[90px]"
+                  >
+                    {applyingDiscount ? "Applying…" : "Apply"}
+                  </Button>
+                </div>
+              </div>
+            </Card>
+
+            {latestQuote ? (
+              <Card className="p-6 space-y-4 border border-gray-200 shadow-sm">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="text-xl font-bold text-[#0A0A0A]">Latest Quote</h3>
+                    <p className="text-sm text-gray-600">Pricing generated from the latest workflow.</p>
+                  </div>
+                  <Badge variant="secondary" className="text-xs bg-gray-100 text-gray-700">
+                    {latestQuote.status ?? "Sent"}
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                  <div className="space-y-1">
+                    <p className="text-gray-500">Setup fee</p>
+                    <p className="text-base font-semibold text-[#0A0A0A]">{formatCurrency(latestQuote.setupFee)}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-gray-500">Unit price</p>
+                    <p className="text-base font-semibold text-[#0A0A0A]">
+                      {formatUnitPrice(latestQuote.unitPrice)} / result
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-gray-500">Est. volume</p>
+                    <p className="text-base font-semibold text-[#0A0A0A]">
+                      {latestQuote.estimatedVolume?.toLocaleString() ?? "—"} / mo
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-gray-500">Last priced</p>
+                    <p className="text-base font-semibold text-[#0A0A0A]">{formatTimestamp(latestQuote.updatedAt)}</p>
+                  </div>
+                </div>
+                {latestQuote.discountsJson && latestQuote.discountsJson.length > 0 ? (
+                  <div className="border-t border-gray-200 pt-3 space-y-2 text-sm">
+                    <p className="text-gray-600 font-semibold">Discounts applied</p>
+                    <div className="space-y-1">
+                      {latestQuote.discountsJson.map((d, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-gray-700">
+                          <span>
+                            {(d.code ?? "Discount")} · {(d.appliesTo ?? "both").replace("_", " ")} · {d.source}
+                          </span>
+                          <span className="font-semibold">-{(d.percent * 100).toFixed(0)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </Card>
+            ) : null}
+
+            <Card
+              className={cn(
+                "relative p-0 overflow-hidden border border-gray-200 shadow-sm",
+                pricingLocked && "opacity-60"
+              )}
+            >
+              {pricingLocked ? (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <span className="select-none text-6xl font-black uppercase text-gray-300/60 -rotate-12 tracking-widest">
+                    Draft
+                  </span>
+                </div>
+              ) : null}
+              <div className="flex flex-col gap-2 px-6 py-5 border-b border-gray-100">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-2xl font-bold text-[#0A0A0A]">Recurring Usage</h3>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Once live, you are billed per result. Estimate your volume to see pricing.
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="bg-gray-100 text-gray-600 border border-gray-200 text-xs rounded-full px-3 py-1">
+                    Post-Launch
+                  </Badge>
+                </div>
+              </div>
+              <div className="border-l-4 border-[#E43632] bg-white">
+                <div className="p-6">
+                  <div className="rounded-2xl bg-[#F8F9FB] border border-gray-200 p-5 space-y-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Volume estimate</p>
+                        <p className="text-3xl font-extrabold text-[#0A0A0A] leading-tight">
+                          {sliderVolume.toLocaleString()}
+                          <span className="text-base font-medium text-gray-500"> results / mo</span>
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Unit price</p>
+                        <p className="text-3xl font-extrabold text-[#E43632] leading-tight">
+                          {formatUnitPrice(unitPrice)}
+                          <span className="text-base font-medium text-gray-600"> / result</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min={minVolume}
+                          max={maxTierVolume}
+                          step={100}
+                          value={sliderVolume}
+                          onChange={(event) => setSliderVolume(Number(event.target.value))}
+                          className={cn("w-full accent-black h-3", pricingLocked && "cursor-not-allowed opacity-60")}
+                          disabled={pricingLocked}
+                        />
+                        <span className="text-xs text-gray-500 w-16 text-right">{sliderVolume.toLocaleString()}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs text-gray-600">
+                        {pricingTiers.map((tier) => (
+                          <div key={tier.label} className="text-center">
+                            <p className="font-semibold text-gray-500">{tier.label}</p>
+                            <p className="text-[10px]">${tier.price.toFixed(2)}</p>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="relative h-2 rounded-full bg-gray-200 overflow-hidden">
+                        <div className="absolute inset-0 bg-gradient-to-r from-gray-200 via-gray-200 to-gray-200" />
+                        <div
+                          className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#E43632] to-[#E43632]/70"
+                          style={{ width: `${redFillPercent}%` }}
+                        />
+                        <div
+                          className="absolute -top-1.5 w-5 h-5 rounded-full border-2 border-white bg-[#E43632] shadow-md"
+                          style={{ left: `calc(${sliderPercent}% - 10px)` }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-4 border-t border-gray-200">
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase tracking-wide">Estimated monthly cost</p>
+                        <p className="text-2xl font-bold text-[#0A0A0A]">${monthlyCost.toLocaleString()}</p>
+                      </div>
+                      <Badge variant="secondary" className="text-xs bg-gray-100 text-gray-700">
+                        {currentStatus === "Live" ? "Live pricing" : "Forecast"}
+                      </Badge>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          <div className="space-y-6">
+            <Card className="p-6 border-gray-200 shadow-sm space-y-4">
+              <div>
+                <h3 className="text-lg font-bold text-[#0A0A0A]">Build Status</h3>
+                <p className="text-sm text-gray-500 mt-1">Progress updates from the Wrk build team.</p>
+              </div>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-500">Status</span>
+                  <Badge variant="secondary" className="text-xs bg-gray-100 text-gray-700">
+                    {getStatusLabel(currentStatus)}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-500">Last update</span>
+                  <span className="text-sm text-gray-700">{formatTimestamp(lastUpdated)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-500">Tracking</span>
+                  <Badge
+                    variant="secondary"
+                    className={cn("text-xs", onTrack ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700")}
+                  >
+                    {onTrack ? "On track" : "In progress"}
+                  </Badge>
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-gray-100">
+                <Button
+                  size="sm"
+                  className="w-full bg-[#E43632] hover:bg-[#C92D2A]"
+                  onClick={() => setShowQuoteModal(true)}
+                >
+                  Review Quote
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full mt-2"
+                  onClick={advanceAutomationStatus}
+                >
+                  Move to Build
+                </Button>
+              </div>
+            </Card>
+
+            <NeedsAttentionCard tasks={attentionTasks} onGoToWorkflow={onViewTasks} />
+          </div>
+        </div>
+      </div>
+
+      <QuoteSignatureModal
+        open={showQuoteModal}
+        onOpenChange={setShowQuoteModal}
+        quoteId={latestQuote?.id ?? null}
+        automationVersionId={automationVersionId ?? null}
+        volume={sliderVolume}
+        unitPrice={unitPriceValue}
+        monthlyCost={monthlyCost}
+        buildFee={Number(latestQuote?.setupFee ?? oneTimeFee ?? 0)}
+        onSigned={() => {
+          onPricingRefresh?.();
+        }}
+      />
+    </div>
+  );
+}

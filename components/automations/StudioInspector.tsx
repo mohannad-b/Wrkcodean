@@ -10,6 +10,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { WorkflowStep } from "@/lib/workflows/types";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
+import { fetchUploads } from "@/features/uploads/services/uploadApi";
 
 interface StudioInspectorProps {
   step: WorkflowStep | null;
@@ -141,9 +142,11 @@ export function StudioInspector({ step, onClose, onChange, onDelete, clientName,
 
     const fetchFiles = async () => {
       try {
-        const response = await fetch(
-          `/api/uploads?resourceType=automation_version&resourceId=${automationVersionId}&purpose=automation_doc`
-        );
+        const response = await fetchUploads({
+          resourceType: "automation_version",
+          resourceId: automationVersionId,
+          purpose: "automation_doc",
+        });
         if (!response.ok) {
           throw new Error("Failed to fetch files");
         }

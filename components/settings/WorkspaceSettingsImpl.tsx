@@ -20,16 +20,15 @@ import {
   Users,
 } from "lucide-react";
 import { motion } from "motion/react";
-import {
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-} from "recharts";
+import dynamic from "next/dynamic";
 import { logger } from "@/lib/logger";
+import { fetchMembership } from "@/features/memberships/services/membershipApi";
+import {
+  checkWorkspaceSlug,
+  fetchWorkspaces,
+  updateWorkspace,
+} from "@/features/workspaces/services/workspaceApi";
+import { createUpload } from "@/features/uploads/services/uploadApi";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -49,6 +48,11 @@ const USAGE_DATA = Array.from({ length: 12 }, (_, i) => ({
   units: Math.floor(Math.random() * 50000) + 10000,
   cost: Math.floor(Math.random() * 2000) + 500,
 }));
+
+const WorkspaceUsageChart = dynamic(
+  () => import("@/features/workspaces/ui/charts/WorkspaceUsageChart").then((m) => m.WorkspaceUsageChart),
+  { ssr: false }
+);
 
 const INVOICES = [
   { id: "INV-2023-012", date: "Nov 01, 2023", amount: "$1,250.00", status: "Paid" },
@@ -79,7 +83,7 @@ export const WorkspaceSettings: React.FC<{ defaultTab?: SettingsTab }> = ({
   useEffect(() => {
     async function loadMembership() {
       try {
-        const res = await fetch("/api/me/membership", { cache: "no-store" });
+        const res = await fetchMembership();
         if (!res.ok) return;
         const json = (await res.json()) as { primaryRole: string; canViewBilling: boolean };
         setMembershipMeta({
@@ -249,7 +253,7 @@ const ProfileSettings = ({
 
     async function loadWorkspace() {
       try {
-        const res = await fetch("/api/workspaces");
+        const res = await fetchWorkspaces();
         if (cancelled) return;
 
         if (res.ok) {
@@ -314,7 +318,7 @@ const ProfileSettings = ({
     }
 
     setSlugStatus("checking");
-    const res = await fetch(`/api/workspaces/check-slug?slug=${encodeURIComponent(nextSlug)}`);
+    const res = await checkWorkspaceSlug(nextSlug);
     const data = await res.json();
     if (res.ok && data.available) {
       setSlugStatus("available");
@@ -332,7 +336,7 @@ const ProfileSettings = ({
     form.append("resourceId", "current");
     form.append("title", "Workspace Logo");
     form.append("file", file);
-    const res = await fetch("/api/uploads", { method: "POST", body: form });
+    const res = await createUpload(form);
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.error ?? "Upload failed");
@@ -351,7 +355,7 @@ const ProfileSettings = ({
     form.append("resourceId", "current");
     form.append("title", "Workspace Logo");
     form.append("url", url);
-    const res = await fetch("/api/uploads", { method: "POST", body: form });
+    const res = await createUpload(form);
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.error ?? "Unable to fetch logo.");
@@ -382,16 +386,12 @@ const ProfileSettings = ({
     onSaveStateChange?.(null, false, true);
 
     try {
-      const res = await fetch("/api/workspaces", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: workspaceName.trim(),
-          slug: slug.trim().toLowerCase(),
-          industry: industry,
-          currency: currency,
-          timezone: timezone,
-        }),
+      const res = await updateWorkspace({
+        name: workspaceName.trim(),
+        slug: slug.trim().toLowerCase(),
+        industry,
+        currency,
+        timezone,
       });
 
       const data = await res.json();
@@ -760,28 +760,7 @@ const BillingSettings = ({
           </Select>
         </div>
         <div className="h-[250px] w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={USAGE_DATA}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-              <XAxis
-                dataKey="month"
-                axisLine={false}
-                tickLine={false}
-                fontSize={12}
-                tick={{ fill: "#9ca3af" }}
-              />
-              <YAxis axisLine={false} tickLine={false} fontSize={12} tick={{ fill: "#9ca3af" }} />
-              <Tooltip
-                cursor={{ fill: "#f9fafb" }}
-                contentStyle={{
-                  borderRadius: "8px",
-                  border: "none",
-                  boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                }}
-              />
-              <Bar dataKey="units" fill="#E43632" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <WorkspaceUsageChart data={USAGE_DATA} />
         </div>
       </div>
 

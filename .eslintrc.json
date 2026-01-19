@@ -2,5 +2,25 @@
   "extends": ["next/core-web-vitals", "next/typescript", "prettier"],
   "rules": {
     "react-hooks/exhaustive-deps": "warn"
-  }
+  },
+  "overrides": [
+    {
+      "files": ["components/**/*.{ts,tsx}"],
+      "rules": {
+        "no-restricted-syntax": [
+          "warn",
+          {
+            "selector": "CallExpression[callee.name='fetch']",
+            "message": "Avoid fetch in components; use features/*/services instead."
+          }
+        ],
+        "no-restricted-imports": [
+          "warn",
+          {
+            "patterns": ["@/db/*", "@/app/api/*", "@/lib/server/*"]
+          }
+        ]
+      }
+    }
+  ]
 }

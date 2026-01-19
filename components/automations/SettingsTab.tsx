@@ -28,7 +28,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
+import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -68,6 +68,11 @@ const USAGE_DATA = Array.from({ length: 30 }, (_, i) => ({
   day: `Day ${i + 1}`,
   units: Math.floor(Math.random() * 500) + 100,
 }));
+
+const UsageAreaChart = dynamic(
+  () => import("@/features/automations/ui/charts/UsageAreaChart").then((m) => m.UsageAreaChart),
+  { ssr: false }
+);
 
 const USERS = [
   {
@@ -115,6 +120,8 @@ interface SettingsTabProps {
   onManageCredentials?: (systemName: string) => void;
   onNavigateToTab?: (tab: string) => void;
   onNavigateToSettings?: () => void;
+  onSaveGeneral?: (payload: { versionId: string; name: string; description: string | null; tags: string[] }) => Promise<void>;
+  onGenerateTags?: (versionId: string) => Promise<string[]>;
   automationId?: string | null;
   automationName?: string;
   automationDescription?: string | null;
@@ -144,6 +151,8 @@ export function SettingsTab({
   onManageCredentials,
   onNavigateToTab,
   onNavigateToSettings,
+  onSaveGeneral,
+  onGenerateTags,
   automationId: _automationId,
   automationName,
   automationDescription,
@@ -160,6 +169,10 @@ export function SettingsTab({
 }: SettingsTabProps = {}) {
   const [activeTab, setActiveTab] = useState<SettingsTabType>("general");
   const toast = useToast();
+  const devMocksEnabled = process.env.NEXT_PUBLIC_AUTOMATION_DETAIL_MOCKS === "true" || process.env.NODE_ENV !== "production";
+  const usageData = devMocksEnabled ? USAGE_DATA : [];
+  const users = devMocksEnabled ? USERS : [];
+  const systems = devMocksEnabled ? SYSTEMS : [];
 
   const [name, setName] = useState<string>(automationName ?? "");
   const [description, setDescription] = useState<string>(automationDescription ?? "");
@@ -205,19 +218,12 @@ export function SettingsTab({
     }
     setSavingGeneral(true);
     try {
-      const response = await fetch(`/api/automation-versions/${currentVersionId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          automationName: name.trim(),
-          automationDescription: description?.trim() ?? null,
-          tags: tagList,
-        }),
+      await onSaveGeneral?.({
+        versionId: currentVersionId,
+        name: name.trim(),
+        description: description?.trim() ?? null,
+        tags: tagList,
       });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error ?? "Unable to save settings");
-      }
       toast({ title: "Settings saved", description: "General details updated.", variant: "success" });
       onGeneralSaved?.();
     } catch (err) {
@@ -226,7 +232,7 @@ export function SettingsTab({
     } finally {
       setSavingGeneral(false);
     }
-  }, [currentVersionId, description, name, onGeneralSaved, tagList, toast]);
+  }, [currentVersionId, description, name, onGeneralSaved, onSaveGeneral, tagList, toast]);
 
   const handleGenerateTags = useCallback(async () => {
     if (!currentVersionId) {
@@ -235,16 +241,8 @@ export function SettingsTab({
     }
     setGeneratingTags(true);
     try {
-      const response = await fetch(`/api/automation-versions/${currentVersionId}/copilot/tags`, {
-        method: "POST",
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error ?? "Unable to generate tags");
-      }
-      const data = await response.json();
-      const generated = Array.isArray(data.tags) ? data.tags : [];
-      setTagList(generated);
+      const generated = (await onGenerateTags?.(currentVersionId)) ?? [];
+      setTagList(Array.isArray(generated) ? generated : []);
       toast({ title: "Tags generated", description: "LLM tags were applied.", variant: "success" });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to generate tags";
@@ -252,7 +250,7 @@ export function SettingsTab({
     } finally {
       setGeneratingTags(false);
     }
-  }, [currentVersionId, toast]);
+  }, [currentVersionId, onGenerateTags, toast]);
 
   const handleAddTag = useCallback((tag: string) => {
     const trimmed = tag.trim();
@@ -336,14 +334,15 @@ export function SettingsTab({
               />
             )}
             {activeTab === "notifications" && <NotificationsSettings />}
-            {activeTab === "permissions" && <PermissionsSettings onInvite={onInviteUser} />}
+            {activeTab === "permissions" && <PermissionsSettings onInvite={onInviteUser} users={users} />}
             {activeTab === "systems" && (
               <SystemsSettings
                 onAddSystem={onAddSystem}
                 onManageCredentials={onManageCredentials}
+                systems={systems}
               />
             )}
-            {activeTab === "billing" && <BillingSettings onUpdatePayment={onNavigateToSettings} />}
+            {activeTab === "billing" && <BillingSettings onUpdatePayment={onNavigateToSettings} usageData={usageData} />}
             {activeTab === "versions" && (
               <VersionsSettings
                 onNewVersion={onNewVersion}
@@ -500,7 +499,10 @@ function GeneralSettings({
 }
 
 // Permissions Settings
-function PermissionsSettings({ onInvite }: { onInvite?: () => void } = {}) {
+function PermissionsSettings({
+  onInvite,
+  users = [],
+}: { onInvite?: () => void; users?: Array<{ id: number; name: string; email: string; role: string; avatar: string }> } = {}) {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center mb-2">
@@ -515,7 +517,7 @@ function PermissionsSettings({ onInvite }: { onInvite?: () => void } = {}) {
 
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="p-6 space-y-6">
-          {USERS.map((user) => (
+          {users.map((user) => (
             <div key={user.id} className="flex items-center justify-between group">
               <div className="flex items-center gap-3">
                 <Avatar>
@@ -569,7 +571,12 @@ function PermissionsSettings({ onInvite }: { onInvite?: () => void } = {}) {
 function SystemsSettings({
   onAddSystem,
   onManageCredentials,
-}: { onAddSystem?: () => void; onManageCredentials?: (systemName: string) => void } = {}) {
+  systems = [],
+}: {
+  onAddSystem?: () => void;
+  onManageCredentials?: (systemName: string) => void;
+  systems?: Array<{ id: number; name: string; icon: string; status: string; usage: string }>;
+} = {}) {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center mb-2">
@@ -595,7 +602,7 @@ function SystemsSettings({
       </div>
 
       <div className="grid gap-4">
-        {SYSTEMS.map((system) => (
+        {systems.map((system) => (
           <div
             key={system.id}
             className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 flex items-center justify-between"
@@ -651,7 +658,10 @@ function SystemsSettings({
 }
 
 // Billing Settings
-function BillingSettings({ onUpdatePayment }: { onUpdatePayment?: () => void } = {}) {
+function BillingSettings({
+  onUpdatePayment,
+  usageData = [],
+}: { onUpdatePayment?: () => void; usageData?: Array<{ day: string; units: number }> } = {}) {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center mb-2">
@@ -706,35 +716,7 @@ function BillingSettings({ onUpdatePayment }: { onUpdatePayment?: () => void } =
             </Select>
           </div>
           <div className="h-[240px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={USAGE_DATA}>
-                <defs>
-                  <linearGradient id="colorUnits" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#E43632" stopOpacity={0.1} />
-                    <stop offset="95%" stopColor="#E43632" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                <XAxis dataKey="day" hide />
-                <YAxis axisLine={false} tickLine={false} fontSize={12} tick={{ fill: "#9ca3af" }} />
-                <RechartsTooltip
-                  contentStyle={{
-                    borderRadius: "8px",
-                    border: "none",
-                    boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                  }}
-                  labelStyle={{ color: "#6b7280", fontSize: "12px" }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="units"
-                  stroke="#E43632"
-                  strokeWidth={2}
-                  fillOpacity={1}
-                  fill="url(#colorUnits)"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+            <UsageAreaChart data={usageData} />
           </div>
         </div>
 

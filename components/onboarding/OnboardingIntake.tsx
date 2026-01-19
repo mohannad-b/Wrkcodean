@@ -11,7 +11,7 @@ import { addEdge, useEdgesState, useNodesState, type Connection, type Edge, type
 import { StudioInspector } from "@/components/automations/StudioInspector";
 import { SecureUploader } from "@/components/files/SecureUploader";
 
-import StudioCanvas from "@/components/StudioCanvas";
+import { StudioCanvas } from "@/features/workflows/ui/canvas/StudioCanvas";
 
 // --- TYPES ---
 interface ChecklistItem {

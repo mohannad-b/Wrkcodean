@@ -12,7 +12,7 @@ import {
   MousePointer2
 } from 'lucide-react';
 import { Node, Edge } from 'reactflow';
-import { StudioCanvas } from '../StudioCanvas';
+import { StudioCanvas } from '@/features/workflows/ui/canvas/StudioCanvas';
 import { HeroStudioChat } from './HeroStudioChat';
 import { cn } from '../../lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';

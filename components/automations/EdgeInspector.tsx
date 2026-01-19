@@ -42,6 +42,9 @@ export function EdgeInspector({ edge, onChange, onDelete, onClose }: EdgeInspect
     );
   }
 
+  const labelInputId = `${edge.id}-label`;
+  const conditionInputId = `${edge.id}-condition`;
+
   const handleLabelChange = (value: string) => {
     onChange(edge.id, { label: value });
   };
@@ -97,10 +100,14 @@ export function EdgeInspector({ edge, onChange, onDelete, onClose }: EdgeInspect
       <div className="flex-1 w-full overflow-y-auto min-h-0">
         <div className="p-6 space-y-6">
           <div className="space-y-2">
-            <Label className="text-xs font-bold text-[#0A0A0A] uppercase tracking-wider">
+            <Label
+              htmlFor={labelInputId}
+              className="text-xs font-bold text-[#0A0A0A] uppercase tracking-wider"
+            >
               Branch label
             </Label>
             <Input
+              id={labelInputId}
               value={edge.label ?? ""}
               placeholder={edge.branchLetter ? `Branch ${edge.branchLetter}` : "Name this branch"}
               onChange={(event) => handleLabelChange(event.target.value)}
@@ -112,8 +119,14 @@ export function EdgeInspector({ edge, onChange, onDelete, onClose }: EdgeInspect
           </div>
 
           <div className="space-y-2">
-            <Label className="text-xs font-bold text-[#0A0A0A] uppercase tracking-wider">Condition</Label>
+            <Label
+              htmlFor={conditionInputId}
+              className="text-xs font-bold text-[#0A0A0A] uppercase tracking-wider"
+            >
+              Condition
+            </Label>
             <Textarea
+              id={conditionInputId}
               value={edge.condition ?? ""}
               onChange={(event) => handleConditionChange(event.target.value)}
               placeholder="e.g. Amount > $10,000 or Status equals Approved"

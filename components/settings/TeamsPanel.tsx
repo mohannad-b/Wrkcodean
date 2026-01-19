@@ -17,6 +17,11 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
+import {
+  fetchWorkspaceMembers,
+  inviteWorkspaceMember,
+  updateWorkspaceMemberRole,
+} from "@/features/teams/services/teamApi";
 
 type Member = {
   membershipId: string;
@@ -127,7 +132,7 @@ export function TeamsPanel() {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch("/api/workspaces/members", { cache: "no-store" });
+      const res = await fetchWorkspaceMembers();
       const json = (await res.json()) as TeamsResponse;
       if (!res.ok) {
         const message = (json as any)?.error ?? "Failed to load team";
@@ -154,11 +159,7 @@ export function TeamsPanel() {
     }
     setInviteSubmitting(true);
     try {
-      const res = await fetch("/api/workspaces/invites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
-      });
+      const res = await inviteWorkspaceMember({ email: inviteEmail.trim(), role: inviteRole });
       const json = await res.json();
       if (!res.ok) {
         throw new Error(json?.error ?? "Unable to send invite");
@@ -176,11 +177,7 @@ export function TeamsPanel() {
 
   const onChangeRole = async (membershipId: string, role: string) => {
     try {
-      const res = await fetch(`/api/workspaces/members/${membershipId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role }),
-      });
+      const res = await updateWorkspaceMemberRole(membershipId, role);
       const json = await res.json();
       if (!res.ok) {
         throw new Error(json?.error ?? "Unable to update role");

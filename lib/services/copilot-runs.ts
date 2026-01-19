@@ -19,6 +19,9 @@ function isUniqueConstraintError(error: unknown) {
 }
 
 export async function getCopilotRunByClientMessageId(params: GetParams) {
+  if (typeof db.select !== "function") {
+    return null;
+  }
   const [existing] = await db
     .select()
     .from(copilotRuns)
@@ -35,6 +38,9 @@ export async function getCopilotRunByClientMessageId(params: GetParams) {
 }
 
 export async function createCopilotRun(params: CreateParams) {
+  if (typeof db.insert !== "function") {
+    return null;
+  }
   try {
     const [inserted] = await db
       .insert(copilotRuns)

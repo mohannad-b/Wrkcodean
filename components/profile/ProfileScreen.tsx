@@ -14,6 +14,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { useUserProfile } from "@/components/providers/user-profile-provider";
 import type { UserProfile } from "@/lib/user/profile-shared";
 import { logger } from "@/lib/logger";
+import { updateProfile, uploadAvatar } from "@/features/profile/services/profileApi";
 
 const COMMON_TIMEZONES: readonly string[] = [
   "UTC",
@@ -263,10 +264,7 @@ export function ProfileScreen() {
       const data = new FormData();
       data.append("file", file);
 
-      const response = await fetch("/api/me/avatar", {
-        method: "POST",
-        body: data,
-      });
+      const response = await uploadAvatar(data);
 
       const body = await response.json().catch(() => ({}));
 
@@ -320,11 +318,7 @@ export function ProfileScreen() {
     const payload = buildPayload();
 
     try {
-      const response = await fetch("/api/me/profile", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const response = await updateProfile(payload);
 
       const data = await response.json().catch(() => ({}));
 

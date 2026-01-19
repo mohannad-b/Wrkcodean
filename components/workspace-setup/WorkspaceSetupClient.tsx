@@ -13,6 +13,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { logger } from "@/lib/logger";
+import { fetchOnboardingStatus, submitPhone, verifyPhone, acceptTos } from "@/features/onboarding/services/onboardingApi";
+import { checkWorkspaceSlug, createWorkspace } from "@/features/workspaces/services/workspaceApi";
+import { createUpload } from "@/features/uploads/services/uploadApi";
 
 type Props = {
   firstName: string;
@@ -107,22 +110,22 @@ export function WorkspaceSetupClient({
     let cancelled = false;
     async function load() {
       try {
-        const data = await apiFetch("/api/me/onboarding", { method: "GET" });
+        const data = await fetchOnboardingStatus();
         if (cancelled) return;
-        if (data.phone) {
+        if (typeof data.phone === "string" && data.phone.trim()) {
           setPhone(data.phone);
         }
-        if (data.phoneVerified) {
+        if (data.phoneVerified === true) {
           setVerifyState("verified");
           setSendState("sent");
         }
-        if (data.tosAccepted) {
+        if (data.tosAccepted === true) {
           setTosAccepted(true);
         }
         const next = computeInitialStep({
           hasTenant: isBrandingComplete,
-          phoneVerified: Boolean(data.phoneVerified),
-          tosAccepted: Boolean(data.tosAccepted),
+          phoneVerified: data.phoneVerified === true,
+          tosAccepted: data.tosAccepted === true,
         });
         setCurrentStep(next);
       } catch (err) {
@@ -167,7 +170,7 @@ export function WorkspaceSetupClient({
     }
 
     setSlugStatus("checking");
-    const res = await fetch(`/api/workspaces/check-slug?slug=${encodeURIComponent(nextSlug)}`);
+    const res = await checkWorkspaceSlug(nextSlug);
     const data = await res.json();
     if (res.ok && data.available) {
       setSlugStatus("available");
@@ -185,7 +188,7 @@ export function WorkspaceSetupClient({
     form.append("resourceId", "setup");
     form.append("title", "Workspace Logo");
     form.append("file", file);
-    const res = await fetch("/api/uploads", { method: "POST", body: form });
+    const res = await createUpload(form);
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.error ?? "Upload failed");
@@ -204,7 +207,7 @@ export function WorkspaceSetupClient({
     form.append("resourceId", "setup");
     form.append("title", "Workspace Logo");
     form.append("url", url);
-    const res = await fetch("/api/uploads", { method: "POST", body: form });
+    const res = await createUpload(form);
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.error ?? "Unable to fetch logo.");
@@ -236,10 +239,9 @@ export function WorkspaceSetupClient({
 
     setCreating(true);
     try {
-      const res = await fetch("/api/workspaces", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: workspaceName.trim(), slug: slug.trim().toLowerCase() }),
+      const res = await createWorkspace({
+        name: workspaceName.trim(),
+        slug: slug.trim().toLowerCase(),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -267,7 +269,7 @@ export function WorkspaceSetupClient({
       if (simulate) {
         setSendState("sent");
       } else {
-        await postJson("/api/me/phone", { phone });
+      await submitPhone(phone);
         setSendState("sent");
       }
     } catch (err) {
@@ -284,7 +286,7 @@ export function WorkspaceSetupClient({
       if (simulate) {
         setVerifyState("verified");
       } else {
-        await putJson("/api/me/phone", { phone, code: phoneCode });
+      await verifyPhone(phone, phoneCode);
         setVerifyState("verified");
       }
     } catch (err) {
@@ -302,7 +304,7 @@ export function WorkspaceSetupClient({
         setTosAccepted(true);
         nextStep();
       } else {
-        await postJson("/api/me/tos", { version: "2025-07-19" });
+      await acceptTos("2025-07-19");
         setTosSubmitting(false);
         setTosAccepted(true);
         nextStep();
@@ -1061,30 +1063,6 @@ export function WorkspaceSetupClient({
       </div>
     </main>
   );
-}
-
-async function apiFetch(path: string, options: RequestInit) {
-  const res = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers ?? {}),
-    },
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = (data && data.error) || "Unexpected error";
-    throw new Error(msg);
-  }
-  return data;
-}
-
-async function postJson(path: string, body: any) {
-  return apiFetch(path, { method: "POST", body: JSON.stringify(body) });
-}
-
-async function putJson(path: string, body: any) {
-  return apiFetch(path, { method: "PUT", body: JSON.stringify(body) });
 }
 
 export default WorkspaceSetupClient;
