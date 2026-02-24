@@ -464,7 +464,7 @@ Frontend displays:
 ### Environment Variables
 
 - `OPENAI_API_KEY` - Required for AI calls
-- `BLUEPRINT_MODEL` - Default: "gpt-4-turbo-preview"
+- `WORKFLOW_MODEL` / `BLUEPRINT_MODEL` - Default: "gpt-4o" (faster, better structured output)
 - `OPENAI_BLUEPRINT_PROGRESS_MODEL` - Default: "gpt-4o-mini"
 - `COPILOT_DRAFTS_PER_HOUR` - Rate limit (default: 5)
 

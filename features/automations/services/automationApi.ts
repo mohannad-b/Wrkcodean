@@ -55,6 +55,12 @@ export const optimizeAutomationVersion = (versionId: string, body: Record<string
     body: JSON.stringify(body),
   });
 
+export const rebuildWorkflowFromRequirements = (versionId: string) =>
+  fetch(`/api/automation-versions/${versionId}/copilot/rebuild-from-requirements`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+
 export const generateAutomationTags = (versionId: string) =>
   fetch(`/api/automation-versions/${versionId}/copilot/tags`, { method: "POST" });
 

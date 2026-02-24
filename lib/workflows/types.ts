@@ -91,6 +91,7 @@ export interface WorkflowSpec {
   updatedAt: string;
   metadata?: {
     nodePositions?: Record<string, { x: number; y: number }>;
+    skeleton?: boolean;
   };
 }
 

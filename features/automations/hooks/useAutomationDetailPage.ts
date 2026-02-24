@@ -36,6 +36,7 @@ import {
   fetchAutomationVersionMetrics,
   generateAutomationTags,
   optimizeAutomationVersion,
+  rebuildWorkflowFromRequirements,
   postAutomationVersionMessage,
   priceAutomationQuote,
   updateAutomationMetrics,
@@ -71,6 +72,7 @@ type SanitizationSummaryPayload = {
   removedCycles: number;
   trimmedConnections: number;
   attachedOrphans: number;
+  injectedElseBranches?: number;
 };
 
 const RECENT_ACTIVITY_ICON_MAP: Record<string, { icon: React.ComponentType<{ size?: number | string }>; bg: string; color: string }> = {
@@ -108,6 +110,9 @@ function formatSanitizationSummary(summary?: SanitizationSummaryPayload | null):
   }
   if (summary.attachedOrphans) {
     parts.push(`${summary.attachedOrphans} orphan step${summary.attachedOrphans === 1 ? "" : "s"} attached`);
+  }
+  if (summary.injectedElseBranches) {
+    parts.push(`${summary.injectedElseBranches} Else branch${summary.injectedElseBranches === 1 ? "" : "es"} added`);
   }
   if (parts.length === 0 && summary.removedDuplicateEdges) {
     parts.push(`${summary.removedDuplicateEdges} duplicate edge${summary.removedDuplicateEdges === 1 ? "" : "s"} removed`);
@@ -904,9 +909,24 @@ export function useAutomationDetailPage({ automationId }: UseAutomationDetailPag
         createdAt: new Date().toISOString(),
         transient: true,
       });
-      toast({ title: "Requirements saved", description: "User changes detected, updating flowchart…", variant: "success" });
-      await handleOptimizeFlow();
-      toast({ title: "Requirements saved", description: "Requirements updated.", variant: "success" });
+      toast({ title: "Requirements saved", description: "Rebuilding flowchart from requirements…", variant: "success" });
+      if (next.trim().length >= 50) {
+        const rebuildResponse = await rebuildWorkflowFromRequirements(selectedVersion.id);
+        if (rebuildResponse.ok) {
+          const payload = await rebuildResponse.json();
+          await refreshAutomationPreservingSelection();
+          toast({
+            title: "Flowchart rebuilt",
+            description: formatSanitizationSummary(payload?.telemetry?.sanitizationSummary),
+            variant: "success",
+          });
+        } else {
+          const data = await rebuildResponse.json().catch(() => ({}));
+          throw new Error(data.error ?? "Failed to rebuild flowchart");
+        }
+      } else {
+        await handleOptimizeFlow();
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to save requirements";
       setError(message);
@@ -1428,45 +1448,18 @@ export function useAutomationDetailPage({ automationId }: UseAutomationDetailPag
 
   const workflowSignature = useMemo(() => {
     if (!workflow) return "empty";
-    const stepIds = workflow.steps?.map((step) => step.id).join("|") ?? "";
-    return `${workflow.status ?? ""}:${stepIds}`;
+    const structure =
+      workflow.steps
+        ?.map(
+          (s) =>
+            `${s.id}:${s.parentStepId ?? ""}:${[...(s.nextStepIds ?? [])].sort().join(",")}`
+        )
+        .join("|") ?? "";
+    return `${workflow.status ?? ""}:${structure}`;
   }, [workflow]);
 
   const flowNodes = useMemo<Node[]>(() => {
-    sendDevAgentLog({
-      location: "page.tsx:1095",
-      message: "flowNodes useMemo entry",
-      data: {
-        hasWorkflow: !!workflow,
-        stepCount: workflow?.steps?.length ?? 0,
-        workflowStatus: workflow?.status,
-        steps:
-          workflow?.steps?.map((s) => ({
-            id: s.id,
-            name: s.name,
-            stepNumber: s.stepNumber,
-            parentStepId: s.parentStepId,
-            nextStepIds: s.nextStepIds,
-          })) ?? [],
-      },
-      timestamp: Date.now(),
-      sessionId: "debug-session",
-      runId: "run2",
-      hypothesisId: "E",
-    });
     const nodes = workflowToNodes(workflow, taskLookup);
-    sendDevAgentLog({
-      location: "page.tsx:1095",
-      message: "flowNodes useMemo exit",
-      data: {
-        nodeCount: nodes.length,
-        nodes: nodes.map((n) => ({ id: n.id, position: n.position, title: n.data.title })),
-      },
-      timestamp: Date.now(),
-      sessionId: "debug-session",
-      runId: "run2",
-      hypothesisId: "E",
-    });
     if ((workflow?.steps?.length ?? 0) > 0 && nodes.length === 0) {
       logger.error("[AUTOMATION] Workflow steps present but rendered nodes are zero", {
         stepCount: workflow?.steps?.length ?? 0,

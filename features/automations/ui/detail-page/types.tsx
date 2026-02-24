@@ -18,6 +18,7 @@ export type SanitizationSummaryPayload = {
   removedCycles: number;
   trimmedConnections: number;
   attachedOrphans: number;
+  injectedElseBranches?: number;
 };
 
 export type VersionTask = AutomationTask & {

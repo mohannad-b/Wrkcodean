@@ -842,13 +842,49 @@ function buildRequirementsStatusHint(judge: CoreTodoJudgeResult | null): { text:
   return { text, technicalOnlyMissing };
 }
 
+/** Extract key facts from requirements text for knownFactsHint when memory is sparse */
+function extractRequirementsFacts(requirementsText: string): {
+  trigger?: string;
+  schedule?: string;
+  systems?: string[];
+  successCriteria?: string;
+} {
+  const text = requirementsText.trim();
+  if (!text) return {};
+  const facts: { trigger?: string; schedule?: string; systems?: string[]; successCriteria?: string } = {};
+  if (/\b(trigger|runs? when|starts? when|initiated by|on (?:incoming|new)|daily|weekly|schedule)\b/i.test(text)) {
+    const match = text.match(/(?:trigger|runs? when|starts? when|initiated by|schedule)[:\s]+([^.]+)/i)
+      ?? text.match(/(?:daily|weekly|monthly)\s+at\s+[^.]+/i)
+      ?? text.match(/(?:every|each)\s+[^.]+/i);
+    if (match) facts.trigger = truncateText(match[1]?.trim() ?? match[0], 120);
+  }
+  if (/\b(daily|weekly|monthly|schedule|every|at \d|9am|5pm)\b/i.test(text)) {
+    const match = text.match(/(?:runs?|runs? )?(?:daily|weekly|monthly)[^.]+/i)
+      ?? text.match(/(?:every|each)\s+\w+[^.]+/i)
+      ?? text.match(/\d+\s*(?:am|pm|hour|minute)[^.]+/i);
+    if (match) facts.schedule = truncateText(match[0], 80);
+  }
+  if (/\b(system|integrat|gmail|outlook|slack|quickbooks|shopify|xero|api)\b/i.test(text)) {
+    const systems = text.match(/\b(Gmail|Outlook|Slack|QuickBooks|Shopify|Xero|Salesforce|HubSpot|Stripe|API)\b/gi);
+    if (systems?.length) facts.systems = [...new Set(systems)].slice(0, 5);
+  }
+  if (/\b(success|complete|done|threshold|target|goal|measure)\b/i.test(text)) {
+    const match = text.match(/(?:success|complete|done)[:\s]+([^.]+)/i)
+      ?? text.match(/(?:threshold|target|goal)[:\s]+([^.]+)/i);
+    if (match) facts.successCriteria = truncateText(match[1]?.trim() ?? match[0], 120);
+  }
+  return facts;
+}
+
 function buildKnownFactsHint({
   analysisState,
   workflow,
-  maxLines = 6,
+  requirementsText,
+  maxLines = 8,
 }: {
   analysisState: CopilotAnalysisState;
   workflow: Workflow;
+  requirementsText?: string | null;
   maxLines?: number;
 }): string | null {
   const facts = analysisState.memory?.facts ?? {};
@@ -870,6 +906,14 @@ function buildKnownFactsHint({
   push("Destination", facts.storage_destination as string | undefined);
   push("Success criteria", facts.success_criteria as string | undefined);
   push("Systems", Array.isArray(facts.systems) ? (facts.systems as string[]) : undefined);
+
+  const reqFacts = requirementsText ? extractRequirementsFacts(requirementsText) : {};
+  if (!facts.trigger_cadence && reqFacts.trigger) push("From requirements (trigger)", reqFacts.trigger);
+  if (!facts.trigger_time && reqFacts.schedule) push("From requirements (schedule)", reqFacts.schedule);
+  if ((!facts.systems || (facts.systems as string[]).length === 0) && reqFacts.systems?.length)
+    push("From requirements (systems)", reqFacts.systems);
+  if (!facts.success_criteria && reqFacts.successCriteria)
+    push("From requirements (success)", reqFacts.successCriteria);
 
   if (workflow.summary) {
     push("Workflow summary", truncateText(workflow.summary, 140));
@@ -1177,8 +1221,12 @@ export async function POST(request: Request, { params }: { params: { id: string 
             const analysis = await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id });
             const currentWorkflow = detail.workflowView?.workflowSpec ?? createEmptyWorkflowSpec();
             const analysisState = analysis ?? createEmptyCopilotAnalysisState();
-            const knownFactsHint = buildKnownFactsHint({ analysisState, workflow: currentWorkflow });
             const requirementsText = detail.version.requirementsText?.trim();
+            const knownFactsHint = buildKnownFactsHint({
+              analysisState,
+              workflow: currentWorkflow,
+              requirementsText: requirementsText || undefined,
+            });
             const requirementsStatusHint = requirementsText
               ? `Requirements so far: ${requirementsText.slice(0, 400)}${requirementsText.length > 400 ? "…" : ""}`
               : null;
@@ -1879,7 +1927,11 @@ export async function runCopilotChat({
   let preJudgeFailedReason: string | null = null;
   let preJudgeFromCache = false;
   let preJudgeResult: CoreTodoJudgeResult | null = null;
-  const knownFactsHint = buildKnownFactsHint({ analysisState, workflow: currentWorkflow });
+  const knownFactsHint = buildKnownFactsHint({
+    analysisState,
+    workflow: currentWorkflow,
+    requirementsText: detail.version.requirementsText ?? undefined,
+  });
   const technicalOptIn = Boolean((analysisState.memory?.facts as any)?.technical_opt_in);
   let proceedReady = false;
   let proceedReason: string | null = null;
@@ -2019,6 +2071,8 @@ export async function runCopilotChat({
         detail: "Extracting requirements from the conversation.",
         progress: 15,
       });
+      // Do NOT emit skeleton workflow - it causes distracting "Trigger" + "Processing" flashes.
+      // BuildActivityPanel and "Updating flowchart..." indicator provide sufficient feedback.
       planner.emit("drafting", undefined, { intakeNotes: Boolean(intakeNotes), messages: normalizedMessages.length }, "drafting");
       const draftingTrace = trace.phase("drafting");
       draftingTrace.event("phase.entered", { messageCount: normalizedMessages.length });
@@ -2056,6 +2110,7 @@ export async function runCopilotChat({
         requirementsStatusHint,
         followUpMode,
         knownFactsHint,
+        intentSummaryHint: intentSummary?.intent_summary ?? null,
         memorySummary: analysisState.memory?.summary_compact ?? null,
         memoryFacts: analysisState.memory?.facts ?? {},
         onStatus: ({ phase, text }) => planner.emit(phase as any, text, undefined, `builder-${phase}`),

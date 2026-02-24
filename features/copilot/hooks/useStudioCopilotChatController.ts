@@ -1419,14 +1419,23 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
                         : raw && "blueprintJson" in (raw as object) && (raw as any).blueprintJson
                           ? ((raw as any).blueprintJson as Workflow)
                           : (raw as Workflow | null | undefined);
-                  if (normalizedWorkflow && normalizedWorkflow.steps?.length && options.onWorkflowUpdates) {
-                    options.onWorkflowUpdatingChange?.(true);
-                    options.onWorkflowUpdates(normalizedWorkflow);
+                  const meta = (normalizedWorkflow as Workflow & { metadata?: { skeleton?: boolean } })?.metadata;
+                  const hasSkeletonMeta = meta?.skeleton === true;
+                  const looksLikeSkeleton =
+                    normalizedWorkflow?.steps?.length === 2 &&
+                    normalizedWorkflow.steps.some((s) => s.type === "Trigger") &&
+                    normalizedWorkflow.steps.some((s) => /^Processing[.…]*$/i.test(String(s.name ?? "")));
+                  const isSkeleton = hasSkeletonMeta || looksLikeSkeleton;
+                  if (normalizedWorkflow && normalizedWorkflow.steps?.length) {
                     upsertBuildActivityFromEvent(normalized.runId ?? runId, {
                       phase: "drawing",
                       rawPhase: "drawing",
                       isRunning: true,
                     });
+                    if (!isSkeleton && options.onWorkflowUpdates) {
+                      options.onWorkflowUpdatingChange?.(true);
+                      options.onWorkflowUpdates(normalizedWorkflow);
+                    }
                   }
                 } else if (reduced.kind === "tasks_update") {
                   const tasks = (reduced as { kind: "tasks_update"; tasks: unknown[] }).tasks;

@@ -7,6 +7,7 @@ export type SanitizationSummary = {
   removedCycles: number;
   trimmedConnections: number;
   attachedOrphans: number;
+  injectedElseBranches: number;
 };
 
 type StepMap = Map<string, BlueprintStep>;
@@ -235,6 +236,17 @@ export function sanitizeBlueprintTopology(
     }
   });
 
+  // Ensure every Decision has ≥2 outgoing edges; auto-inject "Else" when only one branch
+  // Run before attachOrphans so we can use orphan steps as Else targets without reparenting
+  sanitizedSteps.forEach((step) => {
+    if (!isDecisionStep(step) || step.nextStepIds.length >= 2) return;
+    const elseTarget = findElseTargetForDecision(step, sanitizedSteps, parentMap);
+    if (elseTarget) {
+      assignBranchParent(step.id, elseTarget.id, "Else", "Otherwise");
+      summary.injectedElseBranches += 1;
+    }
+  });
+
   attachOrphans(sanitizedSteps, parentMap, summary, stepNumberLookup, linkParentChild);
 
   const legacyBranchIdLookup = new Map(
@@ -313,7 +325,33 @@ function defaultSummary(): SanitizationSummary {
     removedCycles: 0,
     trimmedConnections: 0,
     attachedOrphans: 0,
+    injectedElseBranches: 0,
   };
+}
+
+/** Find a suitable "Else" target for a Decision with only one branch. Prefer orphans to avoid reparenting. */
+function findElseTargetForDecision(
+  decision: BlueprintStep,
+  steps: BlueprintStep[],
+  parentMap: ParentMap
+): BlueprintStep | undefined {
+  const decisionBase = parseInt(decision.stepNumber.replace(/[^0-9]/g, ""), 10) || 0;
+  const childIds = new Set(decision.nextStepIds);
+  const candidates = steps.filter(
+    (s) => s.id !== decision.id && !childIds.has(s.id)
+  );
+  const withBase = candidates.map((s) => ({
+    step: s,
+    base: parseInt(s.stepNumber.replace(/[^0-9]/g, ""), 10) || 0,
+    isOrphan: !(parentMap.get(s.id)?.size ?? 0),
+  }));
+  const orphans = withBase.filter((c) => c.isOrphan && c.base > decisionBase);
+  const nextOrphan = orphans.sort((a, b) => a.base - b.base)[0];
+  if (nextOrphan) return nextOrphan.step;
+  const nextInFlow = withBase
+    .filter((c) => c.base > decisionBase)
+    .sort((a, b) => a.base - b.base)[0];
+  return nextInFlow?.step;
 }
 
 function buildStepNumberLookup(steps: BlueprintStep[]): Map<string, BlueprintStep> {

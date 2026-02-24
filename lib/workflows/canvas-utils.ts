@@ -1,7 +1,26 @@
 import type { Node, Edge, Connection } from "reactflow";
 import type { WorkflowSpec, WorkflowStep } from "./types";
 import { generateStepNumbers } from "./step-numbering";
-import { sendDevAgentLog } from "@/lib/dev/agent-log";
+
+/** Max entries in layout cache to avoid unbounded memory growth */
+const LAYOUT_CACHE_MAX_SIZE = 100;
+
+/** Above this step count, layout can be deferred to requestIdleCallback (browser) */
+export const LARGE_GRAPH_LAYOUT_THRESHOLD = 15;
+
+/** Cache key -> computed positions. Skipped when workflow structure unchanged. */
+const layoutCache = new Map<string, Map<string, { x: number; y: number }>>();
+
+/**
+ * Create a stable hash of step graph structure for layout cache key.
+ * Same structure => same hash => skip recomputation.
+ */
+function layoutCacheKey(steps: WorkflowStep[]): string {
+  const parts = steps.map(
+    (s) => `${s.id}:${s.parentStepId ?? ""}:${[...(s.nextStepIds ?? [])].sort().join(",")}`
+  );
+  return parts.join("|");
+}
 
 /**
  * Configuration for canvas layout
@@ -32,69 +51,102 @@ export interface CanvasNodeData {
 }
 
 /**
+ * Quick O(n) layout for large graphs. Used as initial render while full layout runs in requestIdleCallback.
+ */
+function computeLayoutPositionsQuick(steps: WorkflowStep[]): Map<string, { x: number; y: number }> {
+  const levels = new Map<string, number>();
+  const stepById = new Map(steps.map((s) => [s.id, s]));
+  const indegree = new Map<string, number>();
+  steps.forEach((s) => indegree.set(s.id, 0));
+  steps.forEach((s) => {
+    s.nextStepIds.forEach((t) => {
+      if (indegree.has(t)) indegree.set(t, (indegree.get(t) ?? 0) + 1);
+    });
+  });
+  const queue = steps.filter((s) => indegree.get(s.id) === 0).map((s) => s.id);
+  let idx = 0;
+  while (idx < queue.length) {
+    const id = queue[idx++];
+    const level = levels.get(id) ?? 0;
+    const step = stepById.get(id);
+    step?.nextStepIds.forEach((t) => {
+      levels.set(t, Math.max(levels.get(t) ?? 0, level + 1));
+      const d = (indegree.get(t) ?? 1) - 1;
+      indegree.set(t, d);
+      if (d <= 0) queue.push(t);
+    });
+  }
+  steps.forEach((s) => {
+    if (!levels.has(s.id)) levels.set(s.id, levels.size);
+  });
+  const byLevel = new Map<number, string[]>();
+  levels.forEach((l, id) => {
+    if (!byLevel.has(l)) byLevel.set(l, []);
+    byLevel.get(l)!.push(id);
+  });
+  const positions = new Map<string, { x: number; y: number }>();
+  Array.from(byLevel.entries())
+    .sort((a, b) => a[0] - b[0])
+    .forEach(([level, ids]) => {
+      const y = level * CANVAS_LAYOUT.NODE_Y_GAP;
+      ids.forEach((id, i) => {
+        const x = (i - (ids.length - 1) / 2) * CANVAS_LAYOUT.NODE_X_GAP;
+        positions.set(id, { x, y });
+      });
+    });
+  return positions;
+}
+
+/**
+ * Schedule layout computation during browser idle time. Use for large graphs (>15 steps) to avoid blocking the main thread.
+ * Falls back to immediate execution if requestIdleCallback is unavailable (e.g. SSR).
+ */
+export function scheduleLayoutInIdle(
+  steps: WorkflowStep[]
+): Promise<Map<string, { x: number; y: number }>> {
+  return new Promise((resolve) => {
+    const run = () => {
+      const result = computeLayoutPositions(steps);
+      resolve(result);
+    };
+    if (typeof requestIdleCallback !== "undefined") {
+      requestIdleCallback(run, { timeout: 100 });
+    } else {
+      run();
+    }
+  });
+}
+
+/**
  * Convert WorkflowSpec steps to React Flow nodes
  *
  * @param workflow - The WorkflowSpec object containing steps
+ * @param taskLookup - Optional map of task statuses
+ * @param positionsOverride - Optional precomputed positions (e.g. from scheduleLayoutInIdle for large graphs)
  * @returns Array of React Flow nodes
  */
 export function workflowToNodes(
   workflow: WorkflowSpec | null,
-  taskLookup?: Map<string, { status?: string | null }>
+  taskLookup?: Map<string, { status?: string | null }>,
+  positionsOverride?: Map<string, { x: number; y: number }> | null
 ): Node<CanvasNodeData>[] {
-  // #region agent log
-  sendDevAgentLog({
-    location: "canvas-utils.ts:38",
-    message: "workflowToNodes entry",
-    data: {
-      hasWorkflowSpec: !!workflow,
-      hasSteps: !!workflow?.steps,
-      stepCount: workflow?.steps?.length ?? 0,
-      steps:
-        workflow?.steps?.map((s) => ({
-          id: s.id,
-          name: s.name,
-          stepNumber: s.stepNumber,
-          parentStepId: s.parentStepId,
-          nextStepIds: s.nextStepIds,
-          type: s.type,
-        })) ?? [],
-    },
-    timestamp: Date.now(),
-    sessionId: "debug-session",
-    runId: "run2",
-    hypothesisId: "E",
-  });
-  // #endregion
   if (!workflow || !workflow.steps) {
     return [];
   }
 
   // Generate step numbers for all steps
   const numbering = generateStepNumbers(workflow);
-  
-  // #region agent log
-  sendDevAgentLog({
-    location: "canvas-utils.ts:47",
-    message: "After generateStepNumbers",
-    data: {
-      numberingSize: numbering.size,
-      numbering: Array.from(numbering.entries()).map(([id, info]) => ({
-        id,
-        stepNumber: info.stepNumber,
-        displayLabel: info.displayLabel,
-      })),
-    },
-    timestamp: Date.now(),
-    sessionId: "debug-session",
-    runId: "run2",
-    hypothesisId: "E",
-  });
-  // #endregion
 
-  // Calculate positions - use stored positions if available, otherwise compute layout
+  // Calculate positions - use override, stored, or compute layout
+  // For large graphs (>15 steps) without override, use quick layout first; caller can pass positionsOverride from scheduleLayoutInIdle for full layout
   const storedPositions = workflow.metadata?.nodePositions;
-  const computedPositions = computeLayoutPositions(workflow.steps);
-  
+  const stepCount = workflow.steps.length;
+  const useQuickLayout =
+    stepCount > LARGE_GRAPH_LAYOUT_THRESHOLD && !positionsOverride && !storedPositions;
+  const computedPositions =
+    positionsOverride ??
+    (useQuickLayout ? computeLayoutPositionsQuick(workflow.steps) : computeLayoutPositions(workflow.steps));
+
   // Merge stored positions with computed positions (stored takes precedence)
   const positions = new Map<string, { x: number; y: number }>();
   computedPositions.forEach((pos, id) => {
@@ -106,46 +158,11 @@ export function workflowToNodes(
     });
   }
 
-  // #region agent log
-  sendDevAgentLog({
-    location: "canvas-utils.ts:64",
-    message: "Before mapping steps to nodes",
-    data: {
-      stepCount: workflow.steps.length,
-      positionsSize: positions.size,
-      storedPositionsCount: storedPositions ? Object.keys(storedPositions).length : 0,
-    },
-    timestamp: Date.now(),
-    sessionId: "debug-session",
-    runId: "run2",
-    hypothesisId: "E",
-  });
-  // #endregion
-  
   return workflow.steps.map((step, index) => {
     const position = positions.get(step.id) ?? { x: 0, y: index * CANVAS_LAYOUT.NODE_Y_GAP };
 
     // Get numbering info for this step
     const stepNumbering = numbering.get(step.id);
-    
-    // #region agent log
-    sendDevAgentLog({
-      location: "canvas-utils.ts:68",
-      message: "Creating node for step",
-      data: {
-        stepId: step.id,
-        stepName: step.name,
-        stepNumber: step.stepNumber,
-        index,
-        position,
-        hasNumbering: !!stepNumbering,
-      },
-      timestamp: Date.now(),
-      sessionId: "debug-session",
-      runId: "run2",
-      hypothesisId: "E",
-    });
-    // #endregion
 
     let totalTaskCount = step.taskIds?.length ?? 0;
     let pendingTaskCount = totalTaskCount;
@@ -330,26 +347,12 @@ export function reconnectEdge(workflow: WorkflowSpec, oldEdgeId: string, newConn
  * @returns Position object with x and y coordinates
  */
 function computeLayoutPositions(steps: WorkflowStep[]): Map<string, { x: number; y: number }> {
-  // #region agent log
-  sendDevAgentLog({
-    location: "canvas-utils.ts:251",
-    message: "computeLayoutPositions entry",
-    data: {
-      stepCount: steps.length,
-      steps: steps.map((s) => ({
-        id: s.id,
-        name: s.name,
-        stepNumber: s.stepNumber,
-        parentStepId: s.parentStepId,
-        nextStepIds: s.nextStepIds,
-      })),
-    },
-    timestamp: Date.now(),
-    sessionId: "debug-session",
-    runId: "run1",
-    hypothesisId: "A",
-  });
-  // #endregion
+  const key = layoutCacheKey(steps);
+  const cached = layoutCache.get(key);
+  if (cached) {
+    return cached;
+  }
+
   const adjacency = new Map<string, Set<string>>();
   const indegree = new Map<string, number>();
 
@@ -365,25 +368,6 @@ function computeLayoutPositions(steps: WorkflowStep[]): Map<string, { x: number;
       }
     }
   }
-  
-  // #region agent log
-  sendDevAgentLog({
-    location: "canvas-utils.ts:266",
-    message: "After initial indegree calculation",
-    data: {
-      indegreeMap: Array.from(indegree.entries()).map(([id, count]) => ({
-        id,
-        count,
-        parentStepId: steps.find((s) => s.id === id)?.parentStepId,
-        hasParentButNoIncoming: Boolean(steps.find((s) => s.id === id)?.parentStepId && count === 0),
-      })),
-    },
-    timestamp: Date.now(),
-    sessionId: "debug-session",
-    runId: "run1",
-    hypothesisId: "B",
-  });
-  // #endregion
 
   const queue: string[] = [];
   const levels = new Map<string, number>();
@@ -392,24 +376,6 @@ function computeLayoutPositions(steps: WorkflowStep[]): Map<string, { x: number;
   indegree.forEach((count, id) => {
     if (count === 0) {
       queue.push(id);
-      const step = stepById.get(id);
-      // #region agent log
-      sendDevAgentLog({
-        location: "canvas-utils.ts:271",
-        message: "Root node found",
-        data: {
-          id,
-          count,
-          parentStepId: step?.parentStepId,
-          stepNumber: step?.stepNumber,
-          name: step?.name,
-        },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "run1",
-        hypothesisId: "B",
-      });
-      // #endregion
       levels.set(id, 0);
     }
   });
@@ -418,28 +384,6 @@ function computeLayoutPositions(steps: WorkflowStep[]): Map<string, { x: number;
     const current = queue.shift() as string;
     const level = levels.get(current) ?? 0;
     const targets = adjacency.get(current);
-    // #region agent log
-    const currentStep = stepById.get(current);
-    sendDevAgentLog({
-      location: "canvas-utils.ts:278",
-      message: "Processing node in queue",
-      data: {
-        current,
-        level,
-        targetCount: targets?.size ?? 0,
-        targets: Array.from(targets ?? []),
-        currentStep: {
-          name: currentStep?.name,
-          stepNumber: currentStep?.stepNumber,
-          parentStepId: currentStep?.parentStepId,
-        },
-      },
-      timestamp: Date.now(),
-      sessionId: "debug-session",
-      runId: "run1",
-      hypothesisId: "A",
-    });
-    // #endregion
     if (!targets) {
       continue;
     }
@@ -453,26 +397,6 @@ function computeLayoutPositions(steps: WorkflowStep[]): Map<string, { x: number;
       }
     }
   }
-  
-  // #region agent log
-  sendDevAgentLog({
-    location: "canvas-utils.ts:294",
-    message: "After topological sort",
-    data: {
-      levels: Array.from(levels.entries()).map(([id, level]) => ({
-        id,
-        level,
-        parentStepId: stepById.get(id)?.parentStepId,
-        stepNumber: stepById.get(id)?.stepNumber,
-        name: stepById.get(id)?.name,
-      })),
-    },
-    timestamp: Date.now(),
-    sessionId: "debug-session",
-    runId: "run1",
-    hypothesisId: "A",
-  });
-  // #endregion
 
   const levelGroups = new Map<number, string[]>();
   for (const step of steps) {
@@ -485,29 +409,6 @@ function computeLayoutPositions(steps: WorkflowStep[]): Map<string, { x: number;
 
   const positions = new Map<string, { x: number; y: number }>();
   const sortedLevels = Array.from(levelGroups.entries()).sort((a, b) => a[0] - b[0]);
-  
-  // #region agent log
-  sendDevAgentLog({
-    location: "canvas-utils.ts:305",
-    message: "Level groups before positioning",
-    data: {
-      levelGroups: Array.from(levelGroups.entries()).map(([level, ids]) => ({
-        level,
-        ids,
-        steps: ids.map((id) => ({
-          id,
-          name: stepById.get(id)?.name,
-          stepNumber: stepById.get(id)?.stepNumber,
-          parentStepId: stepById.get(id)?.parentStepId,
-        })),
-      })),
-    },
-    timestamp: Date.now(),
-    sessionId: "debug-session",
-    runId: "run1",
-    hypothesisId: "C",
-  });
-  // #endregion
 
   sortedLevels.forEach(([level, ids]) => {
     if (ids.length === 0) {
@@ -540,18 +441,6 @@ function computeLayoutPositions(steps: WorkflowStep[]): Map<string, { x: number;
       const { parentId, ids: childIds } = group;
       const groupSize = childIds.length;
       const parentPosition = parentId ? positions.get(parentId) : undefined;
-      
-      // #region agent log
-      sendDevAgentLog({
-        location: "canvas-utils.ts:336",
-        message: "Positioning group",
-        data: { level, parentId, groupSize, childIds, parentPosition, hasParentPosition: !!parentPosition },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "run1",
-        hypothesisId: "C",
-      });
-      // #endregion
 
       if (!parentPosition) {
         childIds.forEach((childId) => {
@@ -590,51 +479,16 @@ function computeLayoutPositions(steps: WorkflowStep[]): Map<string, { x: number;
         
         positions.set(childId, { x, y });
         positionedX.add(x);
-        // #region agent log
-        sendDevAgentLog({
-          location: "canvas-utils.ts:370",
-          message: "Positioned branch node",
-          data: {
-            childId,
-            index,
-            x,
-            y,
-            parentId,
-            stepNumber: stepById.get(childId)?.stepNumber,
-            name: stepById.get(childId)?.name,
-            groupSize,
-          },
-          timestamp: Date.now(),
-          sessionId: "debug-session",
-          runId: "post-fix",
-          hypothesisId: "D",
-        });
-        // #endregion
       });
       cursor += groupSize;
     });
   });
-  
-  // #region agent log
-  sendDevAgentLog({
-    location: "canvas-utils.ts:377",
-    message: "Final positions computed",
-    data: {
-      positions: Array.from(positions.entries()).map(([id, pos]) => ({
-        id,
-        x: pos.x,
-        y: pos.y,
-        stepNumber: stepById.get(id)?.stepNumber,
-        name: stepById.get(id)?.name,
-        parentStepId: stepById.get(id)?.parentStepId,
-      })),
-    },
-    timestamp: Date.now(),
-    sessionId: "debug-session",
-    runId: "run1",
-    hypothesisId: "A",
-  });
-  // #endregion
+
+  while (layoutCache.size >= LAYOUT_CACHE_MAX_SIZE) {
+    const oldestKey = layoutCache.keys().next().value;
+    if (oldestKey) layoutCache.delete(oldestKey);
+  }
+  layoutCache.set(key, positions);
 
   return positions;
 }

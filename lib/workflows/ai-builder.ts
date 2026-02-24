@@ -7,7 +7,7 @@ import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { sanitizeBlueprintTopology, type SanitizationSummary } from "@/lib/workflows/sanitizer";
 import { logger } from "@/lib/logger";
 
-const WORKFLOW_MODEL = process.env.WORKFLOW_MODEL ?? process.env.BLUEPRINT_MODEL ?? "gpt-4-turbo-preview";
+const WORKFLOW_MODEL = process.env.WORKFLOW_MODEL ?? process.env.BLUEPRINT_MODEL ?? "gpt-4o";
 
 type ConversationMessage = {
   role: "system" | "user" | "assistant";
@@ -249,6 +249,7 @@ function mergeAIResponse(
         removedCycles: 0,
         trimmedConnections: 0,
         attachedOrphans: 0,
+        injectedElseBranches: 0,
       },
     };
   }

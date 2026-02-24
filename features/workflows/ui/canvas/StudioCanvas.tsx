@@ -78,18 +78,19 @@ export function StudioCanvas({
       const prev = prevMap.get(node.id);
       const isNew = !prev;
       const hasChanged = !!prev && JSON.stringify(prev.data) !== JSON.stringify(node.data);
+      const skipAnimations = isSynthesizing;
       return {
         ...node,
         data: {
           ...node.data,
-          isNew,
-          isUpdated: !isNew && hasChanged,
+          isNew: skipAnimations ? false : isNew,
+          isUpdated: skipAnimations ? false : (!isNew && hasChanged),
         },
       };
     });
     setRenderNodes(mappedNodes);
     previousNodeMap.current = new Map(nodes.map((node) => [node.id, node]));
-  }, [nodes]);
+  }, [nodes, isSynthesizing]);
 
   useEffect(() => {
     if (!rfInstance) {
@@ -98,6 +99,10 @@ export function StudioCanvas({
 
     if (renderNodes.length === 0) {
       rfInstance.setCenter(0, 0, { zoom: 1 });
+      return undefined;
+    }
+
+    if (isSynthesizing) {
       return undefined;
     }
 

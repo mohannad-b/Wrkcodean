@@ -362,7 +362,13 @@ You receive the current workflow state. Do NOT rebuild from scratch.
   ]
 }
 
-- Decision steps MUST include at least two branches (Yes/No, Success/Failure, etc.).
+- Decision steps MUST have a "branches" array with at least 2 entries; never use flat nextSteps for Decisions.
+- Each branch MUST have "label" (e.g. "Yes", "No", "Success", "Failure") and "targetStep" (step number or ID).
+- Decision steps MUST include branchCondition (e.g. "Amount > $5000", "Status is approved").
+- Example: "If X then A else B" → Decision with branches: [{label: "Yes", targetStep: "A"}, {label: "No", targetStep: "B"}].
+- When user says "if X then Y", assume a Decision with Yes/No or Success/Failure branches.
+- When user mentions approval, add Human step with branch back to main flow.
+- When user mentions retry/failure, add Exception step.
 - Exception steps describe the failure path and who is notified.
 - Use plain names without "Trigger:" / "Decision:" prefixes.
 
@@ -428,6 +434,21 @@ OUTPUT (JSON ONLY):
   "requirementsText": "Updated requirements doc when new info arrives."
 }
 
+DECISION & BRANCH RULES (CRITICAL):
+- Decision steps MUST have a "branches" array with at least 2 entries. Never use flat nextSteps for Decisions.
+- Each branch MUST have "label" (e.g. "Yes", "No", "Success", "Failure") and "targetStep" (step number or ID).
+- Decision steps MUST include branchCondition (e.g. "Amount > $5000", "Status is approved").
+- Example: "If X then A else B" → Decision step with branches: [{label: "Yes", targetStep: "A"}, {label: "No", targetStep: "B"}].
+- When user says "if X then Y", assume a Decision with Yes/No or Success/Failure branches.
+- When user mentions approval, add Human step with branch back to main flow.
+- When user mentions retry/failure, add Exception step.
+
+DECISION EXAMPLES (follow this structure):
+1. Approval flow: User says "if amount over $5K, get finance approval first"
+   → Decision step 3 with branchCondition "Amount > $5000", branches: [{label: "Yes", targetStep: "3A"}, {label: "No", targetStep: "4"}], step 3A = Human "Finance approval"
+2. Success/failure: User says "retry 3 times, then alert ops if it fails"
+   → Action step with retry, Decision with branches: [{label: "Success", targetStep: "4"}, {label: "Failure", targetStep: "3E"}], step 3E = Exception "Alert ops"
+
 RULES:
 - Never restate the full flow; the canvas shows it.
 - Always include exactly one concise follow-up question unless the process is done.
@@ -440,6 +461,7 @@ RULES:
 - If FOLLOWUP MODE is "technical_opt_in" and technical_opt_in is not yet true, ask ONLY the consent question: "We’ve got enough to run this. Want me to lock it in, or do you want to answer 1–2 technical questions to make it bulletproof?" After consent, ask one technical question aligned to the next focus.
 - When you ask a follow-up question, append a brief invitation for other requirements: "(Also feel free to add any other requirements you care about.)" Skip this invitation for the technical_opt_in consent question.
 - Populate workflow sections only when empty; use the user's terminology.
+- For each step: description = what happens + context; goalOutcome = desired end state (e.g. "Individual rows of scraped prices in a Google Sheet"), not the action.
 - Return valid JSON only.`.trim();
 
 /**

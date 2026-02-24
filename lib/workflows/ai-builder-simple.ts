@@ -37,6 +37,8 @@ interface BuildBlueprintParams {
   requirementsStatusHint?: string | null;
   followUpMode?: "technical_opt_in" | null;
   knownFactsHint?: string | null;
+  intentSummaryHint?: string | null;
+  requirementsDiffHint?: string | null;
   onStatus?: (payload: BuildStatusUpdate) => void;
   trace?: import("@/lib/ai/copilot-trace").CopilotTrace;
 }
@@ -63,7 +65,14 @@ type AIStep = {
   stepNumber: string;
   type?: string;
   name: string;
+  /** What happens in this step + ALL relevant context from the conversation (locations, dates, filters, etc.) */
   description?: string;
+  /** Desired end state / result of this step (e.g. "Individual rows of scraped prices in a Google Sheet") */
+  goalOutcome?: string;
+  /** Alternative field name some models use */
+  goal?: string;
+  /** Additional operator notes: user-specific details, constraints, preferences */
+  notes?: string;
   systemsInvolved?: string[];
   nextSteps?: string[];
   branches?: Array<{
@@ -109,7 +118,7 @@ type AIResponse = {
   requirementsText?: string;
 };
 
-const WORKFLOW_MODEL = process.env.WORKFLOW_MODEL ?? process.env.BLUEPRINT_MODEL ?? "gpt-4-turbo-preview";
+const WORKFLOW_MODEL = process.env.WORKFLOW_MODEL ?? process.env.BLUEPRINT_MODEL ?? "gpt-4o";
 
 /**
  * Build complete workflow from scratch, preserving essential IDs and metadata
@@ -130,6 +139,8 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     requirementsStatusHint,
     followUpMode,
     knownFactsHint,
+    intentSummaryHint,
+    requirementsDiffHint,
     onStatus,
     trace,
   } = params;
@@ -146,6 +157,8 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     requirementsStatusHint,
     followUpMode,
     knownFactsHint,
+    intentSummaryHint,
+    requirementsDiffHint,
   });
   emitStatus("analysis", "Extracting requirements from your last message…");
 
@@ -298,6 +311,51 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
 }
 
 /**
+ * Infer goal/outcome from description when AI doesn't provide it.
+ * Transforms action-based text into outcome-based (what exists after the step).
+ */
+function inferGoalFromDescription(description: string, stepName: string): string {
+  const d = description.trim();
+  if (!d || d.length < 10) return stepName;
+
+  // Store/Save/Load X in(to) Y → "X in Y"
+  const storeMatch = d.match(/(?:store|save|load|write)\s+(.+?)\s+in(?:to)?\s+(.+?)(?:\.|,|$)/i);
+  if (storeMatch) {
+    const what = storeMatch[1].trim();
+    const where = storeMatch[2].trim();
+    if (/sheet|spreadsheet|google/i.test(where)) {
+      return `Individual rows of ${what} in ${where}`;
+    }
+    return `${what} in ${where}`;
+  }
+
+  // Scrape X from Y → "X data ready for next step"
+  if (/scrape|extract/i.test(d)) {
+    const dataMatch = d.match(/(?:scrape|extract)\s+(.+?)(?:\s+from|\s+for|,|\.|$)/i);
+    const dataType = dataMatch?.[1]?.trim() || "data";
+    return `${dataType} ready for next step`;
+  }
+
+  // Send X to Y → "X delivered to Y"
+  const sendMatch = d.match(/send\s+(.+?)\s+to\s+(.+?)(?:\.|,|$)/i);
+  if (sendMatch) {
+    return `${sendMatch[1].trim()} delivered to ${sendMatch[2].trim()}`;
+  }
+
+  // Trigger: "Workflow initiated"
+  if (/trigger|start|initiate/i.test(d) && d.length < 80) {
+    return "Workflow initiated";
+  }
+
+  // Default: use last meaningful phrase (often the result)
+  const parts = d.split(/[,.]\s*/).filter((p) => p.trim().length > 15);
+  const last = parts[parts.length - 1]?.trim();
+  if (last && last !== d) return last;
+
+  return d;
+}
+
+/**
  * Preserve essential data from existing workflow:
  * - Step IDs (for task linking and node positions)
  * - Task IDs (linked to steps)
@@ -353,7 +411,14 @@ function preserveEssentialData(
       // Preserve taskIds from existing step
       const taskIds = existing?.taskIds ?? [];
       const safeName = stepName && stepName.trim().length > 0 ? stepName : `Step ${aiStep.stepNumber ?? stepId}`;
-      const safeSummary = aiStep.description?.trim() || safeName;
+      const richDescription = aiStep.description?.trim() || safeName;
+      const notesForOps = aiStep.notes?.trim() || undefined;
+      const safeSummary = richDescription;
+      const explicitGoal = (aiStep.goalOutcome ?? (aiStep as { goal?: string }).goal)?.trim();
+      const goalOutcome =
+        explicitGoal ||
+        existing?.goalOutcome ||
+        inferGoalFromDescription(richDescription, safeName);
 
       return {
         id: stepId,
@@ -361,8 +426,9 @@ function preserveEssentialData(
         type: stepType,
         name: safeName,
         summary: safeSummary,
-        description: safeSummary,
-        goalOutcome: safeSummary,
+        description: richDescription,
+        goalOutcome,
+        notesForOps,
         responsibility: aiStep.responsibility ?? mapTypeToResponsibility(stepType),
         systemsInvolved: Array.isArray(aiStep.systemsInvolved) ? aiStep.systemsInvolved : [],
         notifications: Array.isArray(aiStep.notifications) ? aiStep.notifications : [],
@@ -569,6 +635,9 @@ type CompactPromptArgs = {
   requirementsStatusHint?: string | null;
   followUpMode?: "technical_opt_in" | null;
   knownFactsHint?: string | null;
+  /** Phase A output: intent + requirements diff for focused context (two-phase generation) */
+  intentSummaryHint?: string | null;
+  requirementsDiffHint?: string | null;
 };
 
 function buildCompactPrompt({
@@ -580,8 +649,17 @@ function buildCompactPrompt({
   requirementsStatusHint,
   followUpMode,
   knownFactsHint,
+  intentSummaryHint,
+  requirementsDiffHint,
 }: CompactPromptArgs): string {
   const parts: string[] = [];
+
+  if (intentSummaryHint?.trim()) {
+    parts.push(`USER INTENT (what they want now):\n${truncate(intentSummaryHint.trim(), 150)}`);
+  }
+  if (requirementsDiffHint?.trim()) {
+    parts.push(`REQUIREMENTS CHANGED:\n${truncate(requirementsDiffHint.trim(), 300)}`);
+  }
 
   if (memorySummary || (memoryFacts && Object.keys(memoryFacts).length > 0)) {
     const factsBlock =
@@ -597,7 +675,7 @@ function buildCompactPrompt({
 
   const clippedRequirements = requirementsText?.trim();
   if (clippedRequirements) {
-    parts.push(`LATEST REQUIREMENTS (trimmed):\n${truncate(clippedRequirements, 800)}`);
+    parts.push(`LATEST REQUIREMENTS (trimmed):\n${truncate(clippedRequirements, 2000)}`);
   }
 
   if (requirementsStatusHint?.trim()) {
@@ -623,6 +701,11 @@ function buildCompactPrompt({
       "- Put tasks inside tasks[] with: title, description, priority (blocker|important|optional), relatedSteps (ids), systemType",
       "- Keep steps specific to the user's systems and include decisions/exception branches for missing data and retries",
       "- Include at least 2 tasks when possible",
+      "",
+      "STEP DETAILS (CRITICAL): Each step MUST have BOTH description AND goalOutcome (different values):",
+      "- description: What happens + context. Example: 'Store scraped data in a Google Sheet, focusing on SUVs and sedans.'",
+      "- goalOutcome: The end state (what exists after), NOT the action. Example: 'Individual rows of scraped prices in a Google Sheet.'",
+      "- Never set goalOutcome = description. goalOutcome = outcome; description = action.",
     ].join("\n")
   );
 
@@ -642,16 +725,24 @@ function summarizeBlueprintCompact(blueprint: Blueprint): string {
     }
   });
 
-  const steps = blueprint.steps.map((step) => ({
-    stepNumber: step.stepNumber,
-    type: step.type,
-    name: step.name,
-    systemsInvolved: step.systemsInvolved?.slice(0, 3) ?? [],
-    nextSteps: (step.nextStepIds ?? [])
-      .map((id) => blueprint.steps.find((candidate) => candidate.id === id)?.stepNumber ?? id)
-      .slice(0, 4),
-    branchLabel: step.branchLabel,
-  }));
+  const steps = blueprint.steps.map((step) => {
+    const desc = step.description || step.summary;
+    const goal = step.goalOutcome;
+    const notes = (step as { notesForOps?: string }).notesForOps;
+    return {
+      stepNumber: step.stepNumber,
+      type: step.type,
+      name: step.name,
+      ...(desc ? { description: truncate(desc, 120) } : {}),
+      ...(goal ? { goalOutcome: truncate(goal, 80) } : {}),
+      ...(notes ? { notes: truncate(notes, 80) } : {}),
+      systemsInvolved: step.systemsInvolved?.slice(0, 3) ?? [],
+      nextSteps: (step.nextStepIds ?? [])
+        .map((id) => blueprint.steps.find((candidate) => candidate.id === id)?.stepNumber ?? id)
+        .slice(0, 4),
+      branchLabel: step.branchLabel,
+    };
+  });
 
   const compact = {
     summary: truncate(blueprint.summary ?? "", 240) || null,
