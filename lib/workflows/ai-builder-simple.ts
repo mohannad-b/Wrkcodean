@@ -11,6 +11,7 @@ import { randomUUID } from "crypto";
 import type { Blueprint, BlueprintStep, BlueprintBranch, BlueprintStepType, BlueprintResponsibility } from "./types";
 import { applyStepNumbers } from "./step-numbering";
 import { WORKFLOW_SYSTEM_PROMPT_COMPACT } from "@/lib/ai/prompts";
+import getOpenAIClient from "@/lib/ai/openai-client";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { sanitizeBlueprintTopology, type SanitizationSummary } from "./sanitizer";
 import { logger } from "@/lib/logger";
@@ -110,11 +111,6 @@ type AIResponse = {
 
 const WORKFLOW_MODEL = process.env.WORKFLOW_MODEL ?? process.env.BLUEPRINT_MODEL ?? "gpt-4-turbo-preview";
 
-import OpenAI from "openai";
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY ?? "",
-});
-
 /**
  * Build complete workflow from scratch, preserving essential IDs and metadata
  */
@@ -182,6 +178,11 @@ export async function buildBlueprintFromChat(params: BuildBlueprintParams): Prom
     temperature: 0.3,
     messageCount: messages.length,
   });
+
+  const openai = getOpenAIClient();
+  if (!openai) {
+    throw new Error("OPENAI_API_KEY missing");
+  }
 
   try {
     emitStatus("generation", "Drafting updated workflow from context…");

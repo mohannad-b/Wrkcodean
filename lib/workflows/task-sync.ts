@@ -6,6 +6,35 @@ import type { AITask } from "./ai-builder-simple";
 
 export type TaskAssignmentMap = Record<string, string[]>;
 
+const TITLE_STOP_WORDS = new Set([
+  "provide", "request", "access", "connect", "add", "setup", "configure",
+  "the", "a", "an", "to", "for", "and", "or", "oauth", "api", "credentials",
+]);
+
+function tokenizeTitle(title: string): Set<string> {
+  const tokens = title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 1 && !TITLE_STOP_WORDS.has(t));
+  return new Set(tokens);
+}
+
+function titleSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  const tokensA = tokenizeTitle(a);
+  const tokensB = tokenizeTitle(b);
+  if (tokensA.size === 0 && tokensB.size === 0) return a.toLowerCase() === b.toLowerCase() ? 1 : 0;
+  if (tokensA.size === 0 || tokensB.size === 0) return 0;
+  let intersection = 0;
+  for (const t of tokensA) {
+    if (tokensB.has(t)) intersection += 1;
+  }
+  const union = tokensA.size + tokensB.size - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
 export async function syncAutomationTasks({
   tenantId,
   automationVersionId,
@@ -88,9 +117,12 @@ export async function syncAutomationTasks({
       isBlocker: mapTaskPriority(aiTask.priority) === "blocker",
     };
 
+    const TITLE_SIMILARITY_THRESHOLD = 0.65;
     const match = existingTasks.find((task) => {
       const taskSystem = task.metadata?.systemType?.toLowerCase();
-      return task.title.toLowerCase() === normalizedTitle && taskSystem === normalizedSystemType;
+      if (taskSystem !== normalizedSystemType) return false;
+      if (task.title.toLowerCase() === normalizedTitle) return true;
+      return titleSimilarity(task.title, title) >= TITLE_SIMILARITY_THRESHOLD;
     });
 
     let taskId: string;

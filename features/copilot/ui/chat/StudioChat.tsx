@@ -16,6 +16,7 @@ import type { BuildActivity } from "@/features/copilot/ui/chat/types";
 import type { CopilotAnalysisState, ReadinessSignals, WorkflowProgressSnapshot } from "@/features/copilot/domain";
 import type { Task } from "@/db/schema";
 import { useCopilotChat } from "@/features/copilot/hooks/useCopilotChat";
+import { useToast } from "@/components/ui/use-toast";
 import { AttachmentList } from "@/features/copilot/ui/chat/AttachmentList";
 import { useBuildActivityStream } from "@/features/copilot/hooks/useBuildActivityStream";
 import type { BuildActivityEvent } from "@/features/copilot/buildActivityContract";
@@ -36,6 +37,8 @@ interface StudioChatProps {
   analysisLoading?: boolean;
   onRefreshAnalysis?: () => void | Promise<void>;
   onBuildActivityUpdate?: (activity: BuildActivity | null) => void;
+  /** Fallback build activity from parent (e.g. when stream hasn't connected yet) */
+  buildActivityFromParent?: BuildActivity | null;
   analysisUnavailable?: boolean;
   onProceedToBuild?: () => void;
   proceedToBuildDisabled?: boolean;
@@ -49,6 +52,12 @@ interface StudioChatProps {
     proceedBasicsMet?: boolean;
     proceedThresholdMet?: boolean;
     signals?: ReadinessSignals;
+  }) => void;
+  onRequirementsUpdate?: (text: string) => void;
+  /** Called with build activity panel state for rendering in canvas (e.g. bottom-right overlay) */
+  onBuildActivityPanelUpdate?: (state: {
+    activity: Parameters<typeof BuildActivityPanel>[0]["activity"] | null;
+    onRetry: () => void;
   }) => void;
 }
 
@@ -71,20 +80,42 @@ const mapBuildEventToLegacy = (event: BuildActivityEvent | null): BuildActivity 
   };
 };
 
+const PHASE_DISPLAY_MAP: Record<string, string> = {
+  queued: "Queued",
+  connecting: "Connecting",
+  drafting: "Drafting",
+  drawing: "Drawing",
+  saving: "Saving",
+  done: "Done",
+  error: "Error",
+};
+
 const mapLegacyToPanel = (activity: BuildActivity | null) => {
   if (!activity) return null;
   const status = activity.isRunning ? "running" : activity.phase.toLowerCase() === "error" ? "error" : "done";
   const detail = activity.lastLine ?? undefined;
-  const title = activity.phase || "Working";
+  const phaseKey = activity.phase?.toLowerCase() ?? "";
+  const title =
+    (activity as BuildActivity & { connectionLost?: boolean }).connectionLost
+      ? "Connection lost"
+      : PHASE_DISPLAY_MAP[phaseKey] ?? activity.phase ?? "Working";
+  const actionableCtas =
+    status === "error" ? [{ label: "Try again", destination: "retry" }] : [];
+  const recentUpdates =
+    activity.recentUpdates && activity.recentUpdates.length > 0
+      ? activity.recentUpdates.map((u) => ({ seq: u.seq, title: u.title, detail: u.detail, timestamp: u.timestamp }))
+      : activity.lastLine
+        ? [{ seq: activity.lastSeq ?? 0, title, detail, timestamp: Date.now() }]
+        : [];
   return {
     title,
     detail,
     progress: undefined,
     currentStatus: status as "queued" | "running" | "waiting_user" | "done" | "error" | "blocked",
-    recentUpdates: activity.lastLine
-      ? [{ seq: activity.lastSeq ?? 0, title, detail }]
-      : [],
-    actionableCtas: [],
+    recentUpdates,
+    queuedCount: activity.queuedCount ?? 0,
+    actionableCtas,
+    startedAt: activity.startedAt ?? null,
   };
 };
 
@@ -102,6 +133,7 @@ export function StudioChat({
   onWorkflowUpdatingChange,
   onRefreshAnalysis,
   onBuildActivityUpdate,
+  buildActivityFromParent,
   analysis,
   analysisLoading = false,
   onProceedToBuild,
@@ -109,8 +141,12 @@ export function StudioChat({
   proceedToBuildReason = null,
   proceedingToBuild = false,
   onReadinessUpdate,
+  onRequirementsUpdate,
+  onBuildActivityPanelUpdate,
 }: StudioChatProps) {
   const { profile } = useUserProfile();
+  const toast = useToast();
+  const lastErrorToastRef = useRef<string | null>(null);
   const {
     displayMessages,
     input,
@@ -128,6 +164,8 @@ export function StudioChat({
     handleFileSelect,
     handleRemoveFile,
     handleSend,
+    sendDisabledForCooldown = false,
+    retryLastMessage,
   } = useCopilotChat({
     mode: "studio",
     automationVersionId,
@@ -144,22 +182,79 @@ export function StudioChat({
     analysisLoading,
     onRefreshAnalysis,
     onReadinessUpdate,
+    onRequirementsUpdate,
   });
 
-  const buildStreamFallbackEnabled = process.env.NEXT_PUBLIC_BUILD_ACTIVITY_FALLBACK === "1";
-  const { activity: buildStreamActivity, viewModel: buildStreamViewModel } = useBuildActivityStream({
+  const {
+    status: buildStreamStatus,
+    activity: buildStreamActivity,
+    viewModel: buildStreamViewModel,
+    debug: buildStreamDebug,
+    simulateError,
+  } = useBuildActivityStream({
     automationVersionId,
   });
   const legacyFromStream = useMemo(() => mapBuildEventToLegacy(buildStreamActivity), [buildStreamActivity]);
   const fallbackPanelActivity = useMemo(() => mapLegacyToPanel(buildActivity), [buildActivity]);
-  const panelActivity = buildStreamViewModel ?? (buildStreamFallbackEnabled ? fallbackPanelActivity : null);
-  const effectiveLegacyActivity = legacyFromStream ?? (buildStreamFallbackEnabled ? buildActivity : null);
+  const parentPanelActivity = useMemo(() => mapLegacyToPanel(buildActivityFromParent ?? null), [buildActivityFromParent]);
+  const panelActivity =
+    buildStreamViewModel ??
+    parentPanelActivity ??
+    fallbackPanelActivity;
+  const effectiveLegacyActivity = legacyFromStream ?? buildActivity;
 
   useEffect(() => {
     if (typeof onBuildActivityUpdate === "function") {
       onBuildActivityUpdate(effectiveLegacyActivity ?? null);
     }
   }, [effectiveLegacyActivity, onBuildActivityUpdate]);
+
+  const retryRef = useRef(retryLastMessage);
+  retryRef.current = retryLastMessage;
+  const lastPanelSentRef = useRef<string | null>(null);
+  const lastPanelActivityRef = useRef<Parameters<typeof onBuildActivityPanelUpdate>[0]["activity"] | null>(null);
+  useEffect(() => {
+    lastPanelActivityRef.current = null;
+    lastPanelSentRef.current = null;
+  }, [automationVersionId]);
+  useEffect(() => {
+    if (typeof onBuildActivityPanelUpdate !== "function") return;
+    const effectiveActivity =
+      panelActivity ??
+      (buildStreamStatus === "connecting" && lastPanelActivityRef.current ? lastPanelActivityRef.current : null);
+    if (panelActivity) lastPanelActivityRef.current = panelActivity;
+    else if (buildStreamStatus === "idle") lastPanelActivityRef.current = null;
+    const serialized =
+      effectiveActivity == null
+        ? "__null__"
+        : JSON.stringify({
+            title: effectiveActivity.title,
+            detail: effectiveActivity.detail,
+            currentStatus: effectiveActivity.currentStatus,
+            ctas: effectiveActivity.actionableCtas?.map((c) => c.destination) ?? [],
+          });
+    if (lastPanelSentRef.current === serialized) return;
+    lastPanelSentRef.current = serialized;
+    onBuildActivityPanelUpdate({
+      activity: effectiveActivity ?? null,
+      onRetry: () => void retryRef.current?.(),
+    });
+  }, [onBuildActivityPanelUpdate, panelActivity, buildStreamStatus]);
+
+  useEffect(() => {
+    if (panelActivity?.currentStatus !== "error") {
+      lastErrorToastRef.current = null;
+      return;
+    }
+    const key = `${panelActivity.title ?? ""}-${panelActivity.detail ?? ""}`;
+    if (lastErrorToastRef.current === key) return;
+    lastErrorToastRef.current = key;
+    toast({
+      title: "Build failed",
+      description: panelActivity.detail ?? "Something went wrong. Try again.",
+      variant: "error",
+    });
+  }, [panelActivity?.currentStatus, panelActivity?.title, panelActivity?.detail, toast]);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
@@ -194,15 +289,13 @@ export function StudioChat({
       data-has-analysis={effectiveAnalysis ? "true" : "false"}
     >
       <div className="p-4 border-b border-gray-200 bg-white flex flex-col gap-3 shadow-sm z-10">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <div className="bg-gradient-to-br from-[#E43632] to-[#FF5F5F] text-white p-1.5 rounded-lg shadow-sm animate-pulse">
-              <Sparkles size={16} fill="currentColor" />
-            </div>
-            <div>
-              <span className="font-bold text-sm text-[#0A0A0A] block leading-none">WRK Copilot</span>
-              <span className="text-[10px] text-gray-400 font-medium">AI Assistant</span>
-            </div>
+        <div className="flex items-center gap-2">
+          <div className="bg-gradient-to-br from-[#E43632] to-[#FF5F5F] text-white p-1.5 rounded-lg shadow-sm animate-pulse">
+            <Sparkles size={16} fill="currentColor" />
+          </div>
+          <div>
+            <span className="font-bold text-sm text-[#0A0A0A] block leading-none">WRK Copilot</span>
+            <span className="text-[10px] text-gray-400 font-medium">AI Assistant</span>
           </div>
         </div>
       </div>
@@ -311,8 +404,6 @@ export function StudioChat({
         )}
       </MessageList>
 
-      {panelActivity ? <BuildActivityPanel activity={panelActivity} /> : null}
-
       <Composer
         className="space-y-3"
         onSubmit={(event) => {
@@ -335,7 +426,7 @@ export function StudioChat({
           <div className="flex items-center gap-2">
             <button
               onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || !automationVersionId || isUploadingFile || isSending || isAwaitingReply}
+              disabled={disabled || !automationVersionId || isUploadingFile}
               className="p-1.5 text-gray-400 hover:text-[#0A0A0A] hover:bg-gray-100 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               type="button"
               title="Attach file"
@@ -348,16 +439,21 @@ export function StudioChat({
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSend()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void handleSend();
+              }
+            }}
             placeholder={
               workflowEmpty ? "Describe the workflow, systems, and exceptions..." : "Capture refinements or clarifications..."
             }
             className="w-full bg-white text-[#0A0A0A] placeholder:text-gray-400 text-sm rounded-xl py-3 pl-10 pr-12 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#E43632]/10 focus:border-[#E43632] transition-all shadow-sm hover:border-gray-300"
-            disabled={disabled || !automationVersionId || isSending || isAwaitingReply}
+            disabled={disabled || !automationVersionId}
           />
           <button
-            onClick={() => handleSend()}
-            disabled={(!input.trim() && attachedFiles.length === 0) || disabled || isSending || !automationVersionId || isAwaitingReply}
+            onClick={() => void handleSend()}
+            disabled={(!input.trim() && attachedFiles.length === 0) || disabled || !automationVersionId || sendDisabledForCooldown}
             className="absolute right-1.5 p-2 bg-[#E43632] text-white rounded-lg hover:bg-[#C12E2A] transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Send size={14} />

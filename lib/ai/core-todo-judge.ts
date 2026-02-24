@@ -1,4 +1,5 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
+import getOpenAIClient from "@/lib/ai/openai-client";
 import type { CopilotTodoItem, CoreTodoKey } from "@/lib/workflows/copilot-analysis";
 
 export const REQUIREMENTS_CATEGORIES = [
@@ -58,11 +59,6 @@ type EvalParams = {
   lastQuestionKey?: string | null;
   lastQuestionText?: string | null;
 };
-
-const openai =
-  process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 0
-    ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-    : null;
 
 const SYSTEM_PROMPT = [
   "You are a strict JSON judge for core automation readiness todos AND requirements categories.",
@@ -202,6 +198,7 @@ function hasTriggerInfo(params: EvalParams): boolean {
 }
 
 export async function evaluateCoreTodos(params: EvalParams): Promise<CoreTodoJudgeResult | null> {
+  const openai = (getOpenAIClient as unknown as () => OpenAI | null)();
   if (!openai) return null;
 
   const payload = {

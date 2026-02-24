@@ -13,6 +13,9 @@ export const metadata: Metadata = {
   description:
     "Describe your process, let AI draft the automation, and pay only for successful outcomes with WRK Copilot.",
   metadataBase: new URL("https://www.wrkcopilot.com"),
+  icons: {
+    icon: "/icon.svg",
+  },
   openGraph: {
     title: "WRK Copilot | AI-built automation with human reliability",
     description:

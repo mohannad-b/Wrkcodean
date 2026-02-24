@@ -456,6 +456,11 @@ export function useAutomationDetailPage({ automationId }: UseAutomationDetailPag
     []
   );
 
+  const handleRequirementsUpdate = useCallback((text: string) => {
+    setRequirementsText(text);
+    previousRequirementsRef.current = text;
+  }, []);
+
   const confirmDiscardWorkflowChanges = useCallback(() => {
     if (!isWorkflowDirty) {
       return true;
@@ -2055,6 +2060,7 @@ export function useAutomationDetailPage({ automationId }: UseAutomationDetailPag
     readinessHintText,
     alreadyInBuild,
     onReadinessUpdate: handleReadinessUpdate,
+    onRequirementsUpdate: handleRequirementsUpdate,
   };
 
   const buildStatusTabProps = {

@@ -13,6 +13,8 @@ import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { createCopilotTrace } from "@/lib/ai/copilot-trace";
 import { logAudit } from "@/lib/audit/log";
 import { createBuildActivityEmitter } from "@/lib/build-activity/normalizer";
+import { buildJobId, getBuildQueue, type BuildJobData } from "@/lib/build-activity/build-queue";
+import { publishCopilotChatEvent, subscribeCopilotChatEvents } from "@/lib/copilot/chat-run-bus";
 import { db } from "@/db";
 import {
   automationVersions,
@@ -100,8 +102,12 @@ function summarizeRequirementsChange(previous?: string | null, next?: string | n
   return delta > 0 ? "Requirements expanded with new details." : "Requirements tightened for clarity.";
 }
 
-function summarizeWorkflowDiff(detail: { summary?: string | null; stepsAdded?: unknown[] } | null, stepCount: number) {
-  const summary = detail?.summary?.trim();
+function summarizeWorkflowDiff(
+  detail: { summary?: string | string[] | null; stepsAdded?: unknown[] } | null,
+  stepCount: number
+) {
+  const rawSummary = detail?.summary;
+  const summary = Array.isArray(rawSummary) ? rawSummary.join("; ").trim() : typeof rawSummary === "string" ? rawSummary.trim() : "";
   if (summary) {
     return `${summary} (${stepCount} steps).`;
   }
@@ -139,6 +145,7 @@ type CopilotRunResult = Awaited<ReturnType<typeof buildIdempotentResponse>> & {
   readinessSignals?: ReadinessSignals;
   proceedBasicsMet?: boolean;
   proceedThresholdMet?: boolean;
+  requirementsText?: string | null;
 };
 
 export type CopilotStatusPayload = {
@@ -148,6 +155,8 @@ export type CopilotStatusPayload = {
   message: string;
   seq?: number;
   meta?: Record<string, unknown>;
+  /** Phase-based placeholder readiness (0-100) during streaming; final score comes in result */
+  readinessScore?: number;
 };
 
 type CopilotErrorPayload = {
@@ -177,7 +186,7 @@ type CopilotMessageEventPayload = {
   displayText: string;
 };
 
-const INTENT_CACHE_TTL_MS = 15 * 60 * 1000;
+const INTENT_CACHE_TTL_MS = 5 * 60 * 1000;
 const intentCache = new Map<
   string,
   {
@@ -190,14 +199,26 @@ type TodoJudgeCacheValue = {
   result: CoreTodoJudgeResult;
   cachedAt: number;
 };
-const TODO_JUDGE_TTL_MS = 5 * 60 * 1000;
+const TODO_JUDGE_TTL_MS = 3 * 60 * 1000;
 const todoJudgeCache = new Map<string, TodoJudgeCacheValue>();
+
+const versionMutexes = new Map<string, Promise<void>>();
+
+async function withVersionMutex<T>(automationVersionId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = versionMutexes.get(automationVersionId) ?? Promise.resolve();
+  const ourWork = prev.then(() => fn());
+  versionMutexes.set(automationVersionId, ourWork.then(() => {}).catch(() => {}));
+  return ourWork;
+}
 
 type CopilotCallbacks = {
   onStatus?: (payload: CopilotStatusPayload) => void;
   onResult?: (payload: CopilotRunResult) => void;
   onError?: (payload: CopilotErrorPayload) => void;
   onMessage?: (payload: CopilotMessageEventPayload) => void;
+  onWorkflowUpdate?: (payload: { workflow: unknown }) => void;
+  onTasksUpdate?: (payload: { tasks: unknown[] }) => void;
+  onRequirementsUpdate?: (payload: { requirementsText: string }) => void;
 };
 
 function stripTrailingQuestion(text: string): string {
@@ -216,6 +237,130 @@ function isStreamRequest(request: Request) {
   const streamParam = url.searchParams.get("stream");
   const accept = request.headers.get("accept") ?? "";
   return streamParam === "1" || accept.includes("text/event-stream");
+}
+
+async function enqueueBuildRun(params: {
+  automationVersionId: string;
+  runId: string;
+  payload: ChatRequest;
+  session: Awaited<ReturnType<typeof requireTenantSession>>;
+}): Promise<{ runId: string; enqueued: boolean; state: string; queueAhead?: number }> {
+  const queue = await getBuildQueue();
+  const jobId = buildJobId(params.automationVersionId, params.runId);
+  console.log("[build-queue] enqueue request", { jobId, runId: params.runId, automationVersionId: params.automationVersionId });
+
+  // Coalesce: remove all waiting jobs for this version so only active + latest remain
+  const waitingJobs = await queue.getJobs(["waiting", "delayed"]);
+  const waitingForVersion = waitingJobs.filter(
+    (job) => (job.data as BuildJobData | undefined)?.automationVersionId === params.automationVersionId
+  );
+  const supersededMessage = "A newer message was sent. The workflow will update when that build completes.";
+  for (const job of waitingForVersion) {
+    const runId = (job.data as BuildJobData)?.runId;
+    if (runId) {
+      await publishCopilotChatEvent(runId, {
+        type: "superseded",
+        payload: { runId, message: supersededMessage },
+      });
+    }
+    await job.remove();
+  }
+
+  const maxQueued = Number(process.env.COPILOT_BUILD_QUEUE_LIMIT ?? 6);
+  if (Number.isFinite(maxQueued) && maxQueued > 0) {
+    const queuedJobs = await queue.getJobs(["waiting", "delayed"]);
+    const queuedForVersion = queuedJobs.filter(
+      (job) => (job.data as BuildJobData | undefined)?.automationVersionId === params.automationVersionId
+    );
+    if (queuedForVersion.length >= maxQueued) {
+      throw new ApiError(429, "Too many queued builds for this automation. Please wait for the current run to finish.");
+    }
+  }
+
+  const existingJob = await queue.getJob(jobId);
+  if (existingJob) {
+    const state = await existingJob.getState().catch(() => "unknown");
+    console.log("[build-queue] existing job for run", { jobId, state, runId: params.runId });
+    return { runId: params.runId, enqueued: false, state };
+  }
+
+  try {
+    const job = await queue.add(
+      "build" as const,
+      {
+        automationVersionId: params.automationVersionId,
+        runId: params.runId,
+        payload: params.payload,
+        session: { tenantId: params.session.tenantId, userId: params.session.userId },
+      },
+      { jobId }
+    );
+    const state = await job.getState().catch(() => "unknown");
+    console.log("[build-queue] enqueued", { jobId, runId: params.runId, state, queue: "copilot-build" });
+    const counts = await queue.getJobCounts("waiting", "active", "delayed", "failed", "completed");
+    console.log("[build-queue] counts", counts);
+    console.log("[build-queue] job", { jobId, state, runId: params.runId });
+
+    let queueAhead: number | undefined;
+    if (state === "waiting" || state === "delayed") {
+      const [waitingJobs, activeJobs] = await Promise.all([
+        queue.getJobs(["waiting"]),
+        queue.getJobs(["active"]),
+      ]);
+      const forVersion = (j: { data?: unknown }) =>
+        (j.data as BuildJobData | undefined)?.automationVersionId === params.automationVersionId;
+      const activeForVersion = activeJobs.filter(forVersion).length;
+      const waitingForVersion = waitingJobs.filter(forVersion);
+      const ourIndex = waitingForVersion.findIndex((j) => j.id === jobId);
+      queueAhead = ourIndex >= 0 ? activeForVersion + ourIndex : activeForVersion + waitingForVersion.length;
+    }
+
+    return { runId: params.runId, enqueued: true, state, queueAhead };
+  } catch (error) {
+    console.error("[build-queue] enqueue failed", {
+      jobId,
+      runId: params.runId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+async function waitForResult(runId: string) {
+  return new Promise<{ ok: true; payload: CopilotRunResult }>((resolve, reject) => {
+    let settled = false;
+    let unsubscribeRef: (() => Promise<void>) | null = null;
+    let pendingUnsubscribe = false;
+    let settle = (handler: () => void) => {
+      if (settled) return;
+      settled = true;
+      handler();
+      if (unsubscribeRef) {
+        void unsubscribeRef();
+        unsubscribeRef = null;
+      } else {
+        pendingUnsubscribe = true;
+      }
+    };
+    subscribeCopilotChatEvents(runId, (event) => {
+      if (event.type === "result") {
+        settle(() => resolve({ ok: true, payload: event.payload as CopilotRunResult }));
+      } else if (event.type === "error") {
+        const payload = event.payload as CopilotErrorPayload;
+        settle(() =>
+          reject(new ApiError(typeof payload.code === "number" ? payload.code : 500, payload.message || "Build failed"))
+        );
+      }
+    })
+      .then((unsubscribe) => {
+        unsubscribeRef = unsubscribe;
+        if (pendingUnsubscribe) {
+          void unsubscribeRef();
+          unsubscribeRef = null;
+        }
+      })
+      .catch(reject);
+  });
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<{ result: T | null; timedOut: boolean }> {
@@ -900,6 +1045,20 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const clientMessageId = payload.clientMessageId?.trim();
     const runId = payload.runId?.trim() || clientMessageId || randomUUID();
 
+    // #region agent log
+    const DEBUG_LOG = (loc: string, msg: string, data: Record<string, unknown>) =>
+      fetch("http://127.0.0.1:7242/ingest/3714e5f7-416c-4920-862c-4cf2ddedaf13", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "de984f" },
+        body: JSON.stringify({ sessionId: "de984f", location: loc, message: msg, data, timestamp: Date.now() }),
+      }).catch(() => {});
+    void DEBUG_LOG("copilot/chat/route:POST:entry", "S1-route-entry", {
+      runId,
+      streaming,
+      paramsId: params.id,
+    });
+    // #endregion
+
     if (streaming && sse) {
       const mapDisplayMessage = (raw?: string | null): string | null => {
         if (!raw) return raw ?? null;
@@ -959,12 +1118,15 @@ export async function POST(request: Request, { params }: { params: { id: string 
         onResult: (result: CopilotRunResult) => void sse.send("result", result),
         onError: (err: CopilotErrorPayload) => void sse.send("error", err),
         onMessage: (payload: CopilotMessageEventPayload) => void sse.send("message", payload),
+        onWorkflowUpdate: (p) => void sse.send("workflow_update", p),
+        onTasksUpdate: (p) => void sse.send("tasks_update", p),
+        onRequirementsUpdate: (p) => void sse.send("requirements_update", p),
       };
 
       (async () => {
         const runnerStartedAt = Date.now();
         let statusCount = 0;
-        copilotDebug("copilot_chat.sse_runner_started", { runId });
+        copilotDebug("copilot_chat.sse_runner_started", { runId, automationVersionId: params.id });
         try {
           const session = await requireTenantSession();
 
@@ -987,26 +1149,159 @@ export async function POST(request: Request, { params }: { params: { id: string 
             throw new ApiError(404, "Automation version not found.");
           }
 
-          await runCopilotChat({
-            request,
-            params,
-            payload,
-            session,
-            detail,
-            callbacks:
-              callbacks &&
-              ({
-                onStatus: (status) => {
-                  statusCount += 1;
-                  return callbacks.onStatus?.(status);
-                },
-                onResult: callbacks.onResult,
-                onError: callbacks.onError,
-                onMessage: callbacks.onMessage,
-              } as CopilotCallbacks),
-            runIdOverride: runId,
+          const trimmedContent = payload.content.trim();
+          if (!trimmedContent) {
+            throw new ApiError(400, "Message content is required.");
+          }
+
+          const enqueuePayload = await withVersionMutex(params.id, async () => {
+            const userMessage = await createCopilotMessage({
+              tenantId: session.tenantId,
+              automationVersionId: params.id,
+              role: "user",
+              content: trimmedContent,
+              createdBy: session.userId,
+            });
+
+            const messages = await listCopilotMessages({
+              tenantId: session.tenantId,
+              automationVersionId: params.id,
+            });
+            const normalizedMessages = messages
+              .filter((m) => m.role === "user" || m.role === "assistant")
+              .map((m) => ({
+                role: m.role as "user" | "assistant",
+                content: m.role === "assistant" ? parseCopilotReply(m.content).displayText : m.content,
+              }));
+
+            const analysis = await getCopilotAnalysis({ tenantId: session.tenantId, automationVersionId: params.id });
+            const currentWorkflow = detail.workflowView?.workflowSpec ?? createEmptyWorkflowSpec();
+            const analysisState = analysis ?? createEmptyCopilotAnalysisState();
+            const knownFactsHint = buildKnownFactsHint({ analysisState, workflow: currentWorkflow });
+            const requirementsText = detail.version.requirementsText?.trim();
+            const requirementsStatusHint = requirementsText
+              ? `Requirements so far: ${requirementsText.slice(0, 400)}${requirementsText.length > 400 ? "…" : ""}`
+              : null;
+
+            let fastReplyContent = "Thinking...";
+            try {
+              const fastReply = await generateCopilotChatReply({
+                userMessage: trimmedContent,
+                conversationHistory: normalizedMessages.map((m) => ({ role: m.role, content: m.content })),
+                knownFactsHint: knownFactsHint ?? undefined,
+                requirementsStatusHint: requirementsStatusHint ?? undefined,
+                followUpMode: null,
+              });
+              if (fastReply?.chatResponse || fastReply?.followUpQuestion) {
+                fastReplyContent =
+                  ensureSingleQuestion(fastReply.chatResponse ?? "", fastReply.followUpQuestion) || "Thinking...";
+              }
+            } catch (err) {
+              logger.warn("[copilot-chat] Fast reply failed", err);
+            }
+
+            const assistantMessage = await createCopilotMessage({
+              tenantId: session.tenantId,
+              automationVersionId: params.id,
+              role: "assistant",
+              content: fastReplyContent,
+              createdBy: null,
+            });
+
+            callbacks.onMessage?.({
+              runId,
+              requestId: "fast-path",
+              message: assistantMessage,
+              displayText: fastReplyContent,
+            });
+
+            return {
+              ...payload,
+              chatReplyHandledByApi: true,
+              assistantMessageId: assistantMessage.id,
+              userMessageId: userMessage.id,
+            };
           });
+
+          const enqueueResult = await enqueueBuildRun({
+            automationVersionId: params.id,
+            runId,
+            payload: enqueuePayload,
+            session,
+          });
+          const effectiveRunId = enqueueResult.runId;
+          // #region agent log
+          void DEBUG_LOG("copilot/chat/route:enqueue", "S2-enqueue-result", {
+            runId: effectiveRunId,
+            enqueued: enqueueResult.enqueued,
+            state: enqueueResult.state,
+          });
+          // #endregion
+          if (enqueueResult.state === "waiting" || enqueueResult.state === "delayed") {
+            const queueMsg =
+              typeof enqueueResult.queueAhead === "number" && enqueueResult.queueAhead > 0
+                ? `${enqueueResult.queueAhead} build${enqueueResult.queueAhead === 1 ? "" : "s"} ahead of you`
+                : "Queued behind an active build...";
+            callbacks.onStatus?.({
+              runId: effectiveRunId,
+              requestId: "queue",
+              phase: "queued",
+              message: queueMsg,
+              seq: 0,
+              readinessScore: 2,
+              meta: { queueAhead: enqueueResult.queueAhead },
+            });
+          }
+
+          const unsubscribe = await subscribeCopilotChatEvents(effectiveRunId, (event) => {
+            // #region agent log
+            void DEBUG_LOG("copilot/chat/route:redisEvent", "S3-redis-event", {
+              runId: effectiveRunId,
+              eventType: event.type,
+            });
+            // #endregion
+            if (event.type === "status") {
+              statusCount += 1;
+              callbacks.onStatus?.(event.payload as CopilotStatusPayload);
+            } else if (event.type === "message") {
+              callbacks.onMessage?.(event.payload as CopilotMessageEventPayload);
+            } else if (event.type === "workflow_update") {
+              callbacks.onWorkflowUpdate?.(event.payload as { workflow: unknown });
+            } else if (event.type === "tasks_update") {
+              callbacks.onTasksUpdate?.(event.payload as { tasks: unknown[] });
+            } else if (event.type === "requirements_update") {
+              callbacks.onRequirementsUpdate?.(event.payload as { requirementsText: string });
+            } else if (event.type === "result") {
+              callbacks.onResult?.(event.payload as CopilotRunResult);
+              void unsubscribe();
+              void sse.close();
+            } else if (event.type === "error") {
+              callbacks.onError?.(event.payload as CopilotErrorPayload);
+              void unsubscribe();
+              void sse.close();
+            } else if (event.type === "superseded") {
+              void sse.send("superseded", event.payload);
+              void unsubscribe();
+              void sse.close();
+            }
+          });
+
+          request.signal.addEventListener(
+            "abort",
+            () => {
+              void unsubscribe();
+              void sse.close();
+            },
+            { once: true }
+          );
         } catch (error) {
+          console.error("[copilot-chat] sse runner error", error);
+          // #region agent log
+          void DEBUG_LOG("copilot/chat/route:sseRunnerError", "S4-runner-error", {
+            runId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          // #endregion
           const message = error instanceof Error ? error.message : "Unexpected error.";
           const code = error instanceof ApiError ? error.status : undefined;
           try {
@@ -1017,15 +1312,15 @@ export async function POST(request: Request, { params }: { params: { id: string 
         } finally {
           copilotDebug("copilot_chat.sse_runner_duration_ms", {
             runId,
+            automationVersionId: params.id,
             durationMs: Date.now() - runnerStartedAt,
             statusCount,
           });
-          copilotDebug("copilot_chat.sse_runner_completed", { runId });
-          await sse.close();
+          copilotDebug("copilot_chat.sse_runner_completed", { runId, automationVersionId: params.id });
         }
       })();
 
-      copilotDebug("copilot_chat.sse_response_returned", { runId });
+      copilotDebug("copilot_chat.sse_response_returned", { runId, automationVersionId: params.id });
       return sse.response();
     }
 
@@ -1050,27 +1345,15 @@ export async function POST(request: Request, { params }: { params: { id: string 
       throw new ApiError(404, "Automation version not found.");
     }
 
-    const callbacks: CopilotCallbacks | undefined =
-      streaming && sse
-        ? {
-            onStatus: (status: CopilotStatusPayload) => void sse.send("status", status),
-            onResult: (result: CopilotRunResult) => void sse.send("result", result),
-            onError: (err: CopilotErrorPayload) => void sse.send("error", err),
-            onMessage: (payload: CopilotMessageEventPayload) => void sse.send("message", payload),
-          }
-        : undefined;
-
-    const result = await runCopilotChat({
-      request,
-      params,
+    const enqueueResult = await enqueueBuildRun({
+      automationVersionId: params.id,
+      runId,
       payload,
       session,
-      detail,
-      callbacks,
-      runIdOverride: runId,
     });
 
-    return NextResponse.json(result);
+    const result = await waitForResult(enqueueResult.runId);
+    return NextResponse.json(result.payload);
   } catch (error) {
     return respondError(error);
   }
@@ -1078,7 +1361,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
 type AutomationVersionDetail = NonNullable<Awaited<ReturnType<typeof getAutomationVersionDetail>>>;
 
-async function runCopilotChat({
+export async function runCopilotChat({
   request,
   params,
   payload,
@@ -1086,6 +1369,7 @@ async function runCopilotChat({
   detail,
   callbacks,
   runIdOverride,
+  skipChatReply = false,
 }: {
   request: Request;
   params: { id: string };
@@ -1094,6 +1378,8 @@ async function runCopilotChat({
   detail: AutomationVersionDetail;
   callbacks?: CopilotCallbacks;
   runIdOverride?: string;
+  /** When true, API already created user + assistant messages; skip chat reply path */
+  skipChatReply?: boolean;
 }): Promise<CopilotRunResult> {
   void request;
   const clientMessageId = payload.clientMessageId?.trim();
@@ -1109,6 +1395,16 @@ async function runCopilotChat({
   });
   baseTrace.event("run.started", { automationVersionId: params.id });
 
+  const PHASE_READINESS_SCORE: Record<string, number> = {
+    queued: 2,
+    connected: 5,
+    understanding: 15,
+    drafting: 35,
+    structuring: 45,
+    drawing: 55,
+    saving: 75,
+  };
+
   const planner = new ProgressPlanner({
     runId,
     requestId,
@@ -1117,7 +1413,12 @@ async function runCopilotChat({
         logger.warn("Invalid status payload skipped", payload);
         return;
       }
-      callbacks?.onStatus?.(payload);
+      const phaseScore = PHASE_READINESS_SCORE[payload.phase];
+      const statusPayload: CopilotStatusPayload = {
+        ...payload,
+        ...(typeof phaseScore === "number" ? { readinessScore: phaseScore } : {}),
+      };
+      callbacks?.onStatus?.(statusPayload);
     },
   });
   const buildEmitter = createBuildActivityEmitter({ automationVersionId: params.id, runId });
@@ -1303,13 +1604,29 @@ async function runCopilotChat({
     throw new ApiError(400, "Message content is required.");
   }
 
-  const userMessage = await createCopilotMessage({
-    tenantId: session.tenantId,
-    automationVersionId: params.id,
-    role: "user",
-    content: trimmedContent,
-    createdBy: session.userId,
-  });
+  let userMessage: Awaited<ReturnType<typeof createCopilotMessage>>;
+
+  if (skipChatReply) {
+    const messagesPreload = await listCopilotMessages({
+      tenantId: session.tenantId,
+      automationVersionId: params.id,
+    });
+    const latestUserRow = [...messagesPreload].reverse().find((m) => m.role === "user");
+    if (!latestUserRow) {
+      throw new ApiError(400, "User message not found (chat reply handled by API).");
+    }
+    userMessage = latestUserRow;
+  } else {
+    userMessage = await withVersionMutex(params.id, async () => {
+      return await createCopilotMessage({
+        tenantId: session.tenantId,
+        automationVersionId: params.id,
+        role: "user",
+        content: trimmedContent,
+        createdBy: session.userId,
+      });
+    });
+  }
 
   const messages = await listCopilotMessages({
     tenantId: session.tenantId,
@@ -1366,43 +1683,67 @@ async function runCopilotChat({
   let builderChatResponse: string | null = null;
   let sanitizationSummary: SanitizationSummary | string | null | undefined;
 
-  const fastReplyPromise = generateCopilotChatReply({
-    userMessage: latestUserMessage?.content ?? trimmedContent,
-    conversationHistory: normalizedMessages.map((message) => ({
-      role: message.role,
-      content: message.content,
-    })),
-    knownFactsHint: undefined,
-    requirementsStatusHint: undefined,
-    followUpMode: null,
-  });
+  if (skipChatReply) {
+    const apiAssistantId = (payload as { assistantMessageId?: string }).assistantMessageId;
+    let resolvedAssistant: AssistantMessageRow | null = null;
+    if (apiAssistantId) {
+      resolvedAssistant =
+        (messages.find((m) => m.role === "assistant" && m.id === apiAssistantId) as AssistantMessageRow) ??
+        (await fetchAssistantMessage({
+          tenantId: session.tenantId,
+          automationVersionId: params.id,
+          assistantMessageId: apiAssistantId,
+        })) as AssistantMessageRow | null;
+    }
+    if (!resolvedAssistant) {
+      resolvedAssistant = [...messages].reverse().find((m) => m.role === "assistant") as AssistantMessageRow | undefined ?? null;
+    }
+    if (resolvedAssistant) {
+      assistantMessage = resolvedAssistant;
+      responseMessage = resolvedAssistant.content;
+      replyFinalized = true;
+    }
+  }
 
-  ackTimer = setTimeout(() => {
-    if (replyFinalized) return;
-    void persistAssistantMessage(earlyAckMessage);
-  }, ackTimeoutMs);
-
-      fastReplyPromise
-        .then(async (fastReplyResult) => {
-          const composedFastReply = composeAssistantReply(
-            fastReplyResult?.chatResponse ?? earlyAckMessage,
-            fastReplyResult?.followUpQuestion ?? null
-          );
-          responseMessage = composedFastReply.content;
-          responseFollowUp = fastReplyResult?.followUpQuestion?.trim() || null;
-          if (!replyFinalized) {
-            await persistAssistantMessage(responseMessage, true, true);
-          }
-        })
-    .catch((error) => {
-      logger.warn("generateCopilotChatReply (fast path) failed", { error });
-    })
-    .finally(() => {
-      if (ackTimer) {
-        clearTimeout(ackTimer);
-        ackTimer = null;
-      }
+  if (!skipChatReply) {
+    const fastReplyPromise = generateCopilotChatReply({
+      userMessage: latestUserMessage?.content ?? trimmedContent,
+      conversationHistory: normalizedMessages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+      knownFactsHint: undefined,
+      requirementsStatusHint: undefined,
+      followUpMode: null,
     });
+
+    ackTimer = setTimeout(() => {
+      if (replyFinalized) return;
+      void persistAssistantMessage(earlyAckMessage);
+    }, ackTimeoutMs);
+
+    void fastReplyPromise
+      .then(async (fastReplyResult) => {
+        const composedFastReply = composeAssistantReply(
+          fastReplyResult?.chatResponse ?? earlyAckMessage,
+          fastReplyResult?.followUpQuestion ?? null
+        );
+        responseMessage = composedFastReply.content;
+        responseFollowUp = fastReplyResult?.followUpQuestion?.trim() || null;
+        if (!replyFinalized) {
+          await persistAssistantMessage(responseMessage, true, true);
+        }
+      })
+      .catch((error) => {
+        logger.warn("generateCopilotChatReply (fast path) failed", { error });
+      })
+      .finally(() => {
+        if (ackTimer) {
+          clearTimeout(ackTimer);
+          ackTimer = null;
+        }
+      });
+  }
 
   const contextSummary = buildConversationSummary(normalizedMessages, intakeNotes);
   const workflowUpdatedAtIso = detail.version.updatedAt ? new Date(detail.version.updatedAt).toISOString() : null;
@@ -1721,22 +2062,26 @@ async function runCopilotChat({
         trace: baseTrace,
       });
 
-      const chatReplyPromise = generateCopilotChatReply({
-        userMessage: userMessageContent,
-        conversationHistory: normalizedMessages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-        knownFactsHint,
-        requirementsStatusHint,
-        followUpMode,
-      });
+      const chatReplyPromise = skipChatReply
+        ? Promise.resolve(null)
+        : generateCopilotChatReply({
+            userMessage: userMessageContent,
+            conversationHistory: normalizedMessages.map((message) => ({
+              role: message.role,
+              content: message.content,
+            })),
+            knownFactsHint,
+            requirementsStatusHint,
+            followUpMode,
+          });
 
       let chatReply: Awaited<ReturnType<typeof generateCopilotChatReply>> | null = null;
-      try {
-        chatReply = await chatReplyPromise;
-      } catch (error) {
-        logger.warn("generateCopilotChatReply failed", { error });
+      if (!skipChatReply) {
+        try {
+          chatReply = await chatReplyPromise;
+        } catch (error) {
+          logger.warn("generateCopilotChatReply failed", { error });
+        }
       }
       if (chatReply) {
         const composed = composeFollowUpAndMessage({
@@ -1850,6 +2195,14 @@ async function runCopilotChat({
       draftingTrace.event("workflow.stepNumbering.completed", { stepCount: numberedWorkflow.steps.length });
       planner.emit("structuring", undefined, { stepCount: numberedWorkflow.steps.length }, "structuring");
       aiTasks = generatedTasks;
+
+      if (!staleRun) {
+        callbacks?.onWorkflowUpdate?.({ workflow: numberedWorkflow });
+        callbacks?.onTasksUpdate?.({ tasks: generatedTasks });
+        if (typeof newRequirementsText === "string" && newRequirementsText.trim().length > 0) {
+          callbacks?.onRequirementsUpdate?.({ requirementsText: newRequirementsText.trim() });
+        }
+      }
 
       let taskAssignments: Record<string, string[]> = {};
 
@@ -2200,7 +2553,11 @@ async function runCopilotChat({
     }
 
     savedVersion = persistedVersion;
-    revalidatePath(`/automations/${detail.automation?.id ?? persistedVersion.automationId}`);
+    try {
+      revalidatePath(`/automations/${detail.automation?.id ?? persistedVersion.automationId}`);
+    } catch (error) {
+      console.warn("[copilot-chat] revalidatePath skipped", error);
+    }
   } else {
     savingTrace.spanEnd(saveSpan, { stepCount: validatedWorkflow.steps?.length ?? 0, staleRun: true, skipped: true });
   }
@@ -2430,6 +2787,7 @@ async function runCopilotChat({
     readinessSignals: readinessSignals.signals,
     proceedBasicsMet,
     proceedThresholdMet,
+    requirementsText: savedVersion?.requirementsText ?? updatedRequirementsText ?? null,
   };
 
   callbacks?.onResult?.(result);
@@ -2521,6 +2879,7 @@ async function buildIdempotentResponse(params: {
     commandExecuted,
     thinkingSteps,
     conversationPhase,
+    requirementsText: params.detail.version?.requirementsText ?? null,
   };
 }
 

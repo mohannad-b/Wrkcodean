@@ -89,9 +89,10 @@ Additional admin views can hang off this tree for:
    # or
    pnpm install
    ```
-2. Create `.env.local` with your Neon connection string and Auth0 settings. Example:
+2. Create `.env.local` with your Neon connection string, Auth0 settings, and Redis (for Copilot chat). Example:
    ```bash
    DATABASE_URL="postgres://user:password@host:5432/wrk_copilot"
+   REDIS_URL="redis://localhost:6379"
    APP_BASE_URL="http://localhost:3000"
    AUTH0_DOMAIN="dev-1234.us.auth0.com"
    AUTH0_CLIENT_ID="..."
@@ -116,13 +117,20 @@ Additional admin views can hang off this tree for:
    npm run db:seed
    ```
    If you ever need to recreate the schema manually (e.g., new Neon database or Vercel preview), run the SQL in `scripts/bootstrap.sql` first, then re-run the seed.
-5. Run the development server:
+5. **Run both the dev server and the build worker** (required for full Copilot experience):
    ```bash
-   npm run dev
-   # or
-   pnpm dev
+   npm run dev:all
    ```
-6. Open the app at http://localhost:3000 — unauthenticated users are redirected to `/auth/login` (Auth0). Use `/auth/logout` to sign out.
+   This runs Next.js and the build worker in parallel. Or run separately:
+   ```bash
+   npm run dev          # terminal 1 – Next.js
+   npm run worker:build # terminal 2 – build worker (required)
+   ```
+6. **Upstash Redis + build worker**: If you use Upstash for Redis (`REDIS_URL`), the queue data lives in the cloud. You still **must run the build worker** locally (or elsewhere) to process jobs. Without the worker:
+   - Chat back-and-forth works (fast AI replies)
+   - Flowchart, requirements, tasks, and build readiness **never update** (they come from the worker)
+   The worker connects to your Redis (Upstash or local), picks up jobs, runs the build pipeline, and publishes workflow/tasks/requirements events back to the client.
+7. Open the app at http://localhost:3000 — unauthenticated users are redirected to `/auth/login` (Auth0). Use `/auth/logout` to sign out.
 
 ### Build & Run (Production)
 - `npm run build`
@@ -140,6 +148,20 @@ Notes:
 - Uses the Next.js App Router with server and client components where appropriate.
 - Supports static generation, server-side rendering, and incremental features as you wire in backend APIs.
 - Heavy components (e.g., canvas or large tables) should be lazy-loaded as needed.
+
+## Troubleshooting
+
+**Flowchart, requirements, tasks, and build readiness never update**
+
+The build worker must be running. Run `npm run dev:all` (or `npm run worker:build` in a separate terminal). The worker processes queued jobs and publishes workflow/tasks/requirements events. Without it, only the chat fast reply works.
+
+**Jobs stuck in queue (waiting: N, active: 1, completed: 0)**
+
+The worker may have crashed or been stopped. Restart it with `npm run worker:build`. If a job is stuck "active", it may eventually be marked stalled; the next worker run will pick up waiting jobs.
+
+**Build takes > 2 minutes after sending multiple messages**
+
+Queue coalescing removes waiting jobs when you enqueue; the worker also skips stale jobs (when a newer message exists). If you still see long delays, capture worker logs: `npm run worker:build 2>&1 | tee build-worker.log`
 
 ## Mock Data
 

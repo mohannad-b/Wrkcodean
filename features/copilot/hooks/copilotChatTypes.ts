@@ -46,6 +46,7 @@ export type StudioChatOptions = {
     proceedThresholdMet?: boolean;
     signals?: ReadinessSignals;
   }) => void;
+  onRequirementsUpdate?: (text: string) => void;
 };
 
 export type WorkflowChatOptions = {
@@ -74,6 +75,8 @@ export type StudioChatController = {
   handleFileSelect: (event: React.ChangeEvent<HTMLInputElement>) => void;
   handleRemoveFile: (fileId: string) => void;
   handleSend: () => Promise<void>;
+  sendDisabledForCooldown?: boolean;
+  retryLastMessage: () => Promise<boolean>;
   sendMessage: (content: string, source: "manual" | "seed", options?: { reuseRunId?: string }) => Promise<
     | { ok: true; stepCount: number; nodeCount: number | null; persistenceError: boolean; runId: string }
     | { ok: false }
@@ -93,5 +96,6 @@ export type WorkflowChatController = {
   handleScroll: (element: HTMLDivElement | null) => void;
   markScrolledToBottom: () => void;
   sendMessage: () => Promise<void>;
+  sendDisabledForCooldown?: boolean;
   retryMessage: (message: WorkflowMessage) => Promise<void>;
 };

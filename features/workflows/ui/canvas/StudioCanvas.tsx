@@ -22,12 +22,11 @@ import ConditionEdge from "@/components/flow/ConditionEdge";
 import DefaultEdge from "@/components/flow/DefaultEdge";
 
 // Define nodeTypes and edgeTypes at module level - MUST be outside component for ReactFlow
-// These are stable references that won't change between renders
-const nodeTypes: NodeTypes = {
-  custom: CustomNode,
-};
-
 // Use Object.freeze to ensure ReactFlow recognizes these as stable references
+const nodeTypes = Object.freeze<NodeTypes>({
+  custom: CustomNode,
+});
+
 const edgeTypes = Object.freeze({
   condition: ConditionEdge,
   default: DefaultEdge,
@@ -39,6 +38,8 @@ const defaultEdgeOptions = {
   animated: false,
   style: { stroke: "#9CA3AF", strokeWidth: 1.5 },
 };
+
+const proOptions = Object.freeze({ hideAttribution: true });
 
 export interface StudioCanvasProps {
   nodes: Node[];
@@ -154,7 +155,7 @@ export function StudioCanvas({
           nodesFocusable
           elementsSelectable
           selectNodesOnDrag={false}
-          proOptions={{ hideAttribution: true }}
+          proOptions={proOptions}
         >
           <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#E5E7EB" />
           <Controls className="!bg-white !border-gray-200 !shadow-sm !rounded-lg overflow-hidden [&>button]:!border-b-gray-100 [&>button]:text-gray-500 hover:[&>button]:text-[#E43632]" />

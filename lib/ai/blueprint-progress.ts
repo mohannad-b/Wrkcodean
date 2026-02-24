@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import getOpenAIClient from "@/lib/ai/openai-client";
 import { z } from "zod";
 import { copilotDebug } from "@/lib/ai/copilot-debug";
 import { getBlueprintCompletionState, type BlueprintCompletionState } from "@/lib/workflows/completion";
@@ -14,10 +14,6 @@ import type {
   BlueprintSectionProgressInsight,
   BlueprintSectionProgressStatus,
 } from "@/lib/workflows/copilot-analysis";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 const PROGRESS_RESPONSE_SCHEMA = z.object({
   sections: z.array(z.record(z.string(), z.any())).min(1),
@@ -64,7 +60,8 @@ export async function evaluateBlueprintProgress(
   if (!blueprint) {
     return null;
   }
-  if (!process.env.OPENAI_API_KEY) {
+  const openai = getOpenAIClient();
+  if (!openai) {
     copilotDebug("progress.eval.skipped", "OPENAI_API_KEY missing");
     return null;
   }

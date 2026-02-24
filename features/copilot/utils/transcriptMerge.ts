@@ -39,5 +39,19 @@ export function mergeTranscript(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
   );
 
-  return merged.length ? merged : [fallbackMessage];
+  // Deduplicate: keep only first of consecutive same-role+same-content messages (within 10s)
+  const deduped: CopilotMessage[] = [];
+  for (const m of merged) {
+    const prev = deduped[deduped.length - 1];
+    const sameRoleAndContent =
+      prev &&
+      prev.role === m.role &&
+      prev.content.trim() === m.content.trim() &&
+      Math.abs(new Date(prev.createdAt).getTime() - new Date(m.createdAt).getTime()) < 10_000;
+    if (!sameRoleAndContent) {
+      deduped.push(m);
+    }
+  }
+
+  return deduped.length ? deduped : [fallbackMessage];
 }

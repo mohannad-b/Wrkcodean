@@ -32,6 +32,15 @@ const AGENT_LOG_URL = copilotAgentLogUrl ?? "";
 const agentFetch: typeof fetch = copilotAgentFetch;
 const ingest = sendCopilotIngest;
 
+// #region agent log
+const DEBUG_LOG = (loc: string, msg: string, data: Record<string, unknown>) =>
+  fetch("http://127.0.0.1:7242/ingest/3714e5f7-416c-4920-862c-4cf2ddedaf13", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "de984f" },
+    body: JSON.stringify({ sessionId: "de984f", location: loc, message: msg, data, timestamp: Date.now() }),
+  }).catch(() => {});
+// #endregion
+
 const INITIAL_AI_MESSAGE: CopilotMessage = {
   id: "ai-initial",
   role: "assistant",
@@ -60,13 +69,17 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
   const injectedFailureRef = useRef<{ id: string; at: number } | null>(null);
   const runContentRef = useRef<Map<string, string>>(new Map());
   const analysisRefreshRef = useRef<Map<string, number>>(new Map());
-  const activeControllerRef = useRef<AbortController | null>(null);
-  const activeRunIdRef = useRef<string | null>(null);
+  const controllersByRunIdRef = useRef<Map<string, AbortController>>(new Map());
+  const connectingRunIdsRef = useRef<Set<string>>(new Set());
+  const awaitingRunIdsRef = useRef<Set<string>>(new Set());
   const runSeenServerStatusRef = useRef<Map<string, boolean>>(new Map());
   const runCompletedRef = useRef<Map<string, boolean>>(new Map());
   const seenSeqByRunIdRef = useRef<Map<string, Set<number>>>(new Map());
   const sseFirstChunkByRunIdRef = useRef<Map<string, boolean>>(new Map());
   const activityByRunRef = useRef<Map<string, BuildActivity>>(new Map());
+  const displayedRunIdRef = useRef<string | null>(null);
+  const queuedRunIdsRef = useRef<string[]>([]);
+  const droppedMessageLogRef = useRef<Map<string, Set<string>>>(new Map());
   const runSseEventsRef = useRef<
     Map<
       string,
@@ -75,13 +88,21 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
   >(new Map());
   const placeholderMessageRef = useRef<CopilotMessage | null>(null);
   const prevWorkflowEmptyRef = useRef<boolean>(options.workflowEmpty ?? false);
+  const runReceivedMessageEventRef = useRef<Set<string>>(new Set());
 
   const displayMessages = useMemo(() => {
     const seen = new Set<string>();
+    const seenContent = new Map<string, number>(); // role+content -> last kept createdAt
     const filtered = studioMessages.filter((message) => {
       if (!message?.id) return false;
       if (seen.has(message.id)) return false;
+      // Dedupe by role+content when within 10s (catches load merge duplicates)
+      const key = `${message.role}:${message.content.trim()}`;
+      const lastAt = seenContent.get(key);
+      const now = new Date(message.createdAt).getTime();
+      if (lastAt != null && Math.abs(now - lastAt) < 10_000) return false;
       seen.add(message.id);
+      seenContent.set(key, now);
       return true;
     });
     const placeholder = isAwaitingReply ? placeholderMessageRef.current : null;
@@ -145,6 +166,8 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
     if (!automationVersionId) {
       setStudioMessages([INITIAL_AI_MESSAGE]);
       setBuildActivity(null);
+      displayedRunIdRef.current = null;
+      queuedRunIdsRef.current = [];
       setIsLoadingThread(false);
       return;
     }
@@ -257,6 +280,17 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
     setAttachedFiles((prev) => prev.filter((f) => f.id !== fileId));
   }, []);
 
+  const PHASE_DISPLAY_MAP: Record<string, string> = {
+    queued: "Queued",
+    connecting: "Connecting",
+    drafting: "Drafting",
+    drawing: "Drawing",
+    saving: "Saving",
+    done: "Done",
+    error: "Error",
+    working: "Working",
+  };
+
   const upsertBuildActivityFromEvent = useCallback(
     (
       targetRunId: string,
@@ -268,6 +302,7 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
         isRunning?: boolean;
         completedAt?: number | null;
         startedAt?: number | null;
+        connectionLost?: boolean;
       }
     ) => {
       const prev = activityByRunRef.current.get(targetRunId);
@@ -281,6 +316,18 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
       const completedAt = updates.completedAt ?? (isTerminal ? prev?.completedAt ?? Date.now() : prev?.completedAt ?? null);
       const isRunning = updates.isRunning ?? !isTerminal;
 
+      const phaseKey = phase?.toLowerCase() ?? "";
+      const logTitle = PHASE_DISPLAY_MAP[phaseKey] ?? phase ?? "Working";
+      const prevUpdates = prev?.recentUpdates ?? [];
+      const newLogEntry =
+        trimmedMessage || phase !== prev?.phase
+          ? [{ seq: lastSeq ?? prevUpdates.length, title: logTitle, detail: trimmedMessage || undefined, timestamp: Date.now() }]
+          : [];
+      const nextUpdates =
+        newLogEntry.length > 0
+          ? [...prevUpdates, ...newLogEntry].slice(-50)
+          : prevUpdates;
+
       const next: BuildActivity = {
         runId: targetRunId,
         phase,
@@ -290,11 +337,28 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
         startedAt,
         completedAt,
         isRunning,
+        connectionLost: updates.connectionLost ?? prev?.connectionLost,
+        recentUpdates: nextUpdates,
+        queuedCount: queuedRunIdsRef.current.length,
       };
 
       activityByRunRef.current.set(targetRunId, next);
-      setBuildActivity(next);
-      options.onBuildActivityUpdate?.(next);
+
+      const isDisplayed = displayedRunIdRef.current === targetRunId;
+      const isQueued = queuedRunIdsRef.current.includes(targetRunId);
+      const isQueueStatusMessage = /^\d+\s+build\s+ahead\s+of\s+you$/i.test(trimmedMessage ?? "");
+      const hasRealProgress = phase !== "queued" && !isQueueStatusMessage;
+
+      if (isDisplayed) {
+        setBuildActivity(next);
+        options.onBuildActivityUpdate?.(next);
+      } else if (isQueued && hasRealProgress) {
+        queuedRunIdsRef.current = queuedRunIdsRef.current.filter((id) => id !== targetRunId);
+        displayedRunIdRef.current = targetRunId;
+        setBuildActivity(next);
+        options.onBuildActivityUpdate?.(next);
+      }
+
       if (isTerminal) {
         const wasCompleted = runCompletedRef.current.get(targetRunId) ?? false;
         if (!wasCompleted) {
@@ -303,10 +367,58 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           );
         }
         runCompletedRef.current.set(targetRunId, true);
+
+        if (isDisplayed && queuedRunIdsRef.current.length > 0) {
+          const [promotedId, ...rest] = queuedRunIdsRef.current;
+          queuedRunIdsRef.current = rest;
+          displayedRunIdRef.current = promotedId;
+          const promoted = activityByRunRef.current.get(promotedId);
+          if (promoted) {
+            const withQueued = { ...promoted, queuedCount: rest.length };
+            setBuildActivity(withQueued);
+            options.onBuildActivityUpdate?.(withQueued);
+          }
+        } else if (isDisplayed) {
+          displayedRunIdRef.current = null;
+          setBuildActivity(null);
+          options.onBuildActivityUpdate?.(null);
+        }
       }
     },
     [options.onBuildActivityUpdate]
   );
+
+  const setRunConnecting = useCallback((runId: string, connecting: boolean) => {
+    if (connecting) {
+      connectingRunIdsRef.current.add(runId);
+    } else {
+      connectingRunIdsRef.current.delete(runId);
+    }
+    setIsSending(connectingRunIdsRef.current.size > 0);
+  }, []);
+
+  const setRunAwaiting = useCallback((runId: string, awaiting: boolean) => {
+    if (awaiting) {
+      awaitingRunIdsRef.current.add(runId);
+    } else {
+      awaitingRunIdsRef.current.delete(runId);
+    }
+    setIsAwaitingReply(awaitingRunIdsRef.current.size > 0);
+  }, []);
+
+  const clearOptimisticUserMessage = useCallback((runId: string) => {
+    setStudioMessages((prev) =>
+      prev.map((msg) => (msg.id === runId && msg.optimistic ? { ...msg, optimistic: false } : msg))
+    );
+  }, []);
+
+  const logDroppedMessageOnce = useCallback((runId: string, reason: string, details?: Record<string, unknown>) => {
+    const set = droppedMessageLogRef.current.get(runId) ?? new Set<string>();
+    if (set.has(reason)) return;
+    set.add(reason);
+    droppedMessageLogRef.current.set(runId, set);
+    logger.debug("[STUDIO-CHAT] Dropped message event", { runId, reason, ...(details ?? {}) });
+  }, []);
 
   const sendMessage = useCallback(
     async (messageContent: string, _source: "manual" | "seed", sendOptions?: { reuseRunId?: string }) => {
@@ -316,7 +428,7 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
       if (!automationVersionId) {
         return { ok: false as const };
       }
-      if (disabled || isSending || isAwaitingReply) {
+      if (disabled) {
         return { ok: false as const };
       }
 
@@ -330,14 +442,7 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
       pendingRequestIdRef.current = requestId;
       const runId = sendOptions?.reuseRunId ?? optimisticMessageId ?? makeTempId();
       const clientMessageId = sendOptions?.reuseRunId && isRetry ? `${runId}-retry-${Date.now()}` : runId;
-      if (activeControllerRef.current) {
-        if (activeRunIdRef.current) {
-          runCompletedRef.current.set(activeRunIdRef.current, true);
-        }
-        activeControllerRef.current.abort();
-        activeControllerRef.current = null;
-      }
-      activeRunIdRef.current = runId;
+      // NOTE: allow multiple concurrent in-flight runs; do not abort previous streams.
       ingest({
         sessionId: "debug-session",
         runId,
@@ -353,7 +458,7 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
       placeholderMessageRef.current = {
         id: `${runId}-placeholder`,
         role: "assistant",
-        content: "Drafting your workflow…",
+        content: "Thinking...",
         createdAt: new Date().toISOString(),
         transient: true,
       };
@@ -375,19 +480,60 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
         runSseEventsRef.current.set(runId, []);
       }
       runCompletedRef.current.set(runId, false);
-      const startedAt = Date.now();
-      const initialActivity: BuildActivity = {
+      setRunAwaiting(runId, true);
+      setRunConnecting(runId, true);
+      // #region agent log
+      DEBUG_LOG("useStudioCopilotChatController:sendMessage:entry", "H1-sendMessage-started", {
         runId,
-        phase: "connecting",
-        rawPhase: "connecting",
-        lastSeq: null,
-        lastLine: null,
-        startedAt,
-        completedAt: null,
-        isRunning: true,
-      };
-      activityByRunRef.current.set(runId, initialActivity);
-      setBuildActivity(initialActivity);
+        clientMessageId,
+        automationVersionId,
+        hypothesisId: "H1",
+      });
+      // #endregion
+      const startedAt = Date.now();
+      const displayedId = displayedRunIdRef.current;
+      const displayedActivity = displayedId ? activityByRunRef.current.get(displayedId) : null;
+      const hasActiveBuild = displayedActivity?.isRunning ?? false;
+
+      if (hasActiveBuild) {
+        queuedRunIdsRef.current.push(runId);
+        const queuedActivity: BuildActivity = {
+          runId,
+          phase: "queued",
+          rawPhase: "queued",
+          lastSeq: null,
+          lastLine: null,
+          startedAt,
+          completedAt: null,
+          isRunning: true,
+          recentUpdates: [],
+          queuedCount: queuedRunIdsRef.current.length - 1,
+        };
+        activityByRunRef.current.set(runId, queuedActivity);
+        const updatedDisplayed = {
+          ...displayedActivity,
+          queuedCount: queuedRunIdsRef.current.length,
+        };
+        setBuildActivity(updatedDisplayed);
+        options.onBuildActivityUpdate?.(updatedDisplayed);
+      } else {
+        displayedRunIdRef.current = runId;
+        const initialActivity: BuildActivity = {
+          runId,
+          phase: "connecting",
+          rawPhase: "connecting",
+          lastSeq: null,
+          lastLine: null,
+          startedAt,
+          completedAt: null,
+          isRunning: true,
+          recentUpdates: [],
+          queuedCount: 0,
+        };
+        activityByRunRef.current.set(runId, initialActivity);
+        setBuildActivity(initialActivity);
+        options.onBuildActivityUpdate?.(initialActivity);
+      }
 
       setStudioMessages((prev) => {
         const next: CopilotMessage[] = prev.filter((msg) => msg.id !== optimisticMessage?.id);
@@ -429,7 +575,6 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
       };
 
       const applyProgressEvent = (payload: Record<string, unknown>, eventRunId: string, effectiveType?: string) => {
-        if (eventRunId && activeRunIdRef.current && eventRunId !== activeRunIdRef.current) return;
         const reduced = reduceStudioSseEvent(effectiveType ?? "status", payload, eventRunId);
         if (reduced.kind !== "progress") return;
         if (runCompletedRef.current.get(eventRunId)) return;
@@ -456,12 +601,18 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           isRunning: !isTerminal,
           completedAt: isTerminal ? Date.now() : null,
         });
+        const phaseReadiness = typeof payload.readinessScore === "number" && payload.readinessScore >= 0 && payload.readinessScore <= 100;
+        if (phaseReadiness && typeof options.onReadinessUpdate === "function") {
+          options.onReadinessUpdate({
+            runId: eventRunId,
+            readinessScore: payload.readinessScore as number,
+          });
+        }
       };
 
       const applyErrorFromEvent = (payload: { message?: string; runId?: string; seq?: number }) => {
         const targetRunId = payload.runId ?? runId;
         recordSseEvent("error", payload);
-        if (targetRunId && activeRunIdRef.current && targetRunId !== activeRunIdRef.current) return;
         if (!shouldAcceptSeq(targetRunId, payload.seq)) return;
         const message = payload.message ?? "";
         terminalSource = "sse";
@@ -477,6 +628,7 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           isRunning: false,
           completedAt: Date.now(),
         });
+        setRunAwaiting(targetRunId, false);
         agentFetch(AGENT_LOG_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -491,9 +643,6 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           }),
         }).catch(() => {});
       };
-
-      setIsSending(true);
-      setIsAwaitingReply(true);
 
       let stepCount = 0;
       let nodeCount: number | null = null;
@@ -558,23 +707,49 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           );
           return merged;
         });
-        setIsAwaitingReply(false);
-        setIsSending(false);
       };
 
       const applyMessagePayload = (rawData: { message?: ApiCopilotMessage; seq?: number }, responseRunId: string) => {
-        if (!rawData?.message) return;
-        if (responseRunId && activeRunIdRef.current && responseRunId !== activeRunIdRef.current) return;
+        if (!responseRunId) {
+          logDroppedMessageOnce(runId, "runId missing", { seq: rawData?.seq ?? null });
+          return;
+        }
+        if (responseRunId !== runId) {
+          logDroppedMessageOnce(runId, "runId mismatch", { responseRunId });
+        }
+        if (runCompletedRef.current.get(responseRunId)) {
+          logDroppedMessageOnce(responseRunId, "stale-run filter (already terminal)", { seq: rawData?.seq ?? null });
+          return;
+        }
+        if (!rawData?.message) {
+          logDroppedMessageOnce(responseRunId, "missing message field", { seq: rawData?.seq ?? null });
+          return;
+        }
+        if (!rawData.message.content || !rawData.message.content.trim()) {
+          logDroppedMessageOnce(responseRunId, "missing content field", { seq: rawData?.seq ?? null });
+          return;
+        }
+        const seq = rawData.seq;
+        const seen = seq !== undefined && seq !== null ? (seenSeqByRunIdRef.current.get(responseRunId)?.has(seq) ?? false) : false;
+        if (seen) {
+          logDroppedMessageOnce(responseRunId, "seq duplicate", { seq });
+          return;
+        }
         if (!shouldAcceptSeq(responseRunId, rawData.seq)) return;
-        setIsAwaitingReply(false);
-        setIsSending(false);
+        const alreadyReceivedMessageForRun = runReceivedMessageEventRef.current.has(responseRunId);
+        if (alreadyReceivedMessageForRun) {
+          logDroppedMessageOnce(responseRunId, "duplicate message event (fast path already shown)", { seq: rawData.seq });
+          return;
+        }
         recordSseEvent("message", {
           runId: responseRunId,
           seq: rawData.seq,
           message: rawData.message.content,
           phase: "message",
         });
+        runReceivedMessageEventRef.current.add(responseRunId);
         upsertAssistantMessage(rawData.message, responseRunId);
+        setRunAwaiting(responseRunId, false);
       };
 
       const applyResultPayload = async (
@@ -594,6 +769,7 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           proceedThresholdMet?: boolean;
           proceedMessage?: string;
           proceedUiStyle?: string | null;
+          requirementsText?: string | null;
         },
         responseRunId: string,
         source: "sse" | "fallback"
@@ -633,7 +809,7 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           }).catch(() => {});
           return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
         }
-        if (isLatest() && typeof options.onReadinessUpdate === "function") {
+        if (typeof options.onReadinessUpdate === "function") {
           options.onReadinessUpdate({
             runId: responseRunId,
             readinessScore: rawData.readinessScore,
@@ -650,9 +826,6 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           message: rawData.message?.content,
           phase: "result",
         });
-        if (responseRunId && activeRunIdRef.current && responseRunId !== activeRunIdRef.current) {
-          return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
-        }
         if (!shouldAcceptSeq(responseRunId, rawData.seq)) {
           return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
         }
@@ -689,7 +862,7 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           workflow: normalizedWorkflow,
         };
 
-        if (data.workflow && options.onWorkflowUpdates && isLatest()) {
+        if (data.workflow && options.onWorkflowUpdates) {
           stepCount = data.workflow.steps?.length ?? 0;
           if (stepCount === 0) {
             upsertBuildActivityFromEvent(responseRunId, {
@@ -742,7 +915,8 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
               }
             : null);
 
-        if (messagePayload && isLatest()) {
+        const alreadyReceivedMessageForRun = runReceivedMessageEventRef.current.has(responseRunId);
+        if (messagePayload && !alreadyReceivedMessageForRun) {
           agentFetch(AGENT_LOG_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -785,9 +959,16 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           });
         }
 
-        if (data.tasks && isLatest()) {
+        if (data.tasks) {
           options.onTasksUpdate?.(data.tasks);
           logger.debug("[STUDIO-CHAT] Copilot chat tasks applied", { taskCount: data.tasks.length });
+        }
+
+        if (typeof data.requirementsText === "string" && data.requirementsText.trim().length > 0) {
+          options.onRequirementsUpdate?.(data.requirementsText.trim());
+          logger.debug("[STUDIO-CHAT] Copilot chat requirements applied", {
+            length: data.requirementsText.trim().length,
+          });
         }
 
         persistenceError = Boolean(data.persistenceError);
@@ -806,16 +987,14 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
 
         upsertBuildActivityFromEvent(responseRunId, getResultActivityUpdate(stepCount));
 
-        setIsAwaitingReply(false);
+        setRunAwaiting(responseRunId, false);
         logger.debug("[STUDIO-CHAT] Run complete", {
           stepCount,
           nodeCount,
           analysisSaved: !persistenceError,
         });
         receivedTerminalEvent = true;
-        if (isLatest()) {
-          await loadMessages({ mergeWithExisting: true, silent: true });
-        }
+        await loadMessages({ mergeWithExisting: true, silent: true });
         return { ok: true as const, stepCount, nodeCount, persistenceError, runId: responseRunId };
       };
 
@@ -886,9 +1065,10 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           return false;
         }
         const controller = new AbortController();
-        activeControllerRef.current = controller;
+        controllersByRunIdRef.current.set(runId, controller);
         const idleTimeoutMs = 60_000;
-        const maxTimeoutMs = 70_000;
+        const idleTimeoutWhenQueuedMs = 600_000; // 10 min - jobs can wait in queue for a while
+        const maxTimeoutMs = 660_000; // 11 min - allow queue wait + build time
         let idleTimer: number | null = null;
         let maxTimer: number | null = null;
         let abortedByTimeout = false;
@@ -896,6 +1076,7 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
         let parsedCount = 0;
         let terminalType: string | null = null;
         let idleArmed = false;
+        let lastPhase = "connecting";
         agentFetch(AGENT_LOG_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -909,12 +1090,15 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
             timestamp: Date.now(),
           }),
         }).catch(() => {});
-        const resetIdle = () => {
+        const resetIdle = (phase?: string) => {
+          if (phase) lastPhase = phase;
+          const timeout =
+            lastPhase === "queued" ? idleTimeoutWhenQueuedMs : idleTimeoutMs;
           if (idleTimer) window.clearTimeout(idleTimer);
           idleTimer = window.setTimeout(() => {
             abortedByIdle = true;
             controller.abort();
-          }, idleTimeoutMs);
+          }, timeout);
         };
         const startMax = () => {
           maxTimer = window.setTimeout(() => {
@@ -938,6 +1122,20 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
             },
             controller.signal
           );
+
+          // Connection established (headers received): unblock chat input immediately.
+          setRunConnecting(runId, false);
+
+          // #region agent log
+          DEBUG_LOG("useStudioCopilotChatController:attemptStreaming:response", "H2-response-received", {
+            runId,
+            status: response.status,
+            ok: response.ok,
+            hasBody: Boolean(response.body),
+            contentType: response.headers.get("content-type"),
+            hypothesisId: "H2",
+          });
+          // #endregion
 
           agentFetch(AGENT_LOG_URL, {
             method: "POST",
@@ -980,6 +1178,7 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
               isRunning: false,
               completedAt: Date.now(),
             });
+            setRunAwaiting(runId, false);
             logStreamMetrics();
             return false;
           }
@@ -991,6 +1190,16 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
             } catch {
               textBody = "";
             }
+            // #region agent log
+            DEBUG_LOG("useStudioCopilotChatController:attemptStreaming:notOk", "H2-response-not-ok", {
+              runId,
+              status: response.status,
+              ok: response.ok,
+              hasBody: Boolean(response.body),
+              bodyPreview: textBody.slice(0, 200),
+              hypothesisId: "H2",
+            });
+            // #endregion
             agentFetch(AGENT_LOG_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1032,10 +1241,19 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
           }).catch(() => {});
           let buffer = "";
           let chunkCount = 0;
+          let clearedSending = false;
 
           while (true) {
             const { value, done } = await reader.read();
             if (done) {
+              // #region agent log
+              DEBUG_LOG("useStudioCopilotChatController:attemptStreaming:readerDone", "H5-reader-done", {
+                runId,
+                parsedCount,
+                terminalType,
+                hypothesisId: "H5",
+              });
+              // #endregion
               agentFetch(AGENT_LOG_URL, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -1126,15 +1344,43 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
                   continue;
                 }
 
-                resetIdle();
+                // #region agent log
+                DEBUG_LOG("useStudioCopilotChatController:attemptStreaming:sseEvent", "H3-sse-event-parsed", {
+                  runId,
+                  effectiveType: normalized.type,
+                  hasMessage: Boolean((parsed as any)?.message),
+                  seq: (parsed as any)?.seq,
+                  hypothesisId: "H3",
+                });
+                // #endregion
+
+                // First non-ping assistant event: clear per-message "Sending…" indicator.
+                if (!clearedSending) {
+                  const targetRunId = normalized.runId ?? runId;
+                  clearOptimisticUserMessage(targetRunId);
+                  clearedSending = true;
+                }
 
                 const reduced = reduceStudioSseEvent(normalized.type, parsed, normalized.runId);
+                const eventPhase =
+                  (parsed as { phase?: string })?.phase ??
+                  (reduced.kind === "progress"
+                    ? (reduced as { update?: { phase?: string } }).update?.phase
+                    : undefined);
+                resetIdle(eventPhase ?? lastPhase);
                 if (reduced.kind === "result") {
                   terminalType = "result";
+                  // #region agent log
+                  DEBUG_LOG("useStudioCopilotChatController:attemptStreaming:result", "H4-result-received", {
+                    runId: normalized.runId ?? runId,
+                    hypothesisId: "H4",
+                  });
+                  // #endregion
                   await applyResultPayload(parsed as any, normalized.runId, "sse");
                   await reader.cancel();
                   controller.abort();
                   clearAllTimers();
+                  setRunAwaiting(normalized.runId ?? runId, false);
                   return true;
                 }
                 if (reduced.kind === "error") {
@@ -1143,9 +1389,56 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
                   await reader.cancel();
                   controller.abort();
                   clearAllTimers();
+                  setRunAwaiting(normalized.runId ?? runId, false);
                   return true;
                 }
-                if (reduced.kind === "message") {
+                if (reduced.kind === "superseded") {
+                  terminalType = "superseded";
+                  const targetRunId = normalized.runId ?? runId;
+                  upsertBuildActivityFromEvent(targetRunId, {
+                    phase: "superseded",
+                    rawPhase: "superseded",
+                    message:
+                      (reduced as { message?: string }).message ?? "A newer message was sent.",
+                    isRunning: false,
+                    completedAt: Date.now(),
+                  });
+                  setRunAwaiting(targetRunId, false);
+                  await reader.cancel();
+                  controller.abort();
+                  clearAllTimers();
+                  return true;
+                }
+                if (reduced.kind === "workflow_update") {
+                  const raw = (reduced as { kind: "workflow_update"; runId: string; workflow: unknown }).workflow;
+                  const normalizedWorkflow =
+                    raw && "workflowJson" in (raw as object) && (raw as any).workflowJson
+                      ? ((raw as any).workflowJson as Workflow)
+                      : raw && "workflowSpec" in (raw as object) && (raw as any).workflowSpec
+                        ? ((raw as any).workflowSpec as Workflow)
+                        : raw && "blueprintJson" in (raw as object) && (raw as any).blueprintJson
+                          ? ((raw as any).blueprintJson as Workflow)
+                          : (raw as Workflow | null | undefined);
+                  if (normalizedWorkflow && normalizedWorkflow.steps?.length && options.onWorkflowUpdates) {
+                    options.onWorkflowUpdatingChange?.(true);
+                    options.onWorkflowUpdates(normalizedWorkflow);
+                    upsertBuildActivityFromEvent(normalized.runId ?? runId, {
+                      phase: "drawing",
+                      rawPhase: "drawing",
+                      isRunning: true,
+                    });
+                  }
+                } else if (reduced.kind === "tasks_update") {
+                  const tasks = (reduced as { kind: "tasks_update"; tasks: unknown[] }).tasks;
+                  if (Array.isArray(tasks) && options.onTasksUpdate) {
+                    options.onTasksUpdate(tasks as Task[]);
+                  }
+                } else if (reduced.kind === "requirements_update") {
+                  const text = (reduced as { kind: "requirements_update"; requirementsText: string }).requirementsText;
+                  if (text && options.onRequirementsUpdate) {
+                    options.onRequirementsUpdate(text);
+                  }
+                } else if (reduced.kind === "message") {
                   applyMessagePayload(parsed as any, normalized.runId);
                 } else if (reduced.kind === "progress") {
                   applyProgressEvent(parsed as any, normalized.runId ?? runId, normalized.type);
@@ -1169,6 +1462,15 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
             }
           }
           clearAllTimers();
+          // #region agent log
+          DEBUG_LOG("useStudioCopilotChatController:attemptStreaming:streamExit", "H5-stream-exit", {
+            runId,
+            parsedCount,
+            terminalType,
+            receivedTerminalEvent,
+            hypothesisId: "H5",
+          });
+          // #endregion
           agentFetch(AGENT_LOG_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1207,6 +1509,15 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
               }),
             }).catch(() => {});
           }
+          // #region agent log
+          DEBUG_LOG("useStudioCopilotChatController:attemptStreaming:streamError", "H5-stream-error", {
+            runId,
+            abortedByTimeout,
+            abortedByIdle,
+            error: error instanceof Error ? error.message : String(error),
+            hypothesisId: "H5",
+          });
+          // #endregion
           agentFetch(AGENT_LOG_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1220,27 +1531,59 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
               timestamp: Date.now(),
             }),
           }).catch(() => {});
-          logger.warn("[STUDIO-CHAT] SSE stream failed, falling back", error);
+          const isExpectedAbort =
+            abortedByTimeout ||
+            abortedByIdle ||
+            (error instanceof Error && /aborted|AbortError/i.test(error.message));
+          if (isExpectedAbort) {
+            logger.debug("[STUDIO-CHAT] SSE stream ended (timeout/idle), falling back", {
+              abortedByTimeout,
+              abortedByIdle,
+            });
+          } else {
+            logger.warn("[STUDIO-CHAT] SSE stream failed, falling back", error);
+          }
           return false;
         } finally {
-          if (activeControllerRef.current === controller) {
-            activeControllerRef.current = null;
-          }
+          controllersByRunIdRef.current.delete(runId);
+          // If we error before headers, unblock.
+          setRunConnecting(runId, false);
         }
       };
 
       try {
-        upsertBuildActivityFromEvent(runId, {
-          phase: "drafting",
-          rawPhase: "drafting",
-          isRunning: true,
-          startedAt: Date.now(),
-        });
+        if (displayedRunIdRef.current === runId) {
+          upsertBuildActivityFromEvent(runId, {
+            phase: "drafting",
+            rawPhase: "drafting",
+            isRunning: true,
+            startedAt: Date.now(),
+          });
+        }
 
-        const streamFinished = await attemptStreaming();
+        let streamFinished = await attemptStreaming();
+
+        if (!streamFinished && !(sseFirstChunkByRunIdRef.current.get(runId) ?? false) && !sseTerminalReceived) {
+          upsertBuildActivityFromEvent(runId, {
+            phase: "drafting",
+            rawPhase: "drafting",
+            message: "Reconnecting…",
+            isRunning: true,
+          });
+          await new Promise((r) => setTimeout(r, 2000));
+          streamFinished = await attemptStreaming();
+        }
 
         if (!streamFinished) {
           if ((sseFirstChunkByRunIdRef.current.get(runId) ?? false) || sseTerminalReceived) {
+            // #region agent log
+            DEBUG_LOG("useStudioCopilotChatController:sendMessage:fallbackBlocked", "H5-fallback-blocked", {
+              runId,
+              sseFirstChunkReceived: sseFirstChunkByRunIdRef.current.get(runId) ?? false,
+              sseTerminalReceived,
+              hypothesisId: "H5",
+            });
+            // #endregion
             agentFetch(AGENT_LOG_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1257,6 +1600,12 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
             logStreamMetrics();
             return { ok: true as const, stepCount, nodeCount, persistenceError, runId };
           }
+          // #region agent log
+          DEBUG_LOG("useStudioCopilotChatController:sendMessage:fallbackStart", "H6-fallback-sendCopilotChat", {
+            runId,
+            hypothesisId: "H6",
+          });
+          // #endregion
           const chatResponse = await sendCopilotChat(automationVersionId, {
             content: trimmed,
             clientMessageId,
@@ -1291,27 +1640,37 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
         return { ok: true as const, stepCount, nodeCount, persistenceError, runId };
       } catch (error) {
         logger.error("[STUDIO-CHAT] Failed to process message:", error);
+        const connectionLost = !(sseFirstChunkByRunIdRef.current.get(runId) ?? false);
         upsertBuildActivityFromEvent(runId, {
           phase: "error",
           rawPhase: "error",
+          message: connectionLost ? "Connection lost. Retry?" : (error instanceof Error ? error.message : "Something went wrong."),
           isRunning: false,
           completedAt: Date.now(),
+          connectionLost,
         });
         return { ok: false as const };
       } finally {
-        setIsSending(false);
-        setIsAwaitingReply(false);
+        // #region agent log
+        DEBUG_LOG("useStudioCopilotChatController:sendMessage:finally", "H7-finally", {
+          runId,
+          hypothesisId: "H7",
+        });
+        // #endregion
+        setRunConnecting(runId, false);
+        setRunAwaiting(runId, false);
         options.onWorkflowUpdatingChange?.(false);
       }
     },
     [
       options,
-      isAwaitingReply,
-      isSending,
       loadMessages,
       mapApiMessage,
       studioMessages,
       upsertBuildActivityFromEvent,
+      setRunAwaiting,
+      setRunConnecting,
+      clearOptimisticUserMessage,
     ]
   );
 
@@ -1327,8 +1686,15 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
 
     setInput("");
     setAttachedFiles([]);
-    await sendMessage(messageContent, "manual");
+    void sendMessage(messageContent, "manual");
   }, [input, attachedFiles, sendMessage]);
+
+  const retryLastMessage = useCallback(async (): Promise<boolean> => {
+    const lastUser = [...studioMessages].reverse().find((m) => m.role === "user");
+    if (!lastUser?.content?.trim()) return false;
+    const result = await sendMessage(lastUser.content.trim(), "manual");
+    return result?.ok ?? false;
+  }, [studioMessages, sendMessage]);
 
   useEffect(() => {
     if (!options.injectedMessage || !options.automationVersionId) return;
@@ -1376,6 +1742,7 @@ export function useStudioCopilotChatController(options: StudioChatOptions): Stud
     handleFileSelect,
     handleRemoveFile,
     handleSend,
+    retryLastMessage,
     sendMessage,
   };
 }

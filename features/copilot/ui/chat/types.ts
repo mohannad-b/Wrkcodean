@@ -12,6 +12,13 @@ export type RunPhase =
   | "done"
   | "error";
 
+export type BuildActivityLogEntry = {
+  seq: number;
+  title: string;
+  detail?: string;
+  timestamp: number;
+};
+
 export type BuildActivity = {
   runId: string;
   phase: string;
@@ -21,6 +28,11 @@ export type BuildActivity = {
   startedAt?: number | null;
   completedAt?: number | null;
   isRunning: boolean;
+  connectionLost?: boolean;
+  /** Accumulated log entries for live display (newest appended, filtered by 10s window) */
+  recentUpdates?: BuildActivityLogEntry[];
+  /** Number of builds queued behind the current one */
+  queuedCount?: number;
 };
 
 export type AttachedFile = {

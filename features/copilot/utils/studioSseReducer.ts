@@ -16,7 +16,11 @@ export type StudioSseEventResult =
   | { kind: "progress"; runId: string; seq?: number; update: BuildActivityUpdate; lineText: string }
   | { kind: "message"; runId: string; seq?: number; message: ApiCopilotMessage }
   | { kind: "error"; runId: string; seq?: number; update: BuildActivityUpdate; message: string }
-  | { kind: "result"; runId: string; seq?: number };
+  | { kind: "result"; runId: string; seq?: number }
+  | { kind: "superseded"; runId: string; seq?: number; message?: string }
+  | { kind: "workflow_update"; runId: string; seq?: number; workflow: unknown }
+  | { kind: "tasks_update"; runId: string; seq?: number; tasks: unknown[] }
+  | { kind: "requirements_update"; runId: string; seq?: number; requirementsText: string };
 
 export function extractProgressLine(payload: Record<string, unknown>): string {
   const candidates = [payload?.message, payload?.line, payload?.text, payload?.status, payload?.detail];
@@ -95,9 +99,25 @@ export function reduceStudioSseEvent(
   if (eventType === "result") {
     return { kind: "result", runId, seq };
   }
+  if (eventType === "workflow_update") {
+    const workflow = payload?.workflow;
+    if (workflow == null) return { kind: "ignore", runId, seq };
+    return { kind: "workflow_update", runId, seq, workflow };
+  }
+  if (eventType === "tasks_update") {
+    const tasks = Array.isArray(payload?.tasks) ? payload.tasks : [];
+    return { kind: "tasks_update", runId, seq, tasks };
+  }
+  if (eventType === "requirements_update") {
+    const requirementsText = typeof payload?.requirementsText === "string" ? payload.requirementsText : "";
+    return { kind: "requirements_update", runId, seq, requirementsText };
+  }
   if (eventType === "error") {
     const message = (payload?.message as string | undefined) ?? "";
     return { kind: "error", runId, seq, update: getErrorActivityUpdate(message, seq), message };
+  }
+  if (eventType === "superseded") {
+    return { kind: "superseded", runId, seq, message: payload?.message as string | undefined };
   }
 
   const lineText = extractProgressLine(payload);

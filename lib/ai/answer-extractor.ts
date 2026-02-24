@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import getOpenAIClient from "@/lib/ai/openai-client";
 
 export type ChecklistExtraction = {
   key: string;
@@ -6,11 +6,6 @@ export type ChecklistExtraction = {
   confidence: number;
   evidence?: string | null;
 };
-
-const openai =
-  process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 0
-    ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-    : null;
 
 const SYSTEM_PROMPT = [
   "You extract confirmations for checklist items from a single user message.",
@@ -38,6 +33,7 @@ export async function extractChecklistAnswers(params: {
   questionText?: string | null;
   candidateKey?: string | null;
 }): Promise<ChecklistExtraction[] | null> {
+  const openai = getOpenAIClient();
   if (!openai) return null;
   const { userMessage, checklistKeys, questionText, candidateKey } = params;
 

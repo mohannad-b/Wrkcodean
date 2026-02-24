@@ -1,4 +1,5 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
+import getOpenAIClient from "@/lib/ai/openai-client";
 
 type ChatHistoryItem = { role: "user" | "assistant"; content: string };
 
@@ -15,11 +16,6 @@ export type GenerateCopilotChatReplyResult = {
   followUpQuestion: string | null;
 };
 
-const openai =
-  process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 0
-    ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-    : null;
-
 const SYSTEM_PROMPT = [
   "You are WRK Copilot, an automation design assistant.",
   "Draft a concise, friendly reply (2-3 sentences) that acknowledges the latest user message and moves the conversation forward.",
@@ -30,15 +26,20 @@ const SYSTEM_PROMPT = [
   "- No staged/canned questions. Keep it natural.",
   '- If you ask a follow-up (and followUpMode is not "technical_opt_in"), append an invitation for other requirements in the same question.',
   "- Do not repeat questions already answered in the known facts or requirements hints.",
+  "- If the user's last message clearly answers a question you or a previous reply asked, do NOT ask that question again. Acknowledge the answer and ask the next logical question or move forward.",
   "- Keep it short; avoid markdown, lists, or code fences.",
   "- Never include emails, phone numbers, URLs, tokens, or IDs in the response.",
 ].join("\n");
 
 function buildContext(args: GenerateCopilotChatReplyArgs): string {
-  const history = args.conversationHistory
-    .slice(-8)
+  const trimmed = args.conversationHistory.slice(-8);
+  const history = trimmed
     .map((item) => `${item.role === "assistant" ? "Assistant" : "User"}: ${item.content}`)
     .join("\n");
+
+  const lastItem = trimmed[trimmed.length - 1];
+  const userMessageAlreadyInHistory =
+    lastItem?.role === "user" && lastItem.content.trim() === args.userMessage.trim();
 
   const facts = args.knownFactsHint ? `Known facts:\n${args.knownFactsHint}\n` : "";
   const requirements = args.requirementsStatusHint ? `Requirements status:\n${args.requirementsStatusHint}\n` : "";
@@ -47,24 +48,23 @@ function buildContext(args: GenerateCopilotChatReplyArgs): string {
       ? "Follow-up must focus on getting technical opt-in/consent before technical details."
       : "Follow-up should include an 'other requirements' invitation if you ask a question.";
 
-  return [
+  const sections = [
     "Conversation (trimmed):",
     history || "(no prior messages)",
     "",
-    "Latest user message:",
-    args.userMessage,
-    "",
-    facts || "",
-    requirements || "",
-    mode,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ];
+  if (!userMessageAlreadyInHistory) {
+    sections.push("Latest user message:", args.userMessage, "");
+  }
+  sections.push(facts || "", requirements || "", mode);
+
+  return sections.filter(Boolean).join("\n");
 }
 
 export async function generateCopilotChatReply(
   args: GenerateCopilotChatReplyArgs
 ): Promise<GenerateCopilotChatReplyResult | null> {
+  const openai = (getOpenAIClient as unknown as () => OpenAI | null)();
   if (!openai) {
     return null;
   }

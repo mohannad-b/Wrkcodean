@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import getOpenAIClient from "@/lib/ai/openai-client";
 import { randomUUID } from "crypto";
 import type { Blueprint, BlueprintStep, BlueprintBranch } from "./types";
 import { applyStepNumbers } from "./step-numbering";
@@ -8,10 +8,6 @@ import { sanitizeBlueprintTopology, type SanitizationSummary } from "@/lib/workf
 import { logger } from "@/lib/logger";
 
 const WORKFLOW_MODEL = process.env.WORKFLOW_MODEL ?? process.env.BLUEPRINT_MODEL ?? "gpt-4-turbo-preview";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY ?? "",
-});
 
 type ConversationMessage = {
   role: "system" | "user" | "assistant";
@@ -107,6 +103,10 @@ type AIResponse = {
  */
 export async function buildBlueprintFromChat(params: BuildBlueprintParams): Promise<BuildBlueprintResult> {
   if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+  const openai = getOpenAIClient();
+  if (!openai) {
     throw new Error("OPENAI_API_KEY is not configured");
   }
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   AlertTriangle,
@@ -26,6 +27,7 @@ import type { StudioCanvasProps } from "@/features/workflows/ui/canvas/StudioCan
 import { RequirementsView } from "../panels/RequirementsView";
 import { TasksViewCanvas } from "../panels/WorkflowTasksPanel";
 import type { BuildActivity, VersionTask } from "../types";
+import { BuildActivityPanel } from "@/features/copilot/ui/BuildActivityPanel";
 
 const StudioCanvas = dynamic<StudioCanvasProps>(
   () => import("@/features/workflows/ui/canvas/StudioCanvas").then((m) => m.StudioCanvas),
@@ -112,6 +114,7 @@ interface WorkflowTabProps {
     proceedThresholdMet?: boolean;
     signals?: ReadinessSignals;
   }) => void;
+  onRequirementsUpdate?: (text: string) => void;
 }
 
 export function WorkflowTab({
@@ -177,7 +180,18 @@ export function WorkflowTab({
   readinessHintText,
   alreadyInBuild,
   onReadinessUpdate,
+  onRequirementsUpdate,
 }: WorkflowTabProps) {
+  const [buildActivityPanelState, setBuildActivityPanelState] = useState<{
+    activity: Parameters<typeof BuildActivityPanel>[0]["activity"];
+    onRetry: () => void;
+  } | null>(null);
+  const onBuildActivityPanelUpdate = useCallback(
+    (state: { activity: Parameters<typeof BuildActivityPanel>[0]["activity"] | null; onRetry: () => void }) =>
+      setBuildActivityPanelState(state.activity ? { activity: state.activity, onRetry: state.onRetry } : null),
+    []
+  );
+
   if (!workflow) {
     return (
       <div className="p-6">
@@ -302,11 +316,14 @@ export function WorkflowTab({
             analysisUnavailable={analysisUnavailable}
             onRefreshAnalysis={onRefreshAnalysis}
             onBuildActivityUpdate={onBuildActivityUpdate}
+            buildActivityFromParent={buildActivity}
             onProceedToBuild={onProceedToBuild}
             proceedToBuildDisabled={proceedButtonDisabled}
             proceedToBuildReason={proceedDisabledReason}
             proceedingToBuild={proceedingToBuild}
             onReadinessUpdate={onReadinessUpdate}
+            onRequirementsUpdate={onRequirementsUpdate}
+            onBuildActivityPanelUpdate={onBuildActivityPanelUpdate}
           />
         </div>
 
@@ -414,8 +431,14 @@ export function WorkflowTab({
                   </Button>
                 </div>
               ) : null}
+              {buildActivity?.isRunning && canvasState !== "loading" && canvasState !== "error" ? (
+                <div className="absolute inset-0 z-25 flex flex-col items-center justify-center bg-gray-50/90 backdrop-blur-[2px] pointer-events-none">
+                  <Loader2 className="h-8 w-8 animate-spin text-gray-400 mb-2" />
+                  <p className="text-sm font-medium text-gray-600">Building workflow…</p>
+                  <p className="text-xs text-gray-500 mt-1">{buildActivity.lastLine ?? "Processing your request"}</p>
+                </div>
+              ) : null}
               <StudioCanvas
-                key={buildActivity ? `${buildActivity.runId}-${buildActivity.lastSeq ?? "none"}` : "canvas-idle"}
                 nodes={flowNodes}
                 edges={flowEdges}
                 onNodesChange={onNodesChange}
@@ -425,8 +448,6 @@ export function WorkflowTab({
                 onNodeClick={onNodeClick}
                 onEdgeClick={onEdgeClick}
                 isSynthesizing={isSynthesizingWorkflow}
-                buildActivity={buildActivity}
-                activityFeed={canvasActivityFeed}
                 emptyState={
                   canvasState === "empty" ? (
                     <div className="text-center max-w-md mx-auto space-y-2">
@@ -441,6 +462,19 @@ export function WorkflowTab({
               />
             </div>
           )}
+
+          {buildActivityPanelState ? (
+            <div className="absolute bottom-4 right-4 z-40 w-[320px]">
+              <BuildActivityPanel
+                activity={buildActivityPanelState.activity}
+                onCtaClick={(cta) => {
+                  if (cta.destination === "retry") {
+                    buildActivityPanelState.onRetry();
+                  }
+                }}
+              />
+            </div>
+          ) : null}
         </div>
 
         {canvasViewMode === "flowchart" && (selectedEdge || selectedStep) ? (

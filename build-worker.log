@@ -1,0 +1,20 @@
+
+> wrk-copilot@0.1.0 worker:build
+> tsx scripts/build-worker.ts
+
+[dotenv@17.2.3] injecting env (27) from .env.local -- tip: ⚙️  suppress all logs with { quiet: true }
+[dotenv@17.2.3] injecting env (0) from .env -- tip: 👥 sync secrets across teammates & machines: https://dotenvx.com/ops
+[dotenv@17.2.3] injecting env (0) from .env -- tip: 🔐 prevent committing .env to code: https://dotenvx.com/precommit
+[build-worker env] {
+  NODE_ENV: undefined,
+  APP_ENV: undefined,
+  DATABASE_URL: 'SET',
+  OPENAI_API_KEY: 'SET',
+  REDIS_URL: 'rediss://witty-lizard-24390.upstash.io:6379'
+}
+[logger:init] { env: 'unknown', level: 'debug', debugCopilotLogsEnabled: true }
+[build-queue] job scheduler initialized
+[redis] connected
+[build-worker] ready event
+[build-worker] ready
+Build worker started

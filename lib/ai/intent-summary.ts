@@ -1,4 +1,5 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
+import getOpenAIClient from "@/lib/ai/openai-client";
 
 export type IntentSummary = {
   intent_summary: string;
@@ -7,11 +8,6 @@ export type IntentSummary = {
   systems?: string[];
   cadence?: string;
 };
-
-const openai =
-  process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 0
-    ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-    : null;
 
 const SYSTEM_PROMPT = [
   "You produce ONLY strict JSON matching this TypeScript type:",
@@ -97,6 +93,7 @@ export async function generateIntentSummary(
   userMessage: string,
   context?: IntentContext
 ): Promise<IntentSummary | null> {
+  const openai = (getOpenAIClient as unknown as () => OpenAI | null)();
   if (!openai) {
     console.debug("intent_summary.skipped", {
       reason: "openai_unavailable",

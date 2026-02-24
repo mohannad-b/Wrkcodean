@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { ApiError } from "@/lib/api/api-error";
+export { ApiError } from "@/lib/api/api-error";
 import {
   getTenantSession,
   getWrkStaffSession,
@@ -12,14 +14,6 @@ import {
   type TenantOrStaffSession,
 } from "@/lib/auth/session";
 import { logger } from "@/lib/logger";
-
-export class ApiError extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
 
 export async function requireTenantSession(): Promise<TenantSession> {
   const session = await getTenantSession().catch((error) => {
