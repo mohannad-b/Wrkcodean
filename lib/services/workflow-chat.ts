@@ -49,19 +49,33 @@ export async function getOrCreateConversation(params: {
     return existing;
   }
 
-  const [conversation] = await db
-    .insert(workflowConversations)
-    .values({
-      tenantId: params.tenantId,
-      automationVersionId: params.automationVersionId,
-    })
-    .returning();
+  try {
+    const [conversation] = await db
+      .insert(workflowConversations)
+      .values({
+        tenantId: params.tenantId,
+        automationVersionId: params.automationVersionId,
+      })
+      .returning();
 
-  if (!conversation) {
-    throw new Error("Failed to create conversation");
+    if (!conversation) {
+      throw new Error("Failed to create conversation");
+    }
+
+    return conversation;
+  } catch (error: unknown) {
+    const pgCode = (error as { code?: string })?.code;
+    if (pgCode === "23505") {
+      const retried = await db.query.workflowConversations.findFirst({
+        where: and(
+          eq(workflowConversations.tenantId, params.tenantId),
+          eq(workflowConversations.automationVersionId, params.automationVersionId)
+        ),
+      });
+      if (retried) return retried;
+    }
+    throw error;
   }
-
-  return conversation;
 }
 
 /**
