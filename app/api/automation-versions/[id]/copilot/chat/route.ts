@@ -1271,77 +1271,41 @@ export async function POST(request: Request, { params }: { params: { id: string 
             };
           });
 
-          const enqueueResult = await enqueueBuildRun({
-            automationVersionId: params.id,
+          callbacks.onStatus?.({
             runId,
-            payload: enqueuePayload,
-            session,
-          });
-          const effectiveRunId = enqueueResult.runId;
-          // #region agent log
-          void DEBUG_LOG("copilot/chat/route:enqueue", "S2-enqueue-result", {
-            runId: effectiveRunId,
-            enqueued: enqueueResult.enqueued,
-            state: enqueueResult.state,
-          });
-          // #endregion
-          if (enqueueResult.state === "waiting" || enqueueResult.state === "delayed") {
-            const queueMsg =
-              typeof enqueueResult.queueAhead === "number" && enqueueResult.queueAhead > 0
-                ? `${enqueueResult.queueAhead} build${enqueueResult.queueAhead === 1 ? "" : "s"} ahead of you`
-                : "Queued behind an active build...";
-            callbacks.onStatus?.({
-              runId: effectiveRunId,
-              requestId: "queue",
-              phase: "queued",
-              message: queueMsg,
-              seq: 0,
-              readinessScore: 2,
-              meta: { queueAhead: enqueueResult.queueAhead },
-            });
-          }
-
-          const unsubscribe = await subscribeCopilotChatEvents(effectiveRunId, (event) => {
-            // #region agent log
-            void DEBUG_LOG("copilot/chat/route:redisEvent", "S3-redis-event", {
-              runId: effectiveRunId,
-              eventType: event.type,
-            });
-            // #endregion
-            if (event.type === "status") {
-              statusCount += 1;
-              callbacks.onStatus?.(event.payload as CopilotStatusPayload);
-            } else if (event.type === "message") {
-              callbacks.onMessage?.(event.payload as CopilotMessageEventPayload);
-            } else if (event.type === "workflow_update") {
-              callbacks.onWorkflowUpdate?.(event.payload as { workflow: unknown });
-            } else if (event.type === "tasks_update") {
-              callbacks.onTasksUpdate?.(event.payload as { tasks: unknown[] });
-            } else if (event.type === "requirements_update") {
-              callbacks.onRequirementsUpdate?.(event.payload as { requirementsText: string });
-            } else if (event.type === "result") {
-              callbacks.onResult?.(event.payload as CopilotRunResult);
-              void unsubscribe();
-              void sse.close();
-            } else if (event.type === "error") {
-              callbacks.onError?.(event.payload as CopilotErrorPayload);
-              void unsubscribe();
-              void sse.close();
-            } else if (event.type === "superseded") {
-              void sse.send("superseded", event.payload);
-              void unsubscribe();
-              void sse.close();
-            }
+            requestId: "inline",
+            phase: "understanding",
+            message: "Reviewing what you asked for",
+            seq: 0,
+            readinessScore: 5,
           });
 
           request.signal.addEventListener(
             "abort",
             () => {
-              void unsubscribe();
               void sse.close();
             },
             { once: true }
           );
+
+          const chatReplyHandledByApi = Boolean(enqueuePayload.chatReplyHandledByApi);
+          await runCopilotChat({
+            request,
+            params,
+            payload: enqueuePayload,
+            session,
+            detail,
+            callbacks,
+            runIdOverride: runId,
+            skipChatReply: chatReplyHandledByApi,
+          }).then(() => {
+            void sse.close();
+          }).catch((runErr) => {
+            const message = runErr instanceof Error ? runErr.message : "Unexpected error.";
+            const code = runErr instanceof ApiError ? runErr.status : undefined;
+            void sse.send("error", { runId, requestId: "inline", message, code });
+            void sse.close();
+          });
         } catch (error) {
           console.error("[copilot-chat] sse runner error", error);
           // #region agent log
