@@ -10,7 +10,18 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const { userRecord } = await getOrCreateUserFromAuth0Session();
+    let userId: string;
+
+    if (process.env.AUTH0_MOCK_ENABLED === "true") {
+      const mockUserId = process.env.MOCK_USER_ID;
+      if (!mockUserId) {
+        return NextResponse.json({ tenants: [] });
+      }
+      userId = mockUserId;
+    } else {
+      const { userRecord } = await getOrCreateUserFromAuth0Session();
+      userId = userRecord.id;
+    }
 
     const userMemberships = await db
       .select({
@@ -21,7 +32,7 @@ export async function GET() {
       })
       .from(memberships)
       .innerJoin(tenants, eq(tenants.id, memberships.tenantId))
-    .where(and(eq(memberships.userId, userRecord.id), eq(memberships.status, "active")))
+    .where(and(eq(memberships.userId, userId), eq(memberships.status, "active")))
       .orderBy(tenants.name);
 
     return NextResponse.json({ tenants: userMemberships });

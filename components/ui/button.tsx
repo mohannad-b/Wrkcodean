@@ -74,7 +74,8 @@ const Button = React.forwardRef<
           return;
         }
         onClick?.(event as React.MouseEvent<HTMLButtonElement>);
-        if (!event.defaultPrevented) {
+        const isSubmitButton = (event.currentTarget as HTMLButtonElement)?.type === "submit";
+        if (!event.defaultPrevented && !isSubmitButton) {
           setIsLoading(true);
         }
       },
