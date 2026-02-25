@@ -279,16 +279,11 @@ export function useAutomationDetailPage({ automationId }: UseAutomationDetailPag
   const seededPrompt = useMemo(() => {
     const raw = searchParams?.get("seed") ?? null;
     if (!raw) return { value: null as string | null, tooLong: false, decodeError: false };
-    try {
-      const decoded = decodeURIComponent(raw);
-      if (decoded.length > 4000) {
-        return { value: null, tooLong: true, decodeError: false };
-      }
-      return { value: decoded, tooLong: false, decodeError: false };
-    } catch (error) {
-      logger.warn("[AUTOMATION-DETAIL] Failed to decode seed param", { error });
-      return { value: null, tooLong: false, decodeError: true };
+    // searchParams.get() already decodes percent-encoding; no need for decodeURIComponent
+    if (raw.length > 4000) {
+      return { value: null, tooLong: true, decodeError: false };
     }
+    return { value: raw, tooLong: false, decodeError: false };
   }, [searchParams]);
 
   useEffect(() => {
